@@ -1,0 +1,23 @@
+"""Runtime Gateway 启动入口。"""
+
+from __future__ import annotations
+
+import uvicorn
+
+from avatarloom_runtime_gateway.config import load_settings
+
+
+def main() -> None:
+    settings = load_settings()
+    uvicorn.run(
+        "avatarloom_runtime_gateway.app:create_app",
+        factory=True,
+        host=settings.host,
+        port=settings.port,
+        reload=False,
+        log_level=settings.log_level.lower(),
+    )
+
+
+if __name__ == "__main__":
+    main()

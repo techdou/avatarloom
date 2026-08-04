@@ -125,6 +125,8 @@ ignore = [
     "E501",     # 行长交给 formatter
     "B008",     # FastAPI Depends() 默认参数
     "SIM108",   # ternary vs if-else，可读性优先
+    "ASYNC109", # async 函数带 timeout 参数——测试 helper 用 deadline 循环更清晰
+    "ASYNC110", # asyncio.timeout vs time.time deadline——同上
     # 中文项目：docstring/comments 里的全角标点是故意的
     "RUF001",   # ambiguous unicode char (string)
     "RUF002",   # ambiguous unicode char (docstring)
@@ -134,15 +136,16 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["B017", "B028"]  # 测试允许 assertRaises、固定路径
+"tests/**" = ["B017", "B028", "ASYNC110"]  # 测试允许 assertRaises、固定路径、time.time deadline
 "scripts/**" = ["T201"]        # 脚本允许 print
 # Block 基类的 warmup/reset/shutdown/health 是可选钩子方法（template method），
 # 故意不标 abstract，让子类按需覆盖。B027 误报。
 "packages/sdk-python/src/avatarloom_sdk/base.py" = ["B027"]
-# runtime 内部：
+# runtime / gateway 内部：
 # - list(dict.values())[0] 做确定性取值——RUF015 误报
 # - await + try/except CancelledError 比 contextlib.suppress 更清晰——SIM105 误报
 "runtime/**" = ["RUF015", "SIM105"]
+"apps/runtime-gateway/**" = ["SIM105"]
 
 [tool.ruff.format]
 quote-style = "double"

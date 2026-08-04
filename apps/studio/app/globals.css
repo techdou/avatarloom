@@ -1,0 +1,39 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    @apply bg-bg text-fg antialiased;
+  }
+  body {
+    @apply min-h-screen;
+  }
+  /* 字号克制——不过大 */
+  h1 { @apply text-2xl font-semibold tracking-tight; }
+  h2 { @apply text-xl font-semibold; }
+  h3 { @apply text-base font-medium; }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center px-4 py-2 rounded-md text-sm font-medium
+           border border-border bg-white hover:bg-bg-subtle transition-colors;
+  }
+  .btn-primary {
+    @apply bg-accent text-white border-accent hover:bg-accent-hover;
+  }
+  .card {
+    @apply bg-white border border-border rounded-lg p-4;
+  }
+  .input {
+    @apply w-full px-3 py-2 border border-border rounded-md text-sm
+           focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent;
+  }
+  .badge {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border border-border;
+  }
+  .badge-ok { @apply text-ok border-ok/30 bg-ok/5; }
+  .badge-warn { @apply text-warn border-warn/30 bg-warn/5; }
+  .badge-err { @apply text-err border-err/30 bg-err/5; }
+}
