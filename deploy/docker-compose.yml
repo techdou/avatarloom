@@ -1,0 +1,84 @@
+# AvatarLoom Docker Compose
+#
+# 用法：
+#   docker compose -f deploy/docker-compose.yml config     # 校验配置
+#   docker compose -f deploy/docker-compose.yml up          # 启动
+#   docker compose -f deploy/docker-compose.yml down        # 停止
+#
+# Mock Profile 默认可用（不依赖 GPU/API Key）。
+# 真实 GPU 模式取消注释 deploy.resources + runtime 注释。
+
+services:
+  control-api:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.control-api
+    ports:
+      - "8100:8100"
+    environment:
+      - AVATARLOOM_HOST=0.0.0.0
+      - AVATARLOOM_PORT=8100
+      - AVATARLOOM_DB_URL=sqlite+aiosqlite:///./data/avatarloom.db
+      - AVATARLOOM_RUNS_ROOT=/app/data/runs
+      - AVATARLOOM_ARTIFACTS_ROOT=/app/data/artifacts
+    volumes:
+      - avatarloom-data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8100/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  runtime-gateway:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.runtime-gateway
+    ports:
+      - "8101:8101"
+    environment:
+      - AVATARLOOM_HOST=0.0.0.0
+      - AVATARLOOM_PORT=8101
+      - AVATARLOOM_CONTROL_API_URL=http://control-api:8100
+      - AVATARLOOM_DEFAULT_PROFILE=mock
+      # 真实 Adapter 用——从 .env 读
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://api.openai.com/v1}
+      - LLM_MODEL=${LLM_MODEL:-gpt-4o-mini}
+    volumes:
+      - avatarloom-data:/app/data
+    depends_on:
+      control-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8101/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    # GPU 支持（需要 NVIDIA Container Toolkit）：
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+  studio:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.studio
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+    depends_on:
+      - control-api
+      - runtime-gateway
+    restart: unless-stopped
+
+volumes:
+  avatarloom-data:

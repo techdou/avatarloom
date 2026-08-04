@@ -1,0 +1,27 @@
+# AvatarLoom Studio (Next.js)
+FROM node:20-slim AS base
+
+WORKDIR /app
+
+# 启用 pnpm
+RUN corepack enable && corepack prepare pnpm@latest --activate
+
+# 拷贝 workspace 配置
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml* ./
+COPY apps/studio/package.json ./apps/studio/
+COPY packages/sdk-typescript/package.json ./packages/sdk-typescript/package.json
+COPY packages/ui/package.json ./packages/ui/package.json
+
+RUN pnpm install --frozen-lockfile 2>/dev/null || pnpm install
+
+# 拷贝源码
+COPY . .
+
+# 构建
+RUN pnpm --filter @avatarloom/studio build
+
+ENV NODE_ENV=production
+ENV PORT=3000
+EXPOSE 3000
+
+CMD ["pnpm", "--filter", "@avatarloom/studio", "start"]

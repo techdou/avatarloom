@@ -1,0 +1,49 @@
+apiVersion: avatarloom.io/v1alpha1
+kind: RuntimeProfile
+metadata:
+  id: mock
+  name: Mock (No GPU, No API Key)
+  description: >
+    纯 Mock 链路——不依赖 GPU、Docker 或任何 API Key。
+    VAD/STT/LLM/TTS/Avatar 全部用内置 mock 实现，
+    适合开发、演示、CI 和首次体验。
+blocks:
+  vad:
+    id: vad.mock
+    deployment: mock
+    config:
+      energy_threshold: 300.0
+      min_speech_chunks: 2
+      silence_chunks_to_end: 3
+  stt:
+    id: stt.mock
+    deployment: mock
+    config:
+      mode: random
+  llm:
+    id: llm.mock
+    deployment: mock
+    config:
+      chunk_delay_ms: 30
+  tts:
+    id: tts.mock
+    deployment: mock
+    config:
+      frequency: 440.0
+      ms_per_char: 60
+  avatar:
+    id: avatar.mock
+    deployment: mock
+  vision:
+    id: vision.mock
+    deployment: mock
+    optional: true
+sync:
+  audio_delay_ms: 600
+  video_lag_frames: 0
+  max_video_behind_ms: 1000
+  drop_policy: drop_oldest_video
+session:
+  mode: single
+  allow_interruption: true
+  event_log: true

@@ -1,0 +1,26 @@
+# AvatarLoom Runtime Gateway
+FROM python:3.11-slim AS base
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc g++ curl && rm -rf /var/lib/apt/lists/*
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+COPY pyproject.toml uv.lock* ./
+COPY packages/ ./packages/
+COPY apps/runtime-gateway ./apps/runtime-gateway
+COPY apps/control-api ./apps/control-api
+
+RUN uv sync --extra dev --no-dev 2>/dev/null || uv sync
+
+COPY runtime/ ./runtime/
+COPY blocks/ ./blocks/
+COPY . .
+
+ENV AVATARLOOM_HOST=0.0.0.0
+ENV AVATARLOOM_PORT=8101
+EXPOSE 8101
+
+CMD ["uv", "run", "python", "-m", "avatarloom_runtime_gateway"]
