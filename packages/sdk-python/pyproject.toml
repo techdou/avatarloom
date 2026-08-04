@@ -1,0 +1,23 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "avatarloom-sdk"
+version = "0.1.0"
+description = "AvatarLoom Block SDK — Block / StreamingBlock base classes, BlockContext, BlockManifest"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+dependencies = [
+    "avatarloom-protocol>=0.1.0",
+    "pydantic>=2.9",
+    "anyio>=4.6",
+    "structlog>=24.4",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/avatarloom_sdk"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/avatarloom_sdk/py.typed" = "avatarloom_sdk/py.typed"

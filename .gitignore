@@ -1,0 +1,74 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+.eggs/
+*.egg-info/
+*.egg
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+
+# ---- Node / Next.js ----
+node_modules/
+.pnpm-store/
+.next/
+out/
+.turbo/
+*.tsbuildinfo
+.eslintcache
+next-env.d.ts
+coverage/
+
+# ---- IDE / OS ----
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ---- AvatarLoom runtime data ----
+data/
+runs/
+artifacts/
+*.db
+*.db-journal
+*.sqlite
+*.sqlite-journal
+alembic_versions_local/
+
+# ---- 环境变量 / 密钥 ----
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+
+# ---- 模型与素材（不入库）----
+models/
+assets/*/ref.*
+personas/*/voice/ref.wav
+personas/*/avatar/portrait.png
+personas/*/avatar/idle.mp4
+!templates/persona-package/voice/.gitkeep
+!templates/persona-package/avatar/.gitkeep
+
+# ---- 构建产物 ----
+*.zip
+*.tar.gz
+avatarloom-v*/
+
+# ---- 调试 / 临时 ----
+*.log
+*.tmp
+.cache/

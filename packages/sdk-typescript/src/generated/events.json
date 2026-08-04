@@ -1,0 +1,1206 @@
+{
+  "session.started": {
+    "additionalProperties": true,
+    "properties": {
+      "session_id": {
+        "title": "Session Id",
+        "type": "string"
+      },
+      "profile_id": {
+        "description": "Runtime Profile ID",
+        "title": "Profile Id",
+        "type": "string"
+      },
+      "persona_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Persona Id"
+      },
+      "workspace_root": {
+        "default": ".",
+        "title": "Workspace Root",
+        "type": "string"
+      }
+    },
+    "required": [
+      "session_id",
+      "profile_id"
+    ],
+    "title": "SessionStartedPayload",
+    "type": "object"
+  },
+  "session.closed": {
+    "additionalProperties": true,
+    "properties": {
+      "session_id": {
+        "title": "Session Id",
+        "type": "string"
+      },
+      "reason": {
+        "default": "normal",
+        "enum": [
+          "normal",
+          "error",
+          "interrupted",
+          "timeout"
+        ],
+        "title": "Reason",
+        "type": "string"
+      }
+    },
+    "required": [
+      "session_id"
+    ],
+    "title": "SessionClosedPayload",
+    "type": "object"
+  },
+  "session.state_changed": {
+    "additionalProperties": true,
+    "properties": {
+      "from_state": {
+        "title": "From State",
+        "type": "string"
+      },
+      "to_state": {
+        "title": "To State",
+        "type": "string"
+      },
+      "trigger": {
+        "title": "Trigger",
+        "type": "string"
+      }
+    },
+    "required": [
+      "from_state",
+      "to_state",
+      "trigger"
+    ],
+    "title": "SessionStateChangedPayload",
+    "type": "object"
+  },
+  "session.error": {
+    "additionalProperties": true,
+    "properties": {
+      "code": {
+        "title": "Code",
+        "type": "string"
+      },
+      "message": {
+        "title": "Message",
+        "type": "string"
+      },
+      "block_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Block Id"
+      },
+      "recoverable": {
+        "default": true,
+        "title": "Recoverable",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "code",
+      "message"
+    ],
+    "title": "SessionErrorPayload",
+    "type": "object"
+  },
+  "audio.appended": {
+    "additionalProperties": true,
+    "description": "浏览器上行麦克风 PCM chunk。",
+    "properties": {
+      "pcm_b64": {
+        "description": "base64 编码的 PCM16 数据",
+        "title": "Pcm B64",
+        "type": "string"
+      },
+      "sample_rate": {
+        "default": 16000,
+        "title": "Sample Rate",
+        "type": "integer"
+      },
+      "channels": {
+        "default": 1,
+        "title": "Channels",
+        "type": "integer"
+      },
+      "samples": {
+        "description": "本 chunk 的采样数",
+        "minimum": 0,
+        "title": "Samples",
+        "type": "integer"
+      },
+      "timestamp_ms": {
+        "default": 0,
+        "description": "会话内相对时间戳",
+        "title": "Timestamp Ms",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "pcm_b64",
+      "samples"
+    ],
+    "title": "AudioAppendedPayload",
+    "type": "object"
+  },
+  "audio.interrupted": {
+    "additionalProperties": true,
+    "description": "打断时清空音频队列。",
+    "properties": {
+      "reason": {
+        "default": "user_speech",
+        "enum": [
+          "user_speech",
+          "cancel",
+          "session_closed"
+        ],
+        "title": "Reason",
+        "type": "string"
+      }
+    },
+    "title": "AudioInterruptedPayload",
+    "type": "object"
+  },
+  "speech.detected": {
+    "additionalProperties": true,
+    "description": "VAD 检测到开始说话。",
+    "properties": {
+      "confidence": {
+        "default": 1.0,
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "title": "Confidence",
+        "type": "number"
+      }
+    },
+    "title": "SpeechDetectedPayload",
+    "type": "object"
+  },
+  "speech.ended": {
+    "additionalProperties": true,
+    "description": "VAD 检测到说完（端点检测）。",
+    "properties": {
+      "duration_ms": {
+        "default": 0,
+        "minimum": 0,
+        "title": "Duration Ms",
+        "type": "integer"
+      }
+    },
+    "title": "SpeechEndedPayload",
+    "type": "object"
+  },
+  "transcript.completed": {
+    "additionalProperties": true,
+    "properties": {
+      "text": {
+        "title": "Text",
+        "type": "string"
+      },
+      "language": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Language"
+      },
+      "confidence": {
+        "default": 1.0,
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "title": "Confidence",
+        "type": "number"
+      },
+      "tags": {
+        "additionalProperties": {
+          "type": "string"
+        },
+        "title": "Tags",
+        "type": "object"
+      }
+    },
+    "required": [
+      "text"
+    ],
+    "title": "TranscriptCompletedPayload",
+    "type": "object"
+  },
+  "transcript.partial": {
+    "additionalProperties": true,
+    "properties": {
+      "text": {
+        "title": "Text",
+        "type": "string"
+      },
+      "is_final": {
+        "default": false,
+        "title": "Is Final",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "text"
+    ],
+    "title": "TranscriptPartialPayload",
+    "type": "object"
+  },
+  "llm.text.delta": {
+    "additionalProperties": true,
+    "properties": {
+      "text": {
+        "title": "Text",
+        "type": "string"
+      },
+      "sentence_index": {
+        "default": 0,
+        "minimum": 0,
+        "title": "Sentence Index",
+        "type": "integer"
+      },
+      "is_sentence_end": {
+        "default": false,
+        "title": "Is Sentence End",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "text"
+    ],
+    "title": "LlmTextDeltaPayload",
+    "type": "object"
+  },
+  "llm.text.done": {
+    "additionalProperties": true,
+    "properties": {
+      "full_text": {
+        "title": "Full Text",
+        "type": "string"
+      },
+      "finish_reason": {
+        "default": "stop",
+        "enum": [
+          "stop",
+          "length",
+          "cancelled",
+          "error"
+        ],
+        "title": "Finish Reason",
+        "type": "string"
+      },
+      "first_token_ms": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "First Token Ms"
+      },
+      "total_tokens": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Total Tokens"
+      }
+    },
+    "required": [
+      "full_text"
+    ],
+    "title": "LlmTextDonePayload",
+    "type": "object"
+  },
+  "llm.error": {
+    "additionalProperties": true,
+    "properties": {
+      "code": {
+        "title": "Code",
+        "type": "string"
+      },
+      "message": {
+        "title": "Message",
+        "type": "string"
+      },
+      "block_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Block Id"
+      },
+      "recoverable": {
+        "default": true,
+        "title": "Recoverable",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "code",
+      "message"
+    ],
+    "title": "SessionErrorPayload",
+    "type": "object"
+  },
+  "tts.audio.delta": {
+    "additionalProperties": true,
+    "properties": {
+      "pcm_b64": {
+        "description": "base64 PCM16 数据",
+        "title": "Pcm B64",
+        "type": "string"
+      },
+      "sample_rate": {
+        "default": 16000,
+        "title": "Sample Rate",
+        "type": "integer"
+      },
+      "samples": {
+        "minimum": 0,
+        "title": "Samples",
+        "type": "integer"
+      },
+      "text": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Text"
+      }
+    },
+    "required": [
+      "pcm_b64",
+      "samples"
+    ],
+    "title": "TtsAudioDeltaPayload",
+    "type": "object"
+  },
+  "tts.audio.completed": {
+    "additionalProperties": true,
+    "properties": {
+      "total_samples": {
+        "minimum": 0,
+        "title": "Total Samples",
+        "type": "integer"
+      },
+      "duration_ms": {
+        "default": 0,
+        "minimum": 0,
+        "title": "Duration Ms",
+        "type": "integer"
+      },
+      "first_audio_ms": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "First Audio Ms"
+      }
+    },
+    "required": [
+      "total_samples"
+    ],
+    "title": "TtsAudioCompletedPayload",
+    "type": "object"
+  },
+  "tts.error": {
+    "additionalProperties": true,
+    "properties": {
+      "code": {
+        "title": "Code",
+        "type": "string"
+      },
+      "message": {
+        "title": "Message",
+        "type": "string"
+      },
+      "block_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Block Id"
+      },
+      "recoverable": {
+        "default": true,
+        "title": "Recoverable",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "code",
+      "message"
+    ],
+    "title": "SessionErrorPayload",
+    "type": "object"
+  },
+  "avatar.speech_frame": {
+    "additionalProperties": true,
+    "description": "数字人视频帧。",
+    "properties": {
+      "frame_b64": {
+        "title": "Frame B64",
+        "type": "string"
+      },
+      "width": {
+        "default": 1280,
+        "title": "Width",
+        "type": "integer"
+      },
+      "height": {
+        "default": 720,
+        "title": "Height",
+        "type": "integer"
+      },
+      "format": {
+        "default": "jpeg",
+        "enum": [
+          "jpeg",
+          "png"
+        ],
+        "title": "Format",
+        "type": "string"
+      },
+      "frame_index": {
+        "minimum": 0,
+        "title": "Frame Index",
+        "type": "integer"
+      },
+      "audio_timestamp_ms": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Audio Timestamp Ms"
+      },
+      "is_speech": {
+        "default": true,
+        "description": "True=说话帧，False=待机帧",
+        "title": "Is Speech",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "frame_b64",
+      "frame_index"
+    ],
+    "title": "AvatarFramePayload",
+    "type": "object"
+  },
+  "avatar.idle_frame": {
+    "additionalProperties": true,
+    "description": "数字人视频帧。",
+    "properties": {
+      "frame_b64": {
+        "title": "Frame B64",
+        "type": "string"
+      },
+      "width": {
+        "default": 1280,
+        "title": "Width",
+        "type": "integer"
+      },
+      "height": {
+        "default": 720,
+        "title": "Height",
+        "type": "integer"
+      },
+      "format": {
+        "default": "jpeg",
+        "enum": [
+          "jpeg",
+          "png"
+        ],
+        "title": "Format",
+        "type": "string"
+      },
+      "frame_index": {
+        "minimum": 0,
+        "title": "Frame Index",
+        "type": "integer"
+      },
+      "audio_timestamp_ms": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Audio Timestamp Ms"
+      },
+      "is_speech": {
+        "default": true,
+        "description": "True=说话帧，False=待机帧",
+        "title": "Is Speech",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "frame_b64",
+      "frame_index"
+    ],
+    "title": "AvatarFramePayload",
+    "type": "object"
+  },
+  "avatar.reset": {
+    "additionalProperties": true,
+    "properties": {
+      "reason": {
+        "default": "user_interrupt",
+        "enum": [
+          "user_interrupt",
+          "session_reset",
+          "degraded"
+        ],
+        "title": "Reason",
+        "type": "string"
+      }
+    },
+    "title": "AvatarResetPayload",
+    "type": "object"
+  },
+  "avatar.degraded": {
+    "additionalProperties": true,
+    "description": "Avatar 降级事件。",
+    "properties": {
+      "from_block": {
+        "title": "From Block",
+        "type": "string"
+      },
+      "to_block": {
+        "title": "To Block",
+        "type": "string"
+      },
+      "reason": {
+        "title": "Reason",
+        "type": "string"
+      }
+    },
+    "required": [
+      "from_block",
+      "to_block",
+      "reason"
+    ],
+    "title": "AvatarDegradedPayload",
+    "type": "object"
+  },
+  "vision.result": {
+    "additionalProperties": true,
+    "properties": {
+      "description": {
+        "title": "Description",
+        "type": "string"
+      },
+      "objects": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Objects",
+        "type": "array"
+      },
+      "confidence": {
+        "default": 1.0,
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "title": "Confidence",
+        "type": "number"
+      }
+    },
+    "required": [
+      "description"
+    ],
+    "title": "VisionResultPayload",
+    "type": "object"
+  },
+  "persona.changed": {
+    "additionalProperties": true,
+    "properties": {
+      "persona_id": {
+        "title": "Persona Id",
+        "type": "string"
+      },
+      "llm_instructions_changed": {
+        "default": true,
+        "title": "Llm Instructions Changed",
+        "type": "boolean"
+      },
+      "tts_voice_changed": {
+        "default": true,
+        "title": "Tts Voice Changed",
+        "type": "boolean"
+      },
+      "avatar_asset_changed": {
+        "default": true,
+        "title": "Avatar Asset Changed",
+        "type": "boolean"
+      },
+      "memory_namespace": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Memory Namespace"
+      }
+    },
+    "required": [
+      "persona_id"
+    ],
+    "title": "PersonaChangedPayload",
+    "type": "object"
+  },
+  "response.started": {
+    "additionalProperties": true,
+    "properties": {
+      "run_id": {
+        "title": "Run Id",
+        "type": "string"
+      },
+      "transcript": {
+        "description": "本轮用户输入",
+        "title": "Transcript",
+        "type": "string"
+      }
+    },
+    "required": [
+      "run_id",
+      "transcript"
+    ],
+    "title": "ResponseStartedPayload",
+    "type": "object"
+  },
+  "response.done": {
+    "additionalProperties": true,
+    "properties": {
+      "run_id": {
+        "title": "Run Id",
+        "type": "string"
+      },
+      "full_text": {
+        "title": "Full Text",
+        "type": "string"
+      },
+      "duration_ms": {
+        "minimum": 0,
+        "title": "Duration Ms",
+        "type": "integer"
+      },
+      "interrupted": {
+        "default": false,
+        "title": "Interrupted",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "run_id",
+      "full_text",
+      "duration_ms"
+    ],
+    "title": "ResponseDonePayload",
+    "type": "object"
+  },
+  "response.interrupted": {
+    "additionalProperties": true,
+    "properties": {
+      "run_id": {
+        "title": "Run Id",
+        "type": "string"
+      },
+      "reason": {
+        "default": "user_speech",
+        "enum": [
+          "user_speech",
+          "cancel",
+          "error",
+          "session_closed"
+        ],
+        "title": "Reason",
+        "type": "string"
+      },
+      "partial_text": {
+        "default": "",
+        "title": "Partial Text",
+        "type": "string"
+      }
+    },
+    "required": [
+      "run_id"
+    ],
+    "title": "ResponseInterruptedPayload",
+    "type": "object"
+  },
+  "block.setup": {
+    "additionalProperties": true,
+    "properties": {
+      "block_id": {
+        "title": "Block Id",
+        "type": "string"
+      },
+      "block_type": {
+        "title": "Block Type",
+        "type": "string"
+      }
+    },
+    "required": [
+      "block_id",
+      "block_type"
+    ],
+    "title": "BlockSetupPayload",
+    "type": "object"
+  },
+  "block.ready": {
+    "additionalProperties": true,
+    "properties": {
+      "block_id": {
+        "title": "Block Id",
+        "type": "string"
+      },
+      "warmup_ms": {
+        "minimum": 0,
+        "title": "Warmup Ms",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "block_id",
+      "warmup_ms"
+    ],
+    "title": "BlockReadyPayload",
+    "type": "object"
+  },
+  "block.error": {
+    "additionalProperties": true,
+    "properties": {
+      "block_id": {
+        "title": "Block Id",
+        "type": "string"
+      },
+      "code": {
+        "title": "Code",
+        "type": "string"
+      },
+      "message": {
+        "title": "Message",
+        "type": "string"
+      },
+      "degraded": {
+        "default": false,
+        "title": "Degraded",
+        "type": "boolean"
+      },
+      "fallback_block_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Fallback Block Id"
+      }
+    },
+    "required": [
+      "block_id",
+      "code",
+      "message"
+    ],
+    "title": "BlockErrorPayload",
+    "type": "object"
+  },
+  "block.health": {
+    "additionalProperties": true,
+    "properties": {
+      "block_id": {
+        "title": "Block Id",
+        "type": "string"
+      },
+      "status": {
+        "enum": [
+          "healthy",
+          "degraded",
+          "unhealthy"
+        ],
+        "title": "Status",
+        "type": "string"
+      },
+      "latency_ms": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Latency Ms"
+      },
+      "details": {
+        "additionalProperties": true,
+        "title": "Details",
+        "type": "object"
+      }
+    },
+    "required": [
+      "block_id",
+      "status"
+    ],
+    "title": "BlockHealthPayload",
+    "type": "object"
+  },
+  "run.started": {
+    "additionalProperties": true,
+    "properties": {
+      "run_id": {
+        "title": "Run Id",
+        "type": "string"
+      },
+      "session_id": {
+        "title": "Session Id",
+        "type": "string"
+      },
+      "profile_id": {
+        "title": "Profile Id",
+        "type": "string"
+      },
+      "persona_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Persona Id"
+      },
+      "runtime_config": {
+        "additionalProperties": true,
+        "title": "Runtime Config",
+        "type": "object"
+      }
+    },
+    "required": [
+      "run_id",
+      "session_id",
+      "profile_id"
+    ],
+    "title": "RunStartedPayload",
+    "type": "object"
+  },
+  "run.metrics": {
+    "additionalProperties": true,
+    "properties": {
+      "run_id": {
+        "title": "Run Id",
+        "type": "string"
+      },
+      "first_text_ms": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "First Text Ms"
+      },
+      "first_audio_ms": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "First Audio Ms"
+      },
+      "first_frame_ms": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "First Frame Ms"
+      },
+      "total_duration_ms": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Total Duration Ms"
+      },
+      "interruptions": {
+        "default": 0,
+        "title": "Interruptions",
+        "type": "integer"
+      },
+      "degradations": {
+        "default": 0,
+        "title": "Degradations",
+        "type": "integer"
+      },
+      "errors": {
+        "default": 0,
+        "title": "Errors",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "run_id"
+    ],
+    "title": "RunMetricsPayload",
+    "type": "object"
+  },
+  "run.completed": {
+    "$defs": {
+      "RunMetricsPayload": {
+        "additionalProperties": true,
+        "properties": {
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "first_text_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "First Text Ms"
+          },
+          "first_audio_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "First Audio Ms"
+          },
+          "first_frame_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "First Frame Ms"
+          },
+          "total_duration_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Total Duration Ms"
+          },
+          "interruptions": {
+            "default": 0,
+            "title": "Interruptions",
+            "type": "integer"
+          },
+          "degradations": {
+            "default": 0,
+            "title": "Degradations",
+            "type": "integer"
+          },
+          "errors": {
+            "default": 0,
+            "title": "Errors",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "run_id"
+        ],
+        "title": "RunMetricsPayload",
+        "type": "object"
+      }
+    },
+    "additionalProperties": true,
+    "properties": {
+      "run_id": {
+        "title": "Run Id",
+        "type": "string"
+      },
+      "status": {
+        "default": "completed",
+        "enum": [
+          "completed",
+          "interrupted",
+          "error",
+          "cancelled"
+        ],
+        "title": "Status",
+        "type": "string"
+      },
+      "metrics": {
+        "$ref": "#/$defs/RunMetricsPayload"
+      }
+    },
+    "required": [
+      "run_id",
+      "metrics"
+    ],
+    "title": "RunCompletedPayload",
+    "type": "object"
+  },
+  "artifact.created": {
+    "additionalProperties": true,
+    "properties": {
+      "artifact_id": {
+        "title": "Artifact Id",
+        "type": "string"
+      },
+      "run_id": {
+        "title": "Run Id",
+        "type": "string"
+      },
+      "kind": {
+        "enum": [
+          "audio",
+          "video",
+          "image",
+          "text",
+          "json",
+          "config"
+        ],
+        "title": "Kind",
+        "type": "string"
+      },
+      "path": {
+        "title": "Path",
+        "type": "string"
+      },
+      "mime_type": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Mime Type"
+      },
+      "size_bytes": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Size Bytes"
+      },
+      "metadata": {
+        "additionalProperties": true,
+        "title": "Metadata",
+        "type": "object"
+      }
+    },
+    "required": [
+      "artifact_id",
+      "run_id",
+      "kind",
+      "path"
+    ],
+    "title": "ArtifactPayload",
+    "type": "object"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "name": "avatarloom-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AvatarLoom / 灵构 — Composable Digital Human Runtime",
+  "license": "Apache-2.0",
+  "packageManager": "pnpm@11.10.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev:studio": "pnpm --filter @avatarloom/studio dev",
+    "build:studio": "pnpm --filter @avatarloom/studio build",
+    "lint:studio": "pnpm --filter @avatarloom/studio lint",
+    "test:studio": "pnpm --filter @avatarloom/studio test",
+    "build:sdk-ts": "pnpm --filter @avatarloom/sdk-typescript build",
+    "build": "pnpm build:sdk-ts && pnpm build:studio",
+    "lint": "pnpm --filter @avatarloom/studio lint && pnpm --filter @avatarloom/sdk-typescript lint",
+    "test": "pnpm --filter @avatarloom/studio test && pnpm --filter @avatarloom/sdk-typescript test"
+  },
+  "devDependencies": {
+    "prettier": "^3.4.0"
+  }
+}

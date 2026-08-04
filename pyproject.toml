@@ -1,0 +1,186 @@
+[project]
+name = "avatarloom"
+version = "0.1.0"
+description = "AvatarLoom / 灵构 — Composable Digital Human Runtime"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+authors = [{ name = "AvatarLoom Contributors" }]
+keywords = ["digital-human", "realtime", "ai", "avatar", "tts", "stt", "llm"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: FastAPI",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# 核心依赖：运行 Mock 链路 + Control/Gateway 所需的最小集合。
+# 重型模型依赖（torch/funasir/transformers 等）放在 [optional-dependencies] 的 extras 里，
+# 缺 GPU / 不需要真实模型时安装 `uv sync` 即可，不强行拉重型包。
+dependencies = [
+    "avatarloom-protocol>=0.1.0",
+    "avatarloom-sdk>=0.1.0",
+    "avatarloom-control-api>=0.1.0",
+    "avatarloom-runtime-gateway>=0.1.0",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "sqlalchemy>=2.0.36",
+    "alembic>=1.14",
+    "aiosqlite>=0.20",
+    "httpx>=0.28",
+    "websockets>=13",
+    "structlog>=24.4",
+    "anyio>=4.6",
+    "python-multipart>=0.0.12",
+    "pyyaml>=6.0.2",
+    "jsonschema>=4.23",
+    "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+# 真实 GPU / 重型 Adapter 依赖。按 Block 分组，便于按需安装：
+#   uv sync --extra silero
+#   uv sync --extra sensevoice
+#   uv sync --extra gpu-full
+silero = ["torch>=2.2", "torchaudio>=2.2"]
+sensevoice = ["funasr>=1.1", "torch>=2.2", "torchaudio>=2.2", "modelscope>=1.20"]
+qwen3-tts = ["torch>=2.2", "transformers>=4.46", "soundfile>=0.12"]
+voxcpm2 = ["torch>=2.2", "transformers>=4.46", "soundfile>=0.12", "scipy>=1.13"]
+musetalk = ["torch>=2.2", "opencv-python>=4.10", "imageio>=2.36", "Pillow>=10"]
+ollama = ["ollama>=0.4"]
+gpu-full = [
+    "torch>=2.2",
+    "torchaudio>=2.2",
+    "transformers>=4.46",
+    "funasr>=1.1",
+    "modelscope>=1.20",
+    "soundfile>=0.12",
+    "scipy>=1.13",
+    "opencv-python>=4.10",
+    "imageio>=2.36",
+    "Pillow>=10",
+]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=5",
+    "ruff>=0.7",
+    "mypy>=1.13",
+    "types-PyYAML",
+    "respx>=0.21",
+]
+
+[project.urls]
+Homepage = "https://github.com/douxiulu/avatarloom"
+Repository = "https://github.com/douxiulu/avatarloom"
+Documentation = "https://github.com/douxiulu/avatarloom/tree/main/docs"
+
+# ---------------------------------------------------------------------------
+# uv workspace：packages/sdk-python、packages/protocol、apps/* 是工作区成员
+# ---------------------------------------------------------------------------
+[tool.uv.workspace]
+members = [
+    "packages/protocol",
+    "packages/sdk-python",
+    "apps/control-api",
+    "apps/runtime-gateway",
+]
+
+[tool.uv.sources]
+avatarloom-protocol = { workspace = true }
+avatarloom-sdk = { workspace = true }
+avatarloom-control-api = { workspace = true }
+avatarloom-runtime-gateway = { workspace = true }
+
+# ---------------------------------------------------------------------------
+# Ruff
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["deploy/docker", "node_modules", ".venv"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # isort
+    "B",        # bugbear
+    "UP",       # pyupgrade
+    "C4",       # comprehensions
+    "SIM",      # simplify
+    "ASYNC",    # async lint
+    "RUF",      # ruff-specific
+]
+ignore = [
+    "E501",     # 行长交给 formatter
+    "B008",     # FastAPI Depends() 默认参数
+    "SIM108",   # ternary vs if-else，可读性优先
+    # 中文项目：docstring/comments 里的全角标点是故意的
+    "RUF001",   # ambiguous unicode char (string)
+    "RUF002",   # ambiguous unicode char (docstring)
+    "RUF003",   # ambiguous unicode char (comment)
+    "RUF012",   # mutable class default（Pydantic BaseModel model_config 和测试 fixture 常用）
+    "RUF022",   # __all__ 未排序（按语义分组比字母序可读）
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["B017", "B028"]  # 测试允许 assertRaises、固定路径
+"scripts/**" = ["T201"]        # 脚本允许 print
+# Block 基类的 warmup/reset/shutdown/health 是可选钩子方法（template method），
+# 故意不标 abstract，让子类按需覆盖。B027 误报。
+"packages/sdk-python/src/avatarloom_sdk/base.py" = ["B027"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+# ---------------------------------------------------------------------------
+# mypy
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.11"
+strict_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_unreachable = true
+ignore_missing_imports = true
+exclude = "(node_modules|\\.venv|deploy/docker|tests/fixtures)"
+
+[[tool.mypy.overrides]]
+module = ["tests.*", "scripts.*"]
+disallow_untyped_defs = false
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
+filterwarnings = [
+    "error",
+    "ignore::DeprecationWarning:pkg_resources.*",
+    "ignore::DeprecationWarning:passlib.*",
+]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "-p no:cacheprovider",
+]
+markers = [
+    "integration: marks integration tests (may spawn services)",
+    "e2e: marks end-to-end browser tests",
+    "slow: marks slow tests",
+    "gpu: requires a real GPU + heavy model deps",
+]
