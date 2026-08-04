@@ -119,6 +119,8 @@ class Orchestrator:
         self.blocks: dict[str, Block] = {}
         # 失败/降级记录
         self.degraded_blocks: dict[str, str] = {}  # category -> fallback block_id
+        # Persona 上下文（session_id -> dict），切换 Persona 时更新
+        self._persona_contexts: dict[str, dict[str, Any]] = {}
         # 内部任务（订阅消费者等）
         self._tasks: list[asyncio.Task[None]] = []
         self._setup_done = False
@@ -203,6 +205,66 @@ class Orchestrator:
         """结束会话。"""
         await session.close(reason)
         self.sessions.remove(session.session_id)
+
+    # ------------------------------------------------------------------
+    # Persona 切换
+    # ------------------------------------------------------------------
+
+    async def switch_persona(
+        self,
+        session: Session,
+        persona: Any,
+    ) -> None:
+        """切换 Persona——同步更新 LLM instructions / TTS voice / Avatar asset / Memory namespace。
+
+        persona 是鸭子类型，需有：id / prompt / voice_ref_audio / avatar_portrait /
+        voice_block / avatar_block / memory_namespace 字段（见 blocks.persona.PersonaPackage）。
+
+        切换是原子的：先更新所有上下文，再 emit persona.changed。
+        如果某项缺失（如 avatar_portrait 为 None），保持原值。
+        """
+        from avatarloom_protocol import PERSONA_CHANGED
+
+        # 更新 Session 元数据
+        old_persona_id = session.persona_id
+        session.persona_id = persona.id
+
+        # 更新各 Block 的运行时上下文（v0.1 通过 persona 上下文传递）
+        # LLM：instructions
+        # TTS：voice ref
+        # Avatar：portrait
+        # Memory：namespace
+        # 这些通过 BlockContext 传给 process()——orchestrator._make_block_handler 重建 ctx 时会读取
+        # 这里记录到 session 级别供后续 process() 用
+        self._persona_contexts[session.session_id] = {
+            "persona_id": persona.id,
+            "instructions": persona.prompt,
+            "voice_ref": getattr(persona, "voice_ref_audio", None),
+            "avatar_ref": getattr(persona, "avatar_portrait", None),
+            "memory_namespace": getattr(persona, "memory_namespace", None),
+        }
+
+        await session._emit_event(  # type: ignore[attr-defined]
+            Event(
+                type=PERSONA_CHANGED,
+                session_id=session.session_id,
+                source="orchestrator",
+                run_id=session.current_run_id,
+                payload={
+                    "persona_id": persona.id,
+                    "llm_instructions_changed": True,
+                    "tts_voice_changed": bool(getattr(persona, "voice_ref_audio", None)),
+                    "avatar_asset_changed": bool(getattr(persona, "avatar_portrait", None)),
+                    "memory_namespace": getattr(persona, "memory_namespace", None),
+                },
+            )
+        )
+        logger.info(
+            "persona switched: %s -> %s (session %s)",
+            old_persona_id,
+            persona.id,
+            session.session_id[:12],
+        )
 
     # ------------------------------------------------------------------
     # 音频入口（浏览器上行）

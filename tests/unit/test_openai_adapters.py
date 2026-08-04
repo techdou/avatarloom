@@ -111,7 +111,7 @@ class TestOpenAILlm:
         event = Event(
             type=TRANSCRIPT_COMPLETED, session_id="s1", source="stt", payload={"text": "hi"}
         )
-        with pytest.raises(RuntimeError, match="HTTP error 401"):
+        with pytest.raises(RuntimeError, match=r"HTTP error 401"):
             await _capture_emits(block, ctx, event)
 
     async def test_empty_user_text_skipped(self, monkeypatch) -> None:

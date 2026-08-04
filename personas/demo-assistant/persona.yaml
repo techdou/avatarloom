@@ -1,0 +1,21 @@
+apiVersion: avatarloom.io/v1alpha1
+kind: PersonaPackage
+metadata:
+  id: demo-assistant
+  name: Demo Assistant
+  label: Assistant
+  version: 0.1.0
+prompt:
+  file: persona.md
+voice:
+  block: tts.mock
+avatar:
+  block: avatar.static
+  portrait: avatar/portrait.png
+behavior:
+  language: zh-CN
+  maxReplySentences: 3
+  allowInterruption: true
+  memory_namespace: demo-assistant
+  skills:
+    allow: []
