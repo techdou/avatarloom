@@ -33,6 +33,7 @@ coverage/
 # ---- IDE / OS ----
 .vscode/
 .idea/
+.zcode/
 *.swp
 .DS_Store
 Thumbs.db

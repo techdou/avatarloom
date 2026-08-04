@@ -139,6 +139,10 @@ ignore = [
 # Block 基类的 warmup/reset/shutdown/health 是可选钩子方法（template method），
 # 故意不标 abstract，让子类按需覆盖。B027 误报。
 "packages/sdk-python/src/avatarloom_sdk/base.py" = ["B027"]
+# runtime 内部：
+# - list(dict.values())[0] 做确定性取值——RUF015 误报
+# - await + try/except CancelledError 比 contextlib.suppress 更清晰——SIM105 误报
+"runtime/**" = ["RUF015", "SIM105"]
 
 [tool.ruff.format]
 quote-style = "double"

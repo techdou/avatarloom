@@ -144,9 +144,7 @@ def _py_type_to_ts(py_type: object) -> str:
     origin = get_origin(py_type)
     args = get_args(py_type)
 
-    if origin is Union or (
-        hasattr(types, "UnionType") and isinstance(py_type, types.UnionType)
-    ):
+    if origin is Union or (hasattr(types, "UnionType") and isinstance(py_type, types.UnionType)):
         # Optional / Union
         non_none = [a for a in args if a is not type(None)]
         ts_parts = [_py_type_to_ts(a) for a in non_none]
@@ -165,9 +163,7 @@ def _py_type_to_ts(py_type: object) -> str:
         return "Record<string, unknown>"
     if origin is Literal:
         # Literal["a", "b"] -> "a" | "b"
-        return " | ".join(
-            f'"{a}"' if isinstance(a, str) else str(a) for a in args
-        )
+        return " | ".join(f'"{a}"' if isinstance(a, str) else str(a) for a in args)
     return "unknown"
 
 
@@ -236,8 +232,7 @@ def main() -> int:
     (out_dir / "state.ts").write_text(generate_state_ts(), encoding="utf-8")
     # events.json（JSON Schema 汇总，供 Control API 校验用）
     schemas = {
-        event_type: payload.model_json_schema()
-        for event_type, payload in EVENT_PAYLOAD_MAP.items()
+        event_type: payload.model_json_schema() for event_type, payload in EVENT_PAYLOAD_MAP.items()
     }
     (out_dir / "events.json").write_text(
         json.dumps(schemas, indent=2, ensure_ascii=False), encoding="utf-8"
