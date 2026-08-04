@@ -1,0 +1,25 @@
+apiVersion: avatarloom.io/v1alpha1
+kind: RuntimeProfile
+metadata:
+  id: full-24gb
+  name: Full 24GB Plus
+blocks:
+  vad:
+    id: vad.silero
+    deployment: local
+    config: {device: cpu}
+  stt:
+    id: stt.sensevoice
+    deployment: local
+    config: {device: cuda}
+  llm: {id: llm.openai-compatible, deployment: remote}
+  tts:
+    id: tts.voxcpm2
+    deployment: local
+    config: {device: cuda, streaming: true}
+  avatar:
+    id: avatar.flashhead
+    deployment: local
+    fallback: avatar.static
+    config: {device: cuda, idleMotion: true}
+  vision: {id: vision.openai-compatible, deployment: remote, optional: true}

@@ -1,0 +1,37 @@
+apiVersion: avatarloom.io/v1alpha1
+kind: BlockDefinition
+metadata:
+  id: tts.qwen3
+  name: Qwen3 TTS
+  version: 0.1.0
+  category: tts
+runtime:
+  type: python_process
+  entrypoint: avatarloom_blocks.tts.qwen3:Qwen3TTSBlock
+capabilities:
+  streaming: true
+  voiceCloning: true
+  interruption: true
+  languages: [zh, en]
+resources:
+  accelerator: [cuda, mlx]
+  estimatedVramMb: 3000
+inputs:
+  - {type: llm.text.delta}
+  - {type: voice.changed}
+  - {type: response.interrupted}
+outputs:
+  - {type: tts.audio.delta}
+  - {type: tts.audio.completed}
+  - {type: block.error}
+healthcheck:
+  timeoutMs: 3000
+configSchema:
+  type: object
+  additionalProperties: false
+  required: [model]
+  properties:
+    model: {type: string, default: Qwen/Qwen3-TTS-12Hz-0.6B-Base}
+    device: {type: string, enum: [cpu, cuda, mlx], default: cuda}
+    quantization: {type: string, enum: [none, int8, int4], default: none}
+    sampleRate: {type: integer, default: 16000}

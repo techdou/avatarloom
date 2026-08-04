@@ -1,0 +1,30 @@
+apiVersion: avatarloom.io/v1alpha1
+kind: AvatarRuntime
+metadata:
+  id: demo-assistant
+  name: Demo Assistant
+workspace:
+  root: .
+profile: profiles/lite-12gb.yaml
+persona:
+  package: templates/persona-package
+runtime:
+  sessionMode: single
+  allowInterruption: true
+  eventLog: true
+sync:
+  audioDelayMs: 600
+  videoLagFrames: 0
+  maxVideoBehindMs: 1000
+  dropPolicy: drop_oldest_video
+storage:
+  metadata:
+    driver: sqlite
+    url: sqlite:///data/avatarloom.db
+  artifacts:
+    driver: local
+    root: data/artifacts
+observability:
+  logLevel: info
+  traces: false
+  metrics: true

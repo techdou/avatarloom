@@ -1,0 +1,36 @@
+apiVersion: avatarloom.io/v1alpha1
+kind: RuntimeProfile
+metadata:
+  id: lite-12gb
+  name: Lite 12GB
+blocks:
+  vad:
+    id: vad.silero
+    deployment: local
+    config: {device: cpu}
+  stt:
+    id: stt.sensevoice-onnx
+    deployment: local
+    config: {device: cpu, quantization: int8, language: zh}
+  llm:
+    id: llm.openai-compatible
+    deployment: remote
+    config:
+      baseUrl: ${LLM_BASE_URL}
+      apiKeyEnv: LLM_API_KEY
+      model: ${LLM_MODEL}
+  tts:
+    id: tts.qwen3
+    deployment: local
+    config:
+      device: cuda
+      model: Qwen/Qwen3-TTS-12Hz-0.6B-Base
+  avatar:
+    id: avatar.musetalk
+    deployment: local
+    fallback: avatar.static
+    config: {device: cuda}
+  vision:
+    id: vision.openai-compatible
+    deployment: remote
+    optional: true

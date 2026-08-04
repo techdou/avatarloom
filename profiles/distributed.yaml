@@ -1,0 +1,24 @@
+apiVersion: avatarloom.io/v1alpha1
+kind: RuntimeProfile
+metadata:
+  id: distributed
+  name: Distributed Hybrid
+blocks:
+  vad: {id: vad.silero, deployment: cpu-local}
+  stt:
+    id: stt.sensevoice-onnx
+    deployment: cpu-local
+    config: {quantization: int8}
+  llm: {id: llm.openai-compatible, deployment: remote-api}
+  tts:
+    id: tts.mlx-remote
+    deployment: mac-mlx
+    config:
+      endpoint: ${MLX_TTS_ENDPOINT}
+      quantization: 6bit
+  avatar:
+    id: avatar.flashhead
+    deployment: nvidia-cuda
+    fallback: avatar.static
+    config: {endpoint: ${AVATAR_ENDPOINT}}
+  vision: {id: vision.openai-compatible, deployment: remote-api, optional: true}
