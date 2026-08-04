@@ -1,4 +1,6 @@
-"""AvatarLoom Control API placeholder.
+"""AvatarLoom Control API package."""
 
-阶段 3 实现 FastAPI app、SQLAlchemy 模型、Alembic 迁移。
-"""
+from avatarloom_control_api.app import create_app
+from avatarloom_control_api.config import Settings
+
+__all__ = ["create_app", "Settings"]
