@@ -72,6 +72,7 @@ AVATAR_SPEECH_FRAME = EventType("avatar.speech_frame")  # 说话期间的视频�
 AVATAR_IDLE_FRAME = EventType("avatar.idle_frame")  # 待机帧
 AVATAR_RESET = EventType("avatar.reset")
 AVATAR_DEGRADED = EventType("avatar.degraded")  # 降级到 StaticAvatar
+AVATAR_VIDEO_READY = EventType("avatar.video.ready")  # 真实口型视频渲染完成（含 mp4 路径）
 
 # vision.*
 VISION_RESULT = EventType("vision.result")

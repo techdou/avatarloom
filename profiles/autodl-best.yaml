@@ -4,9 +4,9 @@ metadata:
   id: autodl-best
   name: AutoDL Best (DeepSeek + VoxCPM2 + MuseTalk)
   description: >
-    AutoDL 4090D 24GB 最佳效果配置。
+    AutoDL RTX 5090 32GB 最佳效果配置。
     DeepSeek 云端 LLM + 本地 VoxCPM2 流式克隆 TTS + MuseTalk 口型驱动 Avatar。
-    显存占用约 11-13GB / 24GB。
+    显存占用约 11-16GB / 32GB。
 blocks:
   vad:
     id: vad.silero
@@ -29,10 +29,10 @@ blocks:
       baseUrl: ${LLM_BASE_URL}
       apiKeyEnv: LLM_API_KEY
       model: ${LLM_MODEL}
-      maxTokens: 512
-      temperature: 0.7
-      # DeepSeek 关闭 thinking（如果有 reasoning 模式）
+      maxTokens: 200
+      temperature: 0.6
       disableThinking: true
+      systemPrompt: "你是小灵，一个温柔亲切的数字人语音助理。回答简短自然，最多2-3句话，不要使用Markdown符号或列表，适合语音合成朗读。"
   tts:
     id: tts.voxcpm2
     deployment: local
@@ -40,14 +40,27 @@ blocks:
       device: cuda
       rate: 0.886
       streaming: true
+      cfgValue: 2.0
+      inferenceTimesteps: 5
+      normalize: true
+      denoise: false
+      stylePrefix: "温柔女声，自然亲切"
+      voiceRef: personas/demo-assistant/voice/ref.wav
     fallback: tts.mock
   avatar:
     id: avatar.musetalk
     deployment: local
     config:
       device: cuda
-      portrait: personas/demo-assistant/avatar/portrait.png
+      portrait: personas/demo-assistant/avatar/portrait.jpg
       fps: 25
+      workerPython: /root/autodl-tmp/musetalk-venv/bin/python
+      workerScript: scripts/muse_worker.py
+      musetalkRoot: /root/autodl-tmp/musetalk
+      version: v1
+      batchSize: 8
+      crf: 18
+      activityFps: 2.5
     fallback: avatar.static
   vision:
     id: vision.openai-compatible

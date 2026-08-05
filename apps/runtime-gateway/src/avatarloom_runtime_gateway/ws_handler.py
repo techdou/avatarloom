@@ -15,11 +15,13 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from avatarloom_protocol import (
     AVATAR_IDLE_FRAME,
     AVATAR_SPEECH_FRAME,
+    AVATAR_VIDEO_READY,
     RESPONSE_DONE,
     SESSION_STATE_CHANGED,
     TRANSCRIPT_COMPLETED,
@@ -160,8 +162,20 @@ class WebSocketSession:
         persona_id = payload.get("persona_id")
 
         # v0.1：默认用 Mock profile（profile 加载逻辑在阶段 9 完善）
-        config = _mock_profile_config()
-        config.profile_id = profile_id
+        config = None
+        profiles_dir = Path(self.settings.workspace_root) / "profiles"
+        profile_path = profiles_dir / f"{profile_id}.yaml"
+        if profile_path.exists():
+            try:
+                from runtime.orchestrator.profile_loader import load_profile
+
+                config = load_profile(profile_path)
+            except Exception as e:
+                await self._send_error(f"profile load failed: {e}")
+                return
+        if config is None:
+            config = _mock_profile_config()
+            config.profile_id = profile_id
 
         # Recorder 接收所有事件
         self.recorder = RunRecorder(root=self.settings.runs_root)
@@ -276,6 +290,11 @@ class WebSocketSession:
 
         elif event.type == TTS_AUDIO_COMPLETED:
             await self._enqueue_json({"type": "tts.audio.completed", "payload": event.payload})
+
+        elif event.type == AVATAR_VIDEO_READY:
+            await self._enqueue_json(
+                {"type": "avatar.video.ready", "payload": event.payload}
+            )
 
         # Avatar 帧：二进制下行
         elif event.type in (AVATAR_SPEECH_FRAME, AVATAR_IDLE_FRAME):

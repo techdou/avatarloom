@@ -15,6 +15,7 @@ from avatarloom_protocol.envelope import (
     AVATAR_RESET,
     # avatar.*
     AVATAR_SPEECH_FRAME,
+    AVATAR_VIDEO_READY,
     BLOCK_ERROR,
     BLOCK_HEALTH,
     BLOCK_READY,
@@ -122,6 +123,7 @@ __all__ = [
     "AVATAR_IDLE_FRAME",
     "AVATAR_RESET",
     "AVATAR_DEGRADED",
+    "AVATAR_VIDEO_READY",
     "VISION_RESULT",
     "PERSONA_CHANGED",
     "RESPONSE_STARTED",
