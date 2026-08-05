@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     runs_root: str = "./data/runs"
 
     # 默认 Profile（未指定时）
-    default_profile: str = "mock"
+    default_profile: str = "autodl-best"
 
     # 日志
     log_level: str = "INFO"

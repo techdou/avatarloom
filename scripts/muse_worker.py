@@ -39,6 +39,28 @@ FACE_OVAL = [
 ]
 
 
+def fast_blend(image, face, face_box, mask_array, crop_box):
+    """numpy 快速融合：等价于官方 get_image_blending 的软蒙版粘贴（实测 maxdiff<=1）。"""
+    x, y, x1, y1 = face_box
+    xs, ys = max(0, crop_box[0]), max(0, crop_box[1])
+    xe, ye = min(image.shape[1], crop_box[2]), min(image.shape[0], crop_box[3])
+    mo = (max(0, crop_box[0]) - crop_box[0], max(0, crop_box[1]) - crop_box[1])
+    m = (
+        mask_array[mo[1]: mo[1] + (ye - ys), mo[0]: mo[0] + (xe - xs)]
+        .astype(np.float32)
+        / 255.0
+    )[..., None]
+    canvas = image.copy()
+    region = canvas[ys:ye, xs:xe].astype(np.float32)
+    fx, fy = x - xs, y - ys
+    fw, fh = x1 - x, y1 - y
+    r = region[fy:fy + fh, fx:fx + fw]
+    mm = m[fy:fy + fh, fx:fx + fw]
+    r[:] = face.astype(np.float32) * mm + r * (1.0 - mm)
+    canvas[ys:ye, xs:xe] = region.astype(np.uint8)
+    return canvas
+
+
 class MediapipeFaceParsing:
     """Drop-in fp for blending.get_image(): PIL 'L' face mask with soft edge."""
 
@@ -71,7 +93,7 @@ class MediapipeFaceParsing:
         return Image.fromarray(mask)
 
 
-def get_landmark_and_bbox(img_list, upperbondrange=0):
+def get_landmark_and_bbox(img_list, upperbondrange=0, max_side=0):
     """mediapipe face bbox, mirroring the official dwpose bbox rule."""
     import mediapipe as mp
 
@@ -86,6 +108,15 @@ def get_landmark_and_bbox(img_list, upperbondrange=0):
     placeholder = (0.0, 0.0, 0.0, 0.0)
     for img_path in img_list:
         frame = cv2.imread(str(img_path))
+        if max_side > 0 and max(frame.shape[:2]) > max_side:
+            scale = max_side / max(frame.shape[:2])
+            nw = int(frame.shape[1] * scale) // 2 * 2
+            nh = int(frame.shape[0] * scale) // 2 * 2
+            frame = cv2.resize(
+                frame,
+                (max(2, nw), max(2, nh)),
+                interpolation=cv2.INTER_LANCZOS4,
+            )
         frames.append(frame)
         h, w = frame.shape[:2]
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -121,7 +152,7 @@ class MuseEngine:
             return
         from musetalk.utils.utils import load_all_model, datagen  # noqa: F401
         from musetalk.utils.audio_processor import AudioProcessor
-        from musetalk.utils.blending import get_image  # noqa: F401
+        from musetalk.utils.blending import get_image_prepare_material
         from transformers import WhisperModel
 
         t0 = time.perf_counter()
@@ -137,8 +168,8 @@ class MuseEngine:
             device=self.device,
         )
         pe = pe.to(self.device, dtype=self.weight_dtype)
-        vae.vae = vae.vae.to(self.device)
-        unet.model = unet.model.to(self.device)
+        vae.vae = vae.vae.to(self.device).half()
+        unet.model = unet.model.to(self.device).half()
         whisper = WhisperModel.from_pretrained(str(self.model_dir / "whisper")).to(
             self.device, dtype=self.weight_dtype
         )
@@ -155,7 +186,7 @@ class MuseEngine:
             "audio_processor": audio_processor,
             "fp": self._make_fp(),
             "datagen": datagen,
-            "get_image": get_image,
+            "get_image_prepare_material": get_image_prepare_material,
             "load_s": round(time.perf_counter() - t0, 2),
         }
 
@@ -180,16 +211,18 @@ class MuseEngine:
         batch_size: int = 8,
         crf: int = 18,
         extra_margin: int = 0,
+        max_side: int = 1280,
         keep_frames: bool = True,
     ) -> dict:
         self._ensure_loaded()
         m = self._models
         vae, unet, pe = m["vae"], m["unet"], m["pe"]
         whisper, ap = m["whisper"], m["audio_processor"]
-        fp, datagen, get_image = m["fp"], m["datagen"], m["get_image"]
+        fp, datagen = m["fp"], m["datagen"]
+        get_image_prepare_material = m["get_image_prepare_material"]
         device, dtype = self.device, self.weight_dtype
 
-        coords, frames = get_landmark_and_bbox([portrait])
+        coords, frames = get_landmark_and_bbox([portrait], max_side=max_side)
         if coords[0] == (0.0, 0.0, 0.0, 0.0):
             raise RuntimeError("no face detected in portrait")
         x1, y1, x2, y2 = [int(v) for v in coords[0]]
@@ -207,6 +240,11 @@ class MuseEngine:
         )
 
         timesteps = torch.tensor([0], device=device)
+        mode = "jaw" if self.version == "v15" else "raw"
+        # 静态肖像：融合蒙版只计算一次，每帧只做廉价粘贴
+        mask_array, crop_box = get_image_prepare_material(
+            frames[0], [x1, y1, x2, y2], fp=fp, mode=mode
+        )
         out_path = Path(out)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         frame_dir = out_path.parent / "frames"
@@ -229,9 +267,8 @@ class MuseEngine:
                     res_frame = cv2.resize(
                         res_frame.astype(np.uint8), (x2 - x1, y2 - y1)
                     )
-                    mode = "jaw" if self.version == "v15" else "raw"
-                    combine = get_image(
-                        ori, res_frame, [x1, y1, x2, y2], mode=mode, fp=fp
+                    combine = fast_blend(
+                        ori, res_frame, [x1, y1, x2, y2], mask_array, crop_box
                     )
                 except Exception:
                     combine = ori
@@ -239,13 +276,17 @@ class MuseEngine:
                         combine[y1:y2, x1:x2] = res_frame
                     except Exception:
                         pass
-                cv2.imwrite(str(frame_dir / f"{idx:06d}.png"), combine)
+                cv2.imwrite(
+                    str(frame_dir / f"{idx:06d}.jpg"),
+                    combine,
+                    [cv2.IMWRITE_JPEG_QUALITY, 92],
+                )
                 idx += 1
         infer_s = time.perf_counter() - t0
 
         cmd = [
             "ffmpeg", "-y", "-framerate", str(fps),
-            "-i", str(frame_dir / "%06d.png"),
+            "-i", str(frame_dir / "%06d.jpg"),
             "-i", audio,
             "-c:v", "libx264", "-crf", str(crf), "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-shortest",
@@ -256,7 +297,7 @@ class MuseEngine:
             raise RuntimeError(f"ffmpeg failed: {r.stderr[-400:]}")
         if not keep_frames:
             subprocess.run(["rm", "-rf", str(frame_dir)], check=False)
-        return {
+        meta = {
             "mp4": str(out_path),
             "frames": idx,
             "frames_dir": str(frame_dir),
@@ -265,6 +306,14 @@ class MuseEngine:
             "audio_s": round(librosa_length / 16000, 2),
             "load_s": m["load_s"],
         }
+        # 落盘兜底：即使 stdout 管道异常，块也能读到结果
+        try:
+            (out_path.parent / (out_path.stem + ".json")).write_text(
+                json.dumps(meta, ensure_ascii=False), encoding="utf-8"
+            )
+        except Exception:
+            pass
+        return meta
 
 
 def _reply(obj: dict) -> None:
@@ -302,6 +351,7 @@ def main() -> int:
                     batch_size=int(req.get("batch_size", 8)),
                     crf=int(req.get("crf", 18)),
                     extra_margin=int(req.get("extra_margin", 0)),
+                    max_side=int(req.get("max_side", 1280)),
                     keep_frames=bool(req.get("keep_frames", True)),
                 )
                 meta.update(

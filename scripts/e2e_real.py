@@ -205,7 +205,7 @@ async def main() -> int:
 
     # 真口型视频是异步渲染的——给 avatar.video.ready 留出渲染时间
     if got["tts_done"] and not got["video"]:
-        video_deadline = time.perf_counter() + 180
+        video_deadline = time.perf_counter() + 720
         print("[6.5] waiting for avatar video render ...")
         while time.perf_counter() < video_deadline and not got["video"]:
             await asyncio.sleep(0.2)
@@ -281,7 +281,10 @@ async def main() -> int:
     )
 
     print("[8] shutdown")
-    await orch.shutdown()
+    try:
+        await asyncio.wait_for(orch.shutdown(), timeout=30)
+    except Exception:
+        pass
 
     ok = all(got.values())
     print("=" * 64)

@@ -14,13 +14,20 @@ interface TranscriptItem {
   ts: number;
 }
 
+const STATE_META: Record<string, { label: string; badge: string }> = {
+  idle: { label: "待机", badge: "" },
+  listening: { label: "聆听中", badge: "badge-ok" },
+  transcribing: { label: "识别中", badge: "badge-warn" },
+  thinking: { label: "思考中", badge: "badge-accent" },
+  speaking: { label: "回复中", badge: "badge-ok" },
+  interrupting: { label: "打断", badge: "badge-err" },
+  error: { label: "异常", badge: "badge-err" },
+};
+
 /**
- * Realtime Playground 客户端——完整音频交互。
- *
- * 流程：
- *   麦克风 → AudioWorklet → 16kHz PCM → ws 二进制上行
- *   ws 二进制下行（0x03=PCM 播放，0x01=Avatar JPEG）→ 音画同步显示
- *
+ * Realtime Playground —— 简洁对话式 Avatar 界面。
+ * 流程：麦克风 → AudioWorklet → 16kHz PCM → ws 上行；
+ *       ws 二进制下行（0x03=PCM 播放，0x01=Avatar JPEG）→ 音画同步显示。
  * 音频是主时钟：PcmPlayer 用 AudioContext.currentTime 调度，AVMux 按节奏消费帧。
  */
 export function PlaygroundClient() {
@@ -41,12 +48,16 @@ export function PlaygroundClient() {
   const playerRef = useRef<PcmPlayer | null>(null);
   const avmuxRef = useRef<AVMux | null>(null);
   const llmDeltaRef = useRef("");
+  const chatRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     llmDeltaRef.current = llmDelta;
   }, [llmDelta]);
 
-  // 清理
+  useEffect(() => {
+    chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight, behavior: "smooth" });
+  }, [transcript, llmDelta]);
+
   useEffect(() => {
     return () => {
       recorderRef.current?.stop();
@@ -56,7 +67,8 @@ export function PlaygroundClient() {
   }, []);
 
   const handleFrame = useCallback((frame: AvatarFrame) => {
-    const blob = frame.blob instanceof Blob ? frame.blob : new Blob([frame.blob], { type: "image/jpeg" });
+    const blob =
+      frame.blob instanceof Blob ? frame.blob : new Blob([frame.blob], { type: "image/jpeg" });
     const url = URL.createObjectURL(blob);
     setFrameUrl((old) => {
       if (old) URL.revokeObjectURL(old);
@@ -69,7 +81,6 @@ export function PlaygroundClient() {
     setConn("connecting");
     setError(null);
 
-    // 初始化播放器和同步器
     playerRef.current = new PcmPlayer({ sampleRate: 16000, audioDelayMs: 600 });
     avmuxRef.current = new AVMux({ audioDelayMs: 600 }, handleFrame);
 
@@ -80,7 +91,12 @@ export function PlaygroundClient() {
 
     ws.onopen = () => {
       setConn("connected");
-      ws.send(JSON.stringify({ type: "session.start", payload: { profile_id: "mock" } }));
+      ws.send(
+        JSON.stringify({
+          type: "session.start",
+          payload: { profile_id: "autodl-best" },
+        })
+      );
     };
     ws.onmessage = (ev) => {
       if (typeof ev.data === "string") {
@@ -124,7 +140,6 @@ export function PlaygroundClient() {
         break;
       case "session.state_changed":
         setSessionState((msg.payload?.to as string) || "idle");
-        // 打断时清空播放和帧
         if (msg.payload?.to === "interrupting") {
           playerRef.current?.interrupt();
           avmuxRef.current?.interrupt();
@@ -169,13 +184,11 @@ export function PlaygroundClient() {
     const tag = view[0];
 
     if (tag === 0x03) {
-      // TTS PCM16 chunk
-      const pcm = new Int16Array(data, 2); // 跳过 tag 字节
+      const pcm = new Int16Array(data, 2);
       playerRef.current?.enqueue(pcm);
       setPlaying(true);
       setDebugInfo((d) => ({ ...d, audioChunks: d.audioChunks + 1 }));
     } else if (tag === 0x01) {
-      // Avatar JPEG: tag(1) + subtag(1) + jpeg
       const subtag = view[1] ?? 0;
       const jpeg = data.slice(2);
       avmuxRef.current?.pushFrame({
@@ -196,7 +209,6 @@ export function PlaygroundClient() {
       recorderRef.current = new MicrophoneRecorder({
         targetSampleRate: 16000,
         onChunk: (pcm) => {
-          // 发二进制 PCM（无 tag 前缀）
           if (wsRef.current?.readyState === WebSocket.OPEN) {
             wsRef.current.send(pcm.buffer);
           }
@@ -214,139 +226,184 @@ export function PlaygroundClient() {
     avmuxRef.current?.interrupt();
   }
 
-  const stateBadge = {
-    idle: "badge",
-    listening: "badge badge-ok",
-    transcribing: "badge badge-warn",
-    thinking: "badge badge-warn",
-    speaking: "badge badge-ok",
-    interrupting: "badge badge-err",
-    error: "badge badge-err",
-  }[sessionState] || "badge";
+  const stateMeta = STATE_META[sessionState] || STATE_META.idle;
+  const connDot = {
+    connected: "bg-ok",
+    connecting: "bg-warn animate-pulse",
+    error: "bg-err",
+    disconnected: "bg-fg-subtle",
+  }[conn];
 
   return (
-    <div className="grid grid-cols-3 gap-4">
-      {/* 左：控制 */}
-      <div className="col-span-1 space-y-4">
-        <div className="card">
-          <h3 className="mb-3">连接</h3>
-          <div className="flex items-center gap-2 mb-3">
-            <span className={clsx(
-              "w-2 h-2 rounded-full",
-              conn === "connected" ? "bg-ok" : conn === "connecting" ? "bg-warn" : conn === "error" ? "bg-err" : "bg-fg-subtle"
-            )} />
-            <span className="text-sm">{conn}</span>
+    <div className="flex flex-col gap-4 h-[calc(100vh-8rem)]">
+      {/* 顶部连接条 */}
+      <div className="card flex items-center justify-between gap-3 py-3">
+        <div className="flex items-center gap-3">
+          <span className={clsx("w-2.5 h-2.5 rounded-full", connDot)} />
+          <div>
+            <div className="text-sm font-medium leading-none">
+              {conn === "connected" ? "已连接 Runtime Gateway" : conn === "connecting" ? "连接中…" : conn === "error" ? "连接失败" : "未连接"}
+            </div>
+            <div className="text-[11px] text-fg-muted mt-1 font-mono">
+              autodl-best · DeepSeek + VoxCPM2 + MuseTalk
+            </div>
           </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className={clsx("badge", stateMeta.badge)}>{stateMeta.label}</span>
           {conn === "connected" ? (
-            <button onClick={disconnect} className="btn w-full">断开</button>
+            <button onClick={disconnect} className="btn btn-sm btn-danger">
+              断开
+            </button>
           ) : (
-            <button onClick={connect} className="btn btn-primary w-full" disabled={conn === "connecting"}>
+            <button onClick={connect} className="btn btn-sm btn-primary" disabled={conn === "connecting"}>
               {conn === "connecting" ? "连接中…" : "连接"}
             </button>
           )}
         </div>
+      </div>
 
-        <div className="card">
-          <h3 className="mb-3">状态</h3>
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-sm text-fg-muted">会话状态</span>
-            <span className={stateBadge}>{sessionState}</span>
-          </div>
-          {sessionIdRef.current && (
-            <div className="text-xs text-fg-subtle font-mono truncate">{sessionIdRef.current}</div>
-          )}
-        </div>
-
-        <div className="card">
-          <h3 className="mb-3">音频</h3>
-          <div className="space-y-2">
-            <button
-              onClick={toggleMic}
-              disabled={conn !== "connected"}
-              className={clsx("btn w-full", micActive && "btn-primary")}
-            >
-              {micActive ? "停止麦克风" : "开启麦克风"}
-            </button>
-            {playing && (
-              <button onClick={interrupt} className="btn w-full text-err">
-                打断
-              </button>
+      {/* 主区：角色 + 对话 */}
+      <div className="grid grid-cols-1 md:grid-cols-[minmax(280px,340px)_1fr] gap-4 flex-1 min-h-0">
+        {/* Avatar 角色卡片 */}
+        <div className="card flex flex-col overflow-hidden p-0">
+          <div className="relative flex-1 min-h-0 bg-bg-subtle flex items-center justify-center overflow-hidden">
+            {frameUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={frameUrl} alt="avatar" className="w-full h-full object-cover" />
+            ) : (
+              <div className="text-center text-fg-subtle">
+                <div className="w-14 h-14 mx-auto rounded-full bg-border/60 flex items-center justify-center mb-2">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-7 h-7">
+                    <path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM5 21a7 7 0 0 1 14 0" strokeLinecap="round" />
+                  </svg>
+                </div>
+                <div className="text-xs">等待角色画面…</div>
+              </div>
             )}
-            <div className="flex gap-2 text-xs text-fg-muted">
-              <span className={clsx("flex items-center gap-1", micActive && "text-ok")}>
-                <span className={clsx("w-1.5 h-1.5 rounded-full", micActive ? "bg-ok" : "bg-fg-subtle")} />
-                麦克风
+            {showDebug && (
+              <div className="absolute top-2 left-2 text-[10px] font-mono bg-black/60 text-white px-2 py-1 rounded-md">
+                {sessionState} · 帧 {debugInfo.framesShown}
+              </div>
+            )}
+          </div>
+          <div className="px-4 py-3 border-t border-border flex items-center justify-between">
+            <div>
+              <div className="text-sm font-medium">小灵 · Demo Assistant</div>
+              <div className="text-[11px] text-fg-muted mt-0.5">
+                {micActive ? "正在聆听…" : playing ? "正在回复…" : "待机"}
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className={clsx("flex items-center gap-1 text-[11px]", micActive ? "text-ok" : "text-fg-subtle")}>
+                <span className={clsx("w-1.5 h-1.5 rounded-full", micActive ? "bg-ok animate-pulse" : "bg-fg-subtle")} />
+                麦
               </span>
-              <span className={clsx("flex items-center gap-1", playing && "text-ok")}>
+              <span className={clsx("flex items-center gap-1 text-[11px]", playing ? "text-ok" : "text-fg-subtle")}>
                 <span className={clsx("w-1.5 h-1.5 rounded-full", playing ? "bg-ok" : "bg-fg-subtle")} />
-                播放
+                播
               </span>
             </div>
           </div>
         </div>
 
-        <div className="card">
-          <label className="flex items-center gap-2 text-sm cursor-pointer">
-            <input
-              type="checkbox"
-              checked={showDebug}
-              onChange={(e) => setShowDebug(e.target.checked)}
-              className="accent-accent"
-            />
-            Debug Overlay
-          </label>
-          {showDebug && (
-            <div className="mt-3 text-xs font-mono space-y-1 text-fg-muted">
-              <div>frames: {debugInfo.framesShown}</div>
-              <div>audio chunks: {debugInfo.audioChunks}</div>
-              <div>queue: {debugInfo.queueLen}</div>
-            </div>
-          )}
-        </div>
-      </div>
+        {/* 对话面板 */}
+        <div className="card flex flex-col p-0 min-h-0">
+          <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+            <div className="text-sm font-medium">对话</div>
+            {sessionIdRef.current && (
+              <div className="text-[10px] font-mono text-fg-subtle truncate max-w-[260px]">
+                {sessionIdRef.current}
+              </div>
+            )}
+          </div>
 
-      {/* 中：Avatar */}
-      <div className="col-span-1">
-        <div className="card aspect-[16/10] flex items-center justify-center bg-bg-subtle relative overflow-hidden">
-          {frameUrl ? (
-            <img src={frameUrl} alt="avatar" className="w-full h-full object-cover" />
-          ) : (
-            <div className="text-fg-subtle text-sm">Avatar 显示区</div>
-          )}
-          {showDebug && (
-            <div className="absolute top-2 left-2 text-xs font-mono bg-black/60 text-white px-2 py-1 rounded">
-              {sessionState}
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* 右：转写 */}
-      <div className="col-span-1">
-        <div className="card h-[600px] flex flex-col">
-          <h3 className="mb-3">对话</h3>
-          {error && <div className="text-err text-sm mb-2">{error}</div>}
-          <div className="flex-1 overflow-auto space-y-3">
+          <div ref={chatRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
+            {error && (
+              <div className="rounded-lg border border-err/30 bg-err/5 text-err text-xs px-3 py-2">
+                {error}
+              </div>
+            )}
             {transcript.length === 0 && !llmDelta && (
-              <div className="text-fg-muted text-sm text-center py-12">
-                {conn === "connected" ? "开启麦克风开始对话" : "点击「连接」开始"}
+              <div className="h-full flex flex-col items-center justify-center text-fg-subtle text-sm">
+                <div className="w-12 h-12 rounded-full bg-accent-soft text-accent flex items-center justify-center mb-3">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="w-6 h-6">
+                    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3zM19 10v2a7 7 0 0 1-14 0v-2M12 19v4" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </div>
+                <div className="text-xs">
+                  {conn === "connected" ? "点击下方麦克风，开始语音对话" : "先连接 Gateway，再开启麦克风"}
+                </div>
               </div>
             )}
             {transcript.map((item, i) => (
-              <div key={i} className={clsx("text-sm", item.role === "user" ? "text-fg" : "text-fg-muted")}>
-                <span className="text-xs text-fg-subtle mr-2">
-                  {item.role === "user" ? "用户" : "助手"}
-                </span>
-                {item.text}
+              <div key={i} className={clsx("flex", item.role === "user" ? "justify-end" : "justify-start")}>
+                <div
+                  className={clsx(
+                    "max-w-[78%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed shadow-card",
+                    item.role === "user"
+                      ? "bg-accent-soft text-fg rounded-br-md"
+                      : "bg-white border border-border rounded-bl-md"
+                  )}
+                >
+                  <div className="text-[10px] text-fg-subtle mb-1">
+                    {item.role === "user" ? "你" : "小灵"}
+                  </div>
+                  <div className="whitespace-pre-wrap break-words">{item.text}</div>
+                </div>
               </div>
             ))}
             {llmDelta && (
-              <div className="text-sm text-fg-muted">
-                <span className="text-xs text-fg-subtle mr-2">助手</span>
-                {llmDelta}
-                <span className="inline-block w-1 h-4 bg-accent ml-0.5 animate-pulse" />
+              <div className="flex justify-start">
+                <div className="max-w-[78%] rounded-2xl rounded-bl-md bg-white border border-border px-3.5 py-2.5 text-sm leading-relaxed shadow-card">
+                  <div className="text-[10px] text-fg-subtle mb-1">小灵 · 思考中</div>
+                  <div className="whitespace-pre-wrap break-words">
+                    {llmDelta}
+                    <span className="inline-block w-1.5 h-3.5 bg-accent ml-0.5 align-middle animate-pulse" />
+                  </div>
+                </div>
               </div>
             )}
+          </div>
+
+          {/* 底部控制条 */}
+          <div className="px-4 py-3 border-t border-border flex items-center gap-2">
+            <button
+              onClick={toggleMic}
+              disabled={conn !== "connected"}
+              className={clsx(
+                "inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all active:scale-[0.98]",
+                micActive
+                  ? "bg-err/10 text-err border border-err/30"
+                  : "bg-accent text-white border border-accent shadow-accent disabled:opacity-40"
+              )}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="w-4 h-4">
+                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3zM19 10v2a7 7 0 0 1-14 0v-2M12 19v4" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              {micActive ? "停止麦克风" : "开始说话"}
+            </button>
+            {playing && (
+              <button onClick={interrupt} className="btn btn-danger">
+                打断
+              </button>
+            )}
+            <div className="ml-auto flex items-center gap-3">
+              <label className="flex items-center gap-1.5 text-xs text-fg-muted cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={showDebug}
+                  onChange={(e) => setShowDebug(e.target.checked)}
+                  className="accent-accent w-3.5 h-3.5"
+                />
+                Debug
+              </label>
+              {showDebug && (
+                <span className="text-[10px] font-mono text-fg-subtle">
+                  {debugInfo.framesShown}f · {debugInfo.audioChunks}a · q{debugInfo.queueLen}
+                </span>
+              )}
+            </div>
           </div>
         </div>
       </div>

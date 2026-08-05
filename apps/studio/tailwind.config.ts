@@ -12,11 +12,21 @@ const config: Config = {
         bg: { DEFAULT: "#ffffff", subtle: "#fafafa" },
         fg: { DEFAULT: "#0a0a0a", muted: "#666666", subtle: "#999999" },
         border: "#e5e5e5",
-        accent: { DEFAULT: "#0a0a0a", hover: "#333333" },
+        accent: {
+          DEFAULT: "#4f46e5",
+          hover: "#4338ca",
+          soft: "#eef2ff",
+          ring: "rgba(79, 70, 229, 0.35)",
+        },
         // 状态色（克制）
         ok: "#16a34a",
         warn: "#d97706",
         err: "#dc2626",
+      },
+      boxShadow: {
+        card: "0 1px 2px rgba(16, 24, 40, 0.04), 0 1px 3px rgba(16, 24, 40, 0.06)",
+        pop: "0 8px 24px rgba(16, 24, 40, 0.10)",
+        accent: "0 4px 14px rgba(79, 70, 229, 0.25)",
       },
       fontFamily: {
         sans: ["ui-sans-serif", "system-ui", "-apple-system", "Segoe UI", "Roboto", "sans-serif"],

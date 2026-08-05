@@ -61,6 +61,7 @@ blocks:
       batchSize: 8
       crf: 18
       activityFps: 2.5
+      maxSide: 1280
     fallback: avatar.static
   vision:
     id: vision.openai-compatible

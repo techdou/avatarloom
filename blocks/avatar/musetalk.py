@@ -97,8 +97,8 @@ class MuseTalkAvatarBlock(Block):
         cfg = ctx.config
         self._fps = int(cfg.get("fps", 25))
         self._activity_fps = float(cfg.get("activityFps", 2.5))
-        self._render_timeout_s = float(cfg.get("renderTimeoutS", 600))
-        workspace = Path(ctx.workspace_root)
+        self._render_timeout_s = float(cfg.get("renderTimeoutS", 300))
+        workspace = Path(ctx.workspace_root).resolve()
 
         portrait_cfg = str(cfg.get("portrait", ""))
         p = Path(portrait_cfg)
@@ -126,6 +126,8 @@ class MuseTalkAvatarBlock(Block):
         worker_script = str(
             cfg.get("workerScript", str(workspace / "scripts" / "muse_worker.py"))
         )
+        if not Path(worker_script).is_absolute():
+            worker_script = str(workspace / worker_script)
         if not Path(worker_script).exists():
             raise BlockSetupError(
                 "avatar.musetalk", f"worker script not found: {worker_script}"
@@ -154,8 +156,12 @@ class MuseTalkAvatarBlock(Block):
             await asyncio.wait_for(self._wait_line(30.0), timeout=35.0)
             await self._call_worker({"cmd": "ping"}, timeout=30.0)
         except Exception as e:
+            leftover = " | ".join(list(self._worker_lines)[-10:])
             await self._stop_worker()
-            raise BlockSetupError("avatar.musetalk", f"worker 启动失败: {e}") from e
+            raise BlockSetupError(
+                "avatar.musetalk",
+                f"worker 启动失败: {e} | worker_output={leftover!r}",
+            ) from e
 
         self._mark_ready()
         await ctx.logger.ainfo(
@@ -204,13 +210,20 @@ class MuseTalkAvatarBlock(Block):
 
     async def _drain_worker(self) -> None:
         assert self._worker_proc and self._worker_proc.stdout
-        while True:
-            line = await self._worker_proc.stdout.readline()
-            if not line:
-                break
-            text = line.decode("utf-8", errors="replace").strip()
-            if text:
-                self._worker_lines.append(text)
+        try:
+            while True:
+                line = await self._worker_proc.stdout.readline()
+                if not line:
+                    break
+                text = line.decode("utf-8", errors="replace").strip()
+                if text:
+                    self._worker_lines.append(text)
+        except Exception as e:
+            try:
+                with open("/tmp/avatar_block_drain.err", "a", encoding="utf-8") as f:
+                    f.write(f"[{time.strftime('%H:%M:%S')}] drain error: {e}\n")
+            except Exception:
+                pass
 
     async def _wait_line(self, timeout: float, expected: str | None = None) -> dict:
         deadline = time.monotonic() + timeout
@@ -273,13 +286,14 @@ class MuseTalkAvatarBlock(Block):
 
     async def _render_reply(self, ctx: BlockContext) -> None:
         sid = ctx.session_id
+        mp4_path = None
         try:
             pcm = bytes(self._bufs.pop(sid, bytearray()))
             if not pcm:
                 await self._emit_idle(ctx)
                 return
             out_dir = (
-                Path(ctx.workspace_root)
+                Path(ctx.workspace_root).resolve()
                 / "runs"
                 / "avatar"
                 / sid
@@ -300,15 +314,77 @@ class MuseTalkAvatarBlock(Block):
                 "batch_size": int(cfg.get("batchSize", 8)),
                 "crf": int(cfg.get("crf", 18)),
                 "extra_margin": int(cfg.get("extraMargin", 0)),
+                "max_side": int(cfg.get("maxSide", 1280)),
                 "keep_frames": True,
             }
             async with self._worker_lock:
-                resp = await self._call_worker(req, timeout=self._render_timeout_s)
+                monitor = asyncio.create_task(self._render_monitor(ctx))
+                try:
+                    resp = await self._call_worker(req, timeout=self._render_timeout_s)
+                finally:
+                    monitor.cancel()
         except Exception as e:
-            await ctx.logger.aerror("avatar.musetalk render failed", error=str(e))
+            tail = " | ".join(list(self._worker_lines)[-5:])
+            await ctx.logger.aerror(
+                "avatar.musetalk render failed",
+                error=str(e),
+                worker_tail=tail,
+            )
+            # 落盘兜底：worker 已把结果写入 <mp4>.json
+            fallback = (
+                mp4_path.parent / (mp4_path.stem + ".json") if mp4_path else None
+            )
+            if fallback and fallback.exists():
+                try:
+                    resp = json.loads(fallback.read_text(encoding="utf-8"))
+                    await self._emit_video_ready(ctx, sid, resp)
+                    await ctx.logger.ainfo(
+                        "avatar.musetalk video ready (file fallback)",
+                        mp4=resp.get("mp4", ""),
+                    )
+                except Exception as e2:
+                    await ctx.logger.aerror("avatar fallback failed", error=str(e2))
             await self._emit_idle(ctx)
             return
 
+        await self._emit_video_ready(ctx, sid, resp)
+        await ctx.logger.ainfo(
+            "avatar.musetalk video ready",
+            mp4=resp.get("mp4", ""),
+            frames=resp.get("frames", 0),
+        )
+
+        frames_dir = Path(resp.get("frames_dir", ""))
+        if frames_dir.is_dir():
+            for frame_file in sorted(frames_dir.glob("*.jpg")):
+                jpeg = frame_file.read_bytes()
+                if jpeg:
+                    await self._emit_frame(
+                        ctx, jpeg, is_speech=True, width=1280, height=720
+                    )
+                await asyncio.sleep(0)
+        await self._emit_idle(ctx)
+
+    async def _render_monitor(self, ctx: BlockContext) -> None:
+        try:
+            while True:
+                await asyncio.sleep(30)
+                rc = (
+                    self._worker_proc.returncode
+                    if self._worker_proc is not None
+                    else "?"
+                )
+                await ctx.logger.ainfo(
+                    "musetalk render wait",
+                    lines=len(self._worker_lines),
+                    proc_rc=rc,
+                )
+        except asyncio.CancelledError:
+            pass
+
+    async def _emit_video_ready(
+        self, ctx: BlockContext, sid: str, resp: dict[str, Any]
+    ) -> None:
         await ctx.emit(
             Event(
                 type=AVATAR_VIDEO_READY,
@@ -325,22 +401,6 @@ class MuseTalkAvatarBlock(Block):
                 },
             )
         )
-        await ctx.logger.ainfo(
-            "avatar.musetalk video ready",
-            mp4=resp.get("mp4", ""),
-            frames=resp.get("frames", 0),
-        )
-
-        frames_dir = Path(resp.get("frames_dir", ""))
-        if frames_dir.is_dir():
-            for png in sorted(frames_dir.glob("*.png")):
-                jpeg = self._to_jpeg(png.read_bytes())
-                if jpeg:
-                    await self._emit_frame(
-                        ctx, jpeg, is_speech=True, width=1280, height=720
-                    )
-                await asyncio.sleep(0)
-        await self._emit_idle(ctx)
 
     async def _emit_idle(self, ctx: BlockContext) -> None:
         await self._emit_frame(
