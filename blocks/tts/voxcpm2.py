@@ -75,6 +75,7 @@ class VoxCpm2TtsBlock(Block):
         cfg = ctx.config
         self._device = str(cfg.get("device", "cuda"))
         self._rate = float(cfg.get("rate", 0.886))
+        self._default_voice_ref = self._resolve_path(cfg.get("voiceRef"), ctx)
         try:
             self._model = self._load_model(str(cfg.get("model", "openbmb/VoxCPM2")), self._device)
         except ImportError as e:
@@ -114,8 +115,10 @@ class VoxCpm2TtsBlock(Block):
             )
 
     async def _synthesize(self, ctx: BlockContext, text: str, voice_ref: str | None) -> None:
+        # persona voice_ref 优先，fallback 到 profile config 的 voiceRef
+        effective_ref = voice_ref or self._default_voice_ref
         try:
-            pcm48k = self._infer(text, voice_ref)
+            pcm48k = self._infer(text, effective_ref)
         except Exception as e:
             await ctx.logger.aerror("voxcpm2 synth error", error=str(e))
             return
@@ -146,6 +149,18 @@ class VoxCpm2TtsBlock(Block):
 
     # ---- 重依赖 ----
 
+    @staticmethod
+    def _resolve_path(path_str: str | None, ctx: BlockContext) -> str | None:
+        """把相对路径解析为绝对路径（相对 workspace_root）。"""
+        if not path_str:
+            return None
+        from pathlib import Path
+
+        p = Path(path_str)
+        if not p.is_absolute():
+            p = Path(ctx.workspace_root) / p
+        return str(p) if p.exists() else None
+
     def _load_model(self, model_name: str, device: str) -> Any:
         from voxcpm import VoxCPM  # type: ignore
 
@@ -153,9 +168,12 @@ class VoxCpm2TtsBlock(Block):
 
     def _infer(self, text: str, voice_ref: str | None) -> bytes:
         """合成。voice_ref 是 ref.wav 路径。返回 48kHz float32 PCM。"""
+        # VoxCPM2 API: generate(text, prompt_wav_path=..., reference_wav_path=...)
         # 语速补偿通过 ffmpeg atempo（参考 VoxEMW tts_voxcpm.py）
-        # 真实实现：self._model.generate(text, prompt_audio=voice_ref, rate=self._rate)
-        return self._model.generate(text, prompt_audio=voice_ref, rate=self._rate)
+        kwargs: dict[str, Any] = {}
+        if voice_ref:
+            kwargs["prompt_wav_path"] = voice_ref
+        return self._model.generate(text, **kwargs)
 
 
 def _resample_48k_to_16k(raw: bytes) -> bytes:

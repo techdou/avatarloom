@@ -459,11 +459,16 @@ class Orchestrator:
         """
 
         async def handler(event: Event) -> None:
+            persona_ctx = self._persona_contexts.get(event.session_id, {})
             ctx = BlockContext(
                 session_id=event.session_id,
                 run_id=event.run_id,
                 workspace_root=".",
                 _emit_fn=self._on_event,
+                persona_id=persona_ctx.get("persona_id"),
+                persona_instructions=persona_ctx.get("instructions"),
+                persona_voice_ref=persona_ctx.get("voice_ref"),
+                persona_avatar_ref=persona_ctx.get("avatar_ref"),
             )
             try:
                 await block.process(ctx, event)

@@ -331,13 +331,20 @@ def main() -> None:
             daemon=True,
         )
         thread.start()
-        engine.warmup(on_frames)
+        # warmup 放后台线程——先 bind 端口让 block 能连上，
+        # torch.compile 首次预热（Blackwell 上可能 >180s）不再阻塞端口绑定
+        warmup_thread = threading.Thread(
+            target=engine.warmup,
+            args=(on_frames,),
+            daemon=True,
+        )
+        warmup_thread.start()
         async with websockets.serve(
             lambda ws: _serve(ws, engine, args.jpeg_quality),
             args.host,
             args.port,
         ):
-            logger.info("数字人服务就绪: ws://%s:%d", args.host, args.port)
+            logger.info("数字人服务就绪: ws://%s:%d (warmup 后台进行中)", args.host, args.port)
             await asyncio.Future()  # 永久运行
 
     asyncio.run(_main())
