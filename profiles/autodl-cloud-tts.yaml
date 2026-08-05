@@ -1,0 +1,48 @@
+apiVersion: avatarloom.io/v1alpha1
+kind: RuntimeProfile
+metadata:
+  id: autodl-cloud-tts
+  name: AutoDL Cloud TTS (DeepSeek + OpenAI TTS)
+  description: >
+    备选：LLM/STT/TTS 全云端或轻本地，只为验证 Avatar 效果。
+    STT 用 SenseVoice（本地 CPU），TTS 用 OpenAI 云端，Avatar 用 MuseTalk。
+    显存占用约 5-6GB / 24GB（只跑 MuseTalk）。
+blocks:
+  vad:
+    id: vad.silero
+    deployment: local
+    config: {device: cpu}
+  stt:
+    id: stt.sensevoice
+    deployment: local
+    config:
+      model: iic/SenseVoiceSmall
+      device: cpu
+      language: zh
+  llm:
+    id: llm.openai-compatible
+    deployment: remote
+    config:
+      baseUrl: ${LLM_BASE_URL}
+      apiKeyEnv: LLM_API_KEY
+      model: ${LLM_MODEL}
+      disableThinking: true
+  tts:
+    id: tts.openai-compatible
+    deployment: remote
+    config:
+      baseUrl: ${TTS_BASE_URL}
+      apiKeyEnv: TTS_API_KEY
+      model: tts-1
+      voice: alloy
+    fallback: tts.mock
+  avatar:
+    id: avatar.musetalk
+    deployment: local
+    config: {device: cuda}
+    fallback: avatar.static
+sync:
+  audio_delay_ms: 600
+  video_lag_frames: 0
+  max_video_behind_ms: 1000
+  drop_policy: drop_oldest_video

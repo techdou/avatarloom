@@ -1,0 +1,64 @@
+apiVersion: avatarloom.io/v1alpha1
+kind: RuntimeProfile
+metadata:
+  id: autodl-best
+  name: AutoDL Best (DeepSeek + VoxCPM2 + MuseTalk)
+  description: >
+    AutoDL 4090D 24GB 最佳效果配置。
+    DeepSeek 云端 LLM + 本地 VoxCPM2 流式克隆 TTS + MuseTalk 口型驱动 Avatar。
+    显存占用约 11-13GB / 24GB。
+blocks:
+  vad:
+    id: vad.silero
+    deployment: local
+    config:
+      device: cpu
+      threshold: 0.5
+      minSilenceMs: 500
+  stt:
+    id: stt.sensevoice
+    deployment: local
+    config:
+      model: iic/SenseVoiceSmall
+      device: cuda
+      language: zh
+  llm:
+    id: llm.openai-compatible
+    deployment: remote
+    config:
+      baseUrl: ${LLM_BASE_URL}
+      apiKeyEnv: LLM_API_KEY
+      model: ${LLM_MODEL}
+      maxTokens: 512
+      temperature: 0.7
+      # DeepSeek 关闭 thinking（如果有 reasoning 模式）
+      disableThinking: true
+  tts:
+    id: tts.voxcpm2
+    deployment: local
+    config:
+      device: cuda
+      rate: 0.886
+      streaming: true
+    fallback: tts.mock
+  avatar:
+    id: avatar.musetalk
+    deployment: local
+    config:
+      device: cuda
+      portrait: personas/demo-assistant/avatar/portrait.png
+      fps: 25
+    fallback: avatar.static
+  vision:
+    id: vision.openai-compatible
+    deployment: remote
+    optional: true
+sync:
+  audio_delay_ms: 800
+  video_lag_frames: 0
+  max_video_behind_ms: 1000
+  drop_policy: drop_oldest_video
+session:
+  mode: single
+  allowInterruption: true
+  event_log: true
