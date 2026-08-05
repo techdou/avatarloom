@@ -29,11 +29,15 @@ fi
 source /root/autodl-tmp/avatarloom-avatar-venv/bin/activate
 python -m pip install -U pip
 if ! python -c "import torch; assert torch.__version__.startswith('2.7')" > /dev/null 2>&1; then
-  pip install --no-cache-dir torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu128
+  pip install --no-cache-dir --retries 20 --timeout 120 --progress-bar off \
+    torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 \
+    --index-url https://download.pytorch.org/whl/cu128
 fi
 grep -vE '^(gradio|flask|nvidia-)' vendor/SoulX-FlashHead/requirements.txt > /tmp/fh-req.txt || true
-pip install --no-cache-dir -r /tmp/fh-req.txt || echo "WARN: fh requirements partial failure (continue)"
-pip install --no-cache-dir websockets pyyaml modelscope opencv-python-headless
+pip install --no-cache-dir --retries 20 --timeout 120 --progress-bar off \
+  -r /tmp/fh-req.txt || echo "WARN: fh requirements partial failure (continue)"
+pip install --no-cache-dir --retries 20 --timeout 120 --progress-bar off \
+  websockets pyyaml modelscope opencv-python-headless
 
 echo "==> [3/4] 权重下载（ModelScope 国内高速）"
 mkdir -p /root/autodl-tmp/models

@@ -78,6 +78,7 @@ BLOCK_REGISTRY: dict[str, str] = {
     "tts.voxcpm2": "blocks.tts.voxcpm2:VoxCpm2TtsBlock",
     "avatar.static": "blocks.avatar.static:StaticAvatarBlock",
     "avatar.musetalk": "blocks.avatar.musetalk:MuseTalkAvatarBlock",
+    "avatar.flashhead": "blocks.avatar.flashhead:FlashHeadAvatarBlock",
     "vision.openai-compatible": "blocks.vision.openai_compatible:OpenAIVisionBlock",
 }
 

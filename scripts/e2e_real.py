@@ -9,6 +9,7 @@ Env overrides for asset matrix testing:
   E2E_PORTRAIT   path to avatar portrait image
   E2E_VOICE_REF  path to assistant voice reference wav (VoxCPM2 cloning)
   E2E_TIMEOUT    pipeline timeout seconds (default 300)
+  E2E_PROFILE    profile yaml basename under profiles/ (default autodl-best)
 """
 from __future__ import annotations
 
@@ -110,7 +111,9 @@ async def main() -> int:
     print(f"[env] portrait={portrait}")
     print(f"[env] voice_ref={voice_ref}")
 
-    profile_path = PROJECT_ROOT / "profiles" / "autodl-best.yaml"
+    profile_name = os.environ.get("E2E_PROFILE", "autodl-best")
+    profile_path = PROJECT_ROOT / "profiles" / f"{profile_name}.yaml"
+    is_flashhead = "flashhead" in profile_name
     config = load_profile(profile_path)
     if "avatar" in config.blocks:
         config.blocks["avatar"].config["portrait"] = portrait
@@ -205,19 +208,24 @@ async def main() -> int:
 
     # 真口型视频是异步渲染的——给 avatar.video.ready 留出渲染时间
     if got["tts_done"] and not got["video"]:
-        video_deadline = time.perf_counter() + 720
-        print("[6.5] waiting for avatar video render ...")
-        while time.perf_counter() < video_deadline and not got["video"]:
-            await asyncio.sleep(0.2)
-            for dt, e in events:
-                if e.type == AVATAR_VIDEO_READY:
-                    got["video"] = True
-                    video_path = e.payload.get("video_path", "")
-                    print(
-                        f"    [event] avatar video ready @{dt:.2f}s "
-                        f"frames={e.payload.get('frames')} "
-                        f"infer_s={e.payload.get('infer_s')} mp4={video_path}"
-                    )
+        if is_flashhead:
+            # FlashHead 是流式帧驱动：帧即视频，无需 reply 级 mp4
+            print("[6.5] flashhead streaming: frames == video")
+            got["video"] = True
+        else:
+            video_deadline = time.perf_counter() + 720
+            print("[6.5] waiting for avatar video render ...")
+            while time.perf_counter() < video_deadline and not got["video"]:
+                await asyncio.sleep(0.2)
+                for dt, e in events:
+                    if e.type == AVATAR_VIDEO_READY:
+                        got["video"] = True
+                        video_path = e.payload.get("video_path", "")
+                        print(
+                            f"    [event] avatar video ready @{dt:.2f}s "
+                            f"frames={e.payload.get('frames')} "
+                            f"infer_s={e.payload.get('infer_s')} mp4={video_path}"
+                        )
 
     e2e = time.perf_counter() - t_start
     print("[7] collect outputs ...")
@@ -233,6 +241,7 @@ async def main() -> int:
             "user_wav": str(user_wav),
             "portrait": portrait,
             "voice_ref": voice_ref,
+            "profile": profile_name,
             "llm_model": os.environ.get("LLM_MODEL", ""),
             "llm_base_url": os.environ.get("LLM_BASE_URL", ""),
         },
