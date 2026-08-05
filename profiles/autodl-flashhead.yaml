@@ -1,0 +1,75 @@
+apiVersion: avatarloom.io/v1alpha1
+kind: RuntimeProfile
+metadata:
+  id: autodl-flashhead
+  name: AutoDL FlashHead (SoulX 流式说话头)
+  description: >
+    RTX 5090 高质量数字人：DeepSeek 云端 LLM + VoxCPM2 流式克隆 TTS +
+    SoulX-FlashHead 1.3B Lite 流式说话头（头部/眼睛自然运动，25fps）。
+blocks:
+  vad:
+    id: vad.silero
+    deployment: local
+    config:
+      device: cpu
+      threshold: 0.5
+      minSilenceMs: 500
+  stt:
+    id: stt.sensevoice
+    deployment: local
+    config:
+      model: iic/SenseVoiceSmall
+      device: cuda
+      language: zh
+  llm:
+    id: llm.openai-compatible
+    deployment: remote
+    config:
+      baseUrl: ${LLM_BASE_URL}
+      apiKeyEnv: LLM_API_KEY
+      model: ${LLM_MODEL}
+      maxTokens: 200
+      temperature: 0.6
+      disableThinking: true
+      systemPrompt: "你是小灵，一个温柔亲切的数字人语音助理。回答简短自然，最多2-3句话，不要使用Markdown符号或列表，适合语音合成朗读。"
+  tts:
+    id: tts.voxcpm2
+    deployment: local
+    config:
+      device: cuda
+      rate: 0.886
+      streaming: true
+      cfgValue: 2.0
+      inferenceTimesteps: 5
+      normalize: true
+      denoise: false
+      stylePrefix: "温柔女声，自然亲切"
+      voiceRef: personas/demo-assistant/voice/ref.wav
+    fallback: tts.mock
+  avatar:
+    id: avatar.flashhead
+    deployment: local
+    config:
+      device: cuda
+      portrait: personas/demo-assistant/avatar/portrait.jpg
+      fps: 25
+      servicePython: /root/autodl-tmp/avatarloom-avatar-venv/bin/python
+      serviceScript: scripts/flashhead_service.py
+      servicePort: 8767
+      modelDir: /root/autodl-tmp/models/SoulX-FlashHead-1_3B
+      wav2vecDir: /root/autodl-tmp/models/wav2vec2-base-960h
+      jpegQuality: 85
+    fallback: avatar.musetalk
+  vision:
+    id: vision.openai-compatible
+    deployment: remote
+    optional: true
+sync:
+  audio_delay_ms: 600
+  video_lag_frames: 0
+  max_video_behind_ms: 1000
+  drop_policy: drop_oldest_video
+session:
+  mode: single
+  allowInterruption: true
+  event_log: true

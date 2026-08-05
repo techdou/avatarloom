@@ -83,6 +83,7 @@ export function PlaygroundClient() {
 
     playerRef.current = new PcmPlayer({ sampleRate: 16000, audioDelayMs: 600 });
     avmuxRef.current = new AVMux({ audioDelayMs: 600 }, handleFrame);
+    void playerRef.current.resume();
 
     const wsUrl = `ws://${window.location.hostname}:8101/ws/realtime`;
     const ws = new WebSocket(wsUrl);
@@ -215,6 +216,7 @@ export function PlaygroundClient() {
         },
         onError: (e) => setError(`麦克风错误：${e.message}`),
       });
+      void playerRef.current?.resume();
       await recorderRef.current.start();
       setMicActive(true);
     }

@@ -38,6 +38,19 @@ export class PcmPlayer {
     return this.ctx;
   }
 
+  /** 在用户手势内调用，解锁被浏览器自动暂停的 AudioContext。 */
+  async resume() {
+    const ctx = this.ensureCtx();
+    if (ctx.state === "suspended") {
+      try {
+        await ctx.resume();
+      } catch {
+        /* 忽略——下次 enqueue 时再试 */
+      }
+    }
+    return ctx;
+  }
+
   /** 喂入一个 PCM16 chunk。立即调度播放。 */
   enqueue(pcm: Int16Array) {
     const ctx = this.ensureCtx();

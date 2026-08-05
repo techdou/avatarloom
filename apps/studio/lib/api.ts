@@ -1,9 +1,16 @@
 /** Control API 客户端。 */
 
+/** 浏览器走 Next rewrite（/api/control -> 8100/api）；SSR 直连 Control API 绝对地址。 */
 const API_BASE = "/api/control";
+const SERVER_API_BASE =
+  process.env.CONTROL_API_BASE ?? "http://127.0.0.1:8100/api";
+
+function fetchBase(): string {
+  return typeof window === "undefined" ? SERVER_API_BASE : API_BASE;
+}
 
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const r = await fetch(`${API_BASE}${path}`, {
+  const r = await fetch(`${fetchBase()}${path}`, {
     ...init,
     headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
   });
@@ -23,7 +30,7 @@ export async function apiUpload<T>(
   const form = new FormData();
   Object.entries(fields).forEach(([k, v]) => form.append(k, v));
   form.append("file", file);
-  const r = await fetch(`${API_BASE}${path}`, { method: "POST", body: form });
+  const r = await fetch(`${fetchBase()}${path}`, { method: "POST", body: form });
   if (!r.ok) {
     const detail = await r.text();
     throw new Error(`Upload ${r.status}: ${detail}`);
