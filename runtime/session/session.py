@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from avatarloom_protocol import (
+    RUN_STARTED,
     SESSION_CLOSED,
     SESSION_STARTED,
     Event,
@@ -173,8 +174,26 @@ class Session:
             return None
 
     async def start_new_run(self) -> str:
-        """开始新一轮对话。返回 run_id。"""
+        """开始新一轮对话。返回 run_id。
+
+        同时 emit run.started 事件，让 Recorder/Studio UI 在 LLM/TTS 事件
+        到达前就能感知到新 Run（避免 delta 事件先到、run 还未注册导致丢录）。
+        """
         self.current_run_id = _new_run_id()
+        event = make_event(
+            RUN_STARTED,
+            session_id=self.session_id,
+            source="session.manager",
+            run_id=self.current_run_id,
+            sequence=self.next_sequence(),
+            payload={
+                "run_id": self.current_run_id,
+                "session_id": self.session_id,
+                "profile_id": self.profile_id,
+                "persona_id": self.persona_id,
+            },
+        )
+        await self._emit_event(event)
         return self.current_run_id
 
     async def close(self, reason: str = "normal") -> None:

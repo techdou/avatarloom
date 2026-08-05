@@ -9,7 +9,7 @@ blocks:
     deployment: local
     config: {device: cpu}
   stt:
-    id: stt.sensevoice-onnx
+    id: stt.sensevoice
     deployment: local
     config: {device: cpu, quantization: int8, language: zh}
   llm:

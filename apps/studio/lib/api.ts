@@ -172,3 +172,32 @@ export interface Run {
   started_at: string;
   ended_at: string | null;
 }
+
+/** Run 的性能指标——和 runtime/recorder/metrics.py 对齐。 */
+export interface RunMetrics {
+  first_text_ms?: number | null;
+  first_audio_ms?: number | null;
+  first_frame_ms?: number | null;
+  total_duration_ms?: number | null;
+  interruptions?: number;
+  degradations?: number;
+  errors?: number;
+  cancelled?: boolean;
+  user_audio_samples?: number;
+  assistant_audio_samples?: number;
+  avatar_frames?: number;
+  block_versions?: Record<string, string>;
+  degraded_blocks?: Record<string, string>;
+  [key: string]: unknown;
+}
+
+export interface Artifact {
+  id: string;
+  run_id: string;
+  kind: string;
+  path: string;
+  mime_type: string | null;
+  size_bytes: number | null;
+  extra_metadata: Record<string, unknown> | null;
+  created_at: string;
+}

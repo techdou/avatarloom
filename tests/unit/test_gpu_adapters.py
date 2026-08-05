@@ -183,12 +183,12 @@ class TestResampling:
 
 class TestFlashHeadStub:
     async def test_setup_raises_clear_error(self) -> None:
-        """FlashHead 预留 Adapter 应明确告知未实装。"""
+        """FlashHead Adapter 在缺少 portrait 时应明确报错。"""
         from avatarloom_sdk import BlockSetupError
 
         block = FlashHeadAvatarBlock()
         ctx = BlockContext(session_id="s", run_id="r", workspace_root=".")
-        with pytest.raises(BlockSetupError, match=r"未实装|独立环境"):
+        with pytest.raises(BlockSetupError, match=r"portrait|未实装|独立环境"):
             await block.setup(ctx)
 
 

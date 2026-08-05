@@ -33,6 +33,18 @@ class Settings(BaseSettings):
     artifacts_root: str = "./data/artifacts"
     runs_root: str = "./data/runs"
 
+    # 鉴权：留空（默认）→ 鉴权关闭（开发模式）；填值 → 所有端点要求 Bearer token
+    api_token: str = Field(
+        default="",
+        description="Bearer token required by all endpoints when set; empty disables auth.",
+    )
+
+    # CORS 白名单（与 allow_credentials=True 配合使用，禁用通配符）
+    cors_origins: list[str] = Field(
+        default_factory=lambda: ["http://localhost:3000", "http://127.0.0.1:3000"],
+        description="Allowed CORS origins (Studio frontend defaults included).",
+    )
+
     # 日志
     log_level: str = "INFO"
 

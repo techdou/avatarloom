@@ -83,7 +83,7 @@ class AvatarEngine:
             self.pipeline,
             cond_image_path_or_dir=image_path,
             base_seed=seed,
-            use_face_crop=False,
+            use_face_crop=True,
         )
         self._new_audio_dq()
 
@@ -94,6 +94,7 @@ class AvatarEngine:
         self._closed = False
         self._reset_motion = False
         self._pending_image = None
+        self._inference_error: str | None = None
         self.on_frames = None  # 单客户端设计：ws 连接建立时接管帧流
 
     def _new_audio_dq(self):
@@ -134,56 +135,87 @@ class AvatarEngine:
 
     def run_inference_loop(self, on_frames) -> None:
         """阻塞循环：凑满一 chunk 真实音频才生成；0.5s 无新音频且缓冲有残留
-        → 零填充补全最后 chunk（句尾嘴型自然闭合）。"""
+        → 零填充补全最后 chunk（句尾嘴型自然闭合）。
+
+        任何异常都不得让本静默挂死：捕获后清空 _pending、记 _inference_error，
+        warmup 与 ws 收发循环据此把状态暴露给 orchestrator，而不是无限等待。
+        """
         import numpy as np
         from flash_head.inference import get_audio_embedding, run_pipeline
 
         while True:
-            with self._cond:
-                while not self._closed and len(self._pending) < CHUNK_SAMPLES:
-                    notified = self._cond.wait(timeout=0.5)
-                    if not notified and len(self._pending) > 0:
-                        break  # 静默超时：句尾尾牙零填充生成
-                if self._closed:
-                    return
-                chunk = self._pending[:CHUNK_SAMPLES]
-                self._pending = self._pending[CHUNK_SAMPLES:]
-                if len(chunk) < CHUNK_SAMPLES:
-                    chunk = np.pad(chunk, (0, CHUNK_SAMPLES - len(chunk)))
-                if self._reset_motion:
-                    self._new_audio_dq()
-                    self.pipeline.reset_person_name()
-                    self._reset_motion = False
-                if self._pending_image:
-                    from flash_head.inference import get_base_data
+            try:
+                with self._cond:
+                    while not self._closed and len(self._pending) < CHUNK_SAMPLES:
+                        notified = self._cond.wait(timeout=0.5)
+                        if not notified and len(self._pending) > 0:
+                            break  # 静默超时：句尾尾牙零填充生成
+                    if self._closed:
+                        return
+                    chunk = self._pending[:CHUNK_SAMPLES]
+                    self._pending = self._pending[CHUNK_SAMPLES:]
+                    if len(chunk) < CHUNK_SAMPLES:
+                        chunk = np.pad(chunk, (0, CHUNK_SAMPLES - len(chunk)))
+                    if self._reset_motion:
+                        self._new_audio_dq()
+                        self.pipeline.reset_person_name()
+                        self._reset_motion = False
+                    if self._pending_image:
+                        from flash_head.inference import get_base_data
 
-                    logger.info("切换数字人肖像: %s", self._pending_image)
-                    get_base_data(
-                        self.pipeline,
-                        cond_image_path_or_dir=self._pending_image,
-                        base_seed=self.seed,
-                        use_face_crop=False,
-                    )
-                    self._new_audio_dq()
-                    self._pending_image = None
-            self.audio_dq.extend(chunk.tolist())
-            emb = get_audio_embedding(
-                self.pipeline,
-                np.array(self.audio_dq),
-                AUDIO_START_IDX,
-                AUDIO_END_IDX,
-            )
-            video = run_pipeline(self.pipeline, emb)
-            frames = video[MOTION_FRAMES_NUM:].cpu().numpy().astype("uint8")
-            on_frames(frames)
+                        logger.info("切换数字人肖像: %s", self._pending_image)
+                        get_base_data(
+                            self.pipeline,
+                            cond_image_path_or_dir=self._pending_image,
+                            base_seed=self.seed,
+                            use_face_crop=True,
+                        )
+                        self._new_audio_dq()
+                        self._pending_image = None
+                self.audio_dq.extend(chunk.tolist())
+                emb = get_audio_embedding(
+                    self.pipeline,
+                    np.array(self.audio_dq),
+                    AUDIO_START_IDX,
+                    AUDIO_END_IDX,
+                )
+                video = run_pipeline(self.pipeline, emb)
+                frames = video[MOTION_FRAMES_NUM:].cpu().numpy().astype("uint8")
+                on_frames(frames)
+            except Exception as e:
+                logger.exception("flashhead inference loop crashed")
+                with self._cond:
+                    import numpy as _np
 
-    def warmup(self, on_frames) -> None:
+                    self._pending = _np.empty(0, dtype=_np.float32)
+                    self._inference_error = repr(e)
+                    self._cond.notify_all()
+                return
+
+    def warmup(self, on_frames, timeout: float = 300.0) -> None:
         import numpy as np
 
         logger.info("FlashHead 预热（torch.compile 首个 chunk 很慢）...")
         for _ in range(WARMUP_CHUNKS):
             self.feed_audio(np.zeros(CHUNK_SAMPLES, dtype=np.float32))
-        while len(self._pending) > 0:
+        import time
+
+        deadline_ts = time.monotonic() + timeout
+        while True:
+            with self._cond:
+                if self._inference_error is not None:
+                    raise RuntimeError(
+                        f"flashhead inference loop crashed during warmup: "
+                        f"{self._inference_error}"
+                    )
+                remaining = len(self._pending)
+            if remaining == 0:
+                break
+            if time.monotonic() >= deadline_ts:
+                raise TimeoutError(
+                    f"flashhead warmup did not drain within {timeout:.0f}s "
+                    f"({remaining} samples pending)"
+                )
             threading.Event().wait(0.1)
         logger.info("FlashHead 预热完成")
 

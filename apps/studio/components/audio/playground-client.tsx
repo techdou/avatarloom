@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { clsx } from "clsx";
+import { Mic, Square, Power, AlertCircle } from "lucide-react";
 import { MicrophoneRecorder } from "@/lib/audio/recorder";
 import { PcmPlayer } from "@/lib/audio/player";
 import { AVMux, type AvatarFrame } from "@/lib/audio/sync";
@@ -55,7 +56,11 @@ export function PlaygroundClient() {
   }, [llmDelta]);
 
   useEffect(() => {
-    chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight, behavior: "smooth" });
+    const el = chatRef.current;
+    // jsdom / 某些环境没有 scrollTo——guard 一下避免渲染期抛错
+    if (el && typeof el.scrollTo === "function") {
+      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    }
   }, [transcript, llmDelta]);
 
   useEffect(() => {
@@ -269,19 +274,16 @@ export function PlaygroundClient() {
       <div className="grid grid-cols-1 md:grid-cols-[minmax(280px,340px)_1fr] gap-4 flex-1 min-h-0">
         {/* Avatar 角色卡片 */}
         <div className="card flex flex-col overflow-hidden p-0">
-          <div className="relative flex-1 min-h-0 bg-bg-subtle flex items-center justify-center overflow-hidden">
+          <div className="relative flex-1 min-h-0 bg-bg-subtle flex items-center justify-center overflow-hidden dark:bg-[#131318]">
             {frameUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img src={frameUrl} alt="avatar" className="w-full h-full object-cover" />
+            ) : conn === "disconnected" || conn === "error" ? (
+              // 未连接：有质感的引导态（大尺寸立绘占位 + 醒目 CTA）
+              <WelcomePane conn={conn} error={error} onConnect={connect} />
             ) : (
-              <div className="text-center text-fg-subtle">
-                <div className="w-14 h-14 mx-auto rounded-full bg-border/60 flex items-center justify-center mb-2">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-7 h-7">
-                    <path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM5 21a7 7 0 0 1 14 0" strokeLinecap="round" />
-                  </svg>
-                </div>
-                <div className="text-xs">等待角色画面…</div>
-              </div>
+              // 已连接但还没收到帧：精致占位 + 待机文案
+              <PendingAvatar />
             )}
             {showDebug && (
               <div className="absolute top-2 left-2 text-[10px] font-mono bg-black/60 text-white px-2 py-1 rounded-md">
@@ -289,10 +291,10 @@ export function PlaygroundClient() {
               </div>
             )}
           </div>
-          <div className="px-4 py-3 border-t border-border flex items-center justify-between">
+          <div className="px-4 py-3 border-t border-border flex items-center justify-between dark:border-border">
             <div>
               <div className="text-sm font-medium">小灵 · Demo Assistant</div>
-              <div className="text-[11px] text-fg-muted mt-0.5">
+              <div className="text-[11px] text-fg-muted mt-0.5 dark:text-fg-muted">
                 {micActive ? "正在聆听…" : playing ? "正在回复…" : "待机"}
               </div>
             </div>
@@ -327,14 +329,22 @@ export function PlaygroundClient() {
               </div>
             )}
             {transcript.length === 0 && !llmDelta && (
-              <div className="h-full flex flex-col items-center justify-center text-fg-subtle text-sm">
-                <div className="w-12 h-12 rounded-full bg-accent-soft text-accent flex items-center justify-center mb-3">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="w-6 h-6">
-                    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3zM19 10v2a7 7 0 0 1-14 0v-2M12 19v4" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
+              <div className="h-full flex flex-col items-center justify-center text-center text-fg-subtle px-6">
+                <div className={clsx(
+                  "w-14 h-14 rounded-2xl flex items-center justify-center mb-3 transition-colors",
+                  conn === "connected"
+                    ? "bg-accent-soft text-accent dark:bg-accent/15"
+                    : "bg-border/40 text-fg-subtle"
+                )}>
+                  <Mic className="w-6 h-6" />
+                </div>
+                <div className="text-sm font-medium text-fg-muted dark:text-fg-muted mb-1">
+                  {conn === "connected" ? "准备就绪" : "等待连接"}
                 </div>
                 <div className="text-xs">
-                  {conn === "connected" ? "点击下方麦克风，开始语音对话" : "先连接 Gateway，再开启麦克风"}
+                  {conn === "connected"
+                    ? "点击下方麦克风按钮，开始语音对话。讲话时数字人会实时听写并回复。"
+                    : "先连接 Runtime Gateway，再开启麦克风。"}
                 </div>
               </div>
             )}
@@ -369,7 +379,7 @@ export function PlaygroundClient() {
           </div>
 
           {/* 底部控制条 */}
-          <div className="px-4 py-3 border-t border-border flex items-center gap-2">
+          <div className="px-4 py-3 border-t border-border flex items-center gap-2 dark:border-border">
             <button
               onClick={toggleMic}
               disabled={conn !== "connected"}
@@ -380,9 +390,7 @@ export function PlaygroundClient() {
                   : "bg-accent text-white border border-accent shadow-accent disabled:opacity-40"
               )}
             >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="w-4 h-4">
-                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3zM19 10v2a7 7 0 0 1-14 0v-2M12 19v4" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
+              {micActive ? <Square className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
               {micActive ? "停止麦克风" : "开始说话"}
             </button>
             {playing && (
@@ -409,6 +417,132 @@ export function PlaygroundClient() {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 视觉占位子组件（纯展示，不参与数据流）
+// ---------------------------------------------------------------------------
+
+/** 未连接引导态：精致立绘占位 + 连接 CTA。 */
+function WelcomePane({
+  conn,
+  error,
+  onConnect,
+}: {
+  conn: ConnState;
+  error: string | null;
+  onConnect: () => void;
+}) {
+  const connecting = conn === "connecting";
+  return (
+    <div className="relative w-full h-full flex flex-col items-center justify-center px-6 py-8 text-center">
+      {/* 背景：靛蓝径向光晕（克制，单一主色） */}
+      <div
+        aria-hidden
+        className="absolute inset-0 opacity-[0.55] dark:opacity-40"
+        style={{
+          background:
+            "radial-gradient(120% 90% at 50% 18%, rgba(79,70,229,0.14), rgba(79,70,229,0) 60%)",
+        }}
+      />
+      {/* 大尺寸立绘占位 SVG */}
+      <div className="relative mb-5">
+        <div className="absolute -inset-6 rounded-full bg-accent/10 blur-2xl" aria-hidden />
+        <AvatarPortrait />
+      </div>
+
+      <div className="relative max-w-xs">
+        <div className="text-base font-semibold tracking-tight text-fg dark:text-[#ededf2]">
+          实时数字人 · 小灵
+        </div>
+        <p className="text-xs text-fg-muted mt-1.5 leading-relaxed dark:text-fg-muted">
+          连接 Runtime Gateway 即可开启低延迟语音对话。
+          音频为主时钟，口型与表情自动同步。
+        </p>
+
+        {/* 能力 chips */}
+        <div className="flex flex-wrap items-center justify-center gap-1.5 mt-3">
+          <span className="badge badge-accent text-[10px]">DeepSeek LLM</span>
+          <span className="badge text-[10px]">VoxCPM2 TTS</span>
+          <span className="badge text-[10px]">MuseTalk</span>
+        </div>
+
+        <button
+          type="button"
+          onClick={onConnect}
+          disabled={connecting}
+          className="btn btn-primary w-full mt-4"
+        >
+          <Power className="w-4 h-4" />
+          {connecting ? "连接中…" : "连接并开始"}
+        </button>
+
+        {error ? (
+          <div className="mt-2.5 flex items-start gap-1.5 text-[11px] text-err text-left">
+            <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+            <span className="leading-snug">{error}</span>
+          </div>
+        ) : (
+          <div className="mt-2.5 text-[11px] text-fg-subtle">
+            需要本地 Runtime Gateway 监听 <code className="font-mono">:8101</code>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** 已连接、等待第一帧的精致占位。 */
+function PendingAvatar() {
+  return (
+    <div className="relative w-full h-full flex flex-col items-center justify-center">
+      <div className="relative">
+        <div className="absolute -inset-3 rounded-full bg-accent/10 blur-xl animate-pulse" aria-hidden />
+        <AvatarPortrait dimmed />
+      </div>
+      <div className="mt-4 text-xs text-fg-muted dark:text-fg-muted flex items-center gap-1.5">
+        <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
+        等待角色画面…
+      </div>
+    </div>
+  );
+}
+
+/** 复用的精致立绘 SVG——靛蓝单色调，无依赖外部资源。 */
+function AvatarPortrait({ dimmed = false }: { dimmed?: boolean }) {
+  return (
+    <div
+      className={clsx(
+        "relative w-24 h-24 rounded-full overflow-hidden ring-1 ring-border shadow-card",
+        dimmed && "opacity-70"
+      )}
+    >
+      <svg viewBox="0 0 96 96" className="w-full h-full" aria-hidden>
+        <defs>
+          <linearGradient id="al-bg" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#eef2ff" />
+            <stop offset="100%" stopColor="#e0e7ff" />
+          </linearGradient>
+          <linearGradient id="al-fg" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#4f46e5" />
+            <stop offset="100%" stopColor="#4338ca" />
+          </linearGradient>
+        </defs>
+        {/* 背景圆 */}
+        <rect width="96" height="96" fill="url(#al-bg)" />
+        {/* 头 */}
+        <circle cx="48" cy="38" r="14" fill="url(#al-fg)" />
+        {/* 肩 */}
+        <path
+          d="M20 84c0-13.255 12.536-24 28-24s28 10.745 28 24v12H20V84z"
+          fill="url(#al-fg)"
+        />
+        {/* 高光眼/嘴占位（极淡） */}
+        <circle cx="43" cy="37" r="1.6" fill="#ffffff" opacity="0.85" />
+        <circle cx="53" cy="37" r="1.6" fill="#ffffff" opacity="0.85" />
+      </svg>
     </div>
   );
 }

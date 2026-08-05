@@ -136,6 +136,13 @@ class RunRecorder:
             # 更新指标
             self._update_metrics(state, event)
 
+    def is_active(self, run_id: str) -> bool:
+        """指定 Run 是否正在被记录（已 start_run，尚未 finalize）。
+
+        替代直接读取 ``_active`` 私有属性。
+        """
+        return run_id in self._active
+
     async def finalize_run(
         self,
         run_id: str,
@@ -186,6 +193,20 @@ class RunRecorder:
                 state.metrics.total_duration_ms,
             )
             return state.run_dir
+
+    async def shutdown(self) -> None:
+        """收尾所有未 finalize 的 Run。
+
+        会话异常断开 / 进程退出时调用，避免 events.jsonl 文件句柄泄漏、
+        以及 metrics.json/transcript.json 缺失。状态标记为 interrupted。
+        """
+        # 拷贝 key 避免 dict 在迭代中被 finalize_run 改动
+        orphaned = list(self._active.keys())
+        for run_id in orphaned:
+            try:
+                await self.finalize_run(run_id, status="interrupted")
+            except Exception:
+                logger.exception("shutdown: finalize orphan run failed: %s", run_id)
 
     # ------------------------------------------------------------------
     # 内部：指标更新

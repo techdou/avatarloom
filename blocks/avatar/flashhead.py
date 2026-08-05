@@ -14,8 +14,11 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger("avatar.flashhead")
 
 from avatarloom_protocol import (
     AVATAR_IDLE_FRAME,
@@ -79,7 +82,12 @@ class FlashHeadAvatarBlock(Block):
         workspace = Path(ctx.workspace_root).resolve()
         self._fps = int(cfg.get("fps", 25))
 
-        portrait_cfg = str(cfg.get("portrait", ""))
+        portrait_cfg = str(cfg.get("portrait", "")).strip()
+        if not portrait_cfg:
+            raise BlockSetupError(
+                "avatar.flashhead",
+                "portrait 配置缺失（FlashHead 需要一张正脸参考图）",
+            )
         p = Path(portrait_cfg)
         if not p.is_absolute():
             p = workspace / p
@@ -153,9 +161,11 @@ class FlashHeadAvatarBlock(Block):
             try:
                 ws = await websockets.connect(ws_url, open_timeout=10)
                 break
-            except Exception:
+            except Exception as e:
+                logger.warning("flashhead ws connect failed, retrying: %s", e)
                 await asyncio.sleep(2)
         if ws is None:
+            await self._stop()
             log_file.close()
             raise BlockSetupError(
                 "avatar.flashhead", f"cannot connect {ws_url}（见 {log_path}）"
@@ -239,6 +249,16 @@ class FlashHeadAvatarBlock(Block):
                         pass
         except Exception as e:
             await ctx.logger.aerror("flashhead frame reader ended", error=str(e))
+        finally:
+            # reader 退出后置 ws 为 None：process() 的 None 守卫会拦截后续 send，
+            # 避免对已死 ws 反复报错刷屏。emit 一帧 idle 做兜底，下游不至于画面卡死。
+            self._ws = None
+            try:
+                await self._emit_idle(ctx)
+            except Exception as e:
+                await ctx.logger.aerror(
+                    "flashhead idle fallback emit failed", error=str(e)
+                )
 
     async def _emit_idle(self, ctx: BlockContext) -> None:
         await ctx.emit(

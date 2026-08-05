@@ -23,6 +23,7 @@ from avatarloom_protocol import (
     AVATAR_SPEECH_FRAME,
     AVATAR_VIDEO_READY,
     RESPONSE_DONE,
+    RUN_STARTED,
     SESSION_STATE_CHANGED,
     TRANSCRIPT_COMPLETED,
     TTS_AUDIO_COMPLETED,
@@ -236,6 +237,20 @@ class WebSocketSession:
         - tts.audio.delta → 二进制 PCM 下行（tag + PCM）+ JSON 元数据
         - avatar.*_frame → 二进制 JPEG 下行（tag + JPEG）+ JSON 元数据
         """
+        # 新一轮 Run：在 record() 之前 start_run，保证后续（含本事件）都被记录
+        if (
+            event.type == RUN_STARTED
+            and self.recorder
+            and event.run_id
+            and not self.recorder.is_active(event.run_id)
+        ):
+            await self.recorder.start_run(
+                event.run_id,
+                event.session_id,
+                self.session.profile_id if self.session else "mock",
+                persona_id=self.session.persona_id if self.session else None,
+            )
+
         # Recorder 记录
         if self.recorder and event.run_id:
             await self.recorder.record(event)
@@ -257,21 +272,17 @@ class WebSocketSession:
                     "payload": event.payload,
                 }
             )
+        elif event.type == RUN_STARTED:
+            # 通知前端新 Run 开始（Recorder 已在上方的 start_run 早启动逻辑里就绪）
+            await self._enqueue_json({"type": "run.started", "payload": event.payload})
         elif event.type == "llm.text.delta":
             await self._enqueue_json({"type": "llm.text.delta", "payload": event.payload})
         elif event.type == "llm.text.done":
             await self._enqueue_json({"type": "llm.text.done", "payload": event.payload})
-            # 启动新一轮 Run 记录
-            if self.recorder and event.run_id and event.run_id not in self.recorder._active:
-                await self.recorder.start_run(
-                    event.run_id,
-                    event.session_id,
-                    self.session.profile_id if self.session else "mock",
-                )
         elif event.type == RESPONSE_DONE:
             await self._enqueue_json({"type": "response.done", "payload": event.payload})
             # 结束 Run 记录
-            if self.recorder and event.run_id and event.run_id in self.recorder._active:
+            if self.recorder and event.run_id and self.recorder.is_active(event.run_id):
                 await self.recorder.finalize_run(event.run_id)
 
         # TTS 音频：二进制下行 + JSON 元数据
@@ -364,6 +375,14 @@ class WebSocketSession:
                 await self.orchestrator.shutdown()
             except Exception:
                 logger.exception("orchestrator shutdown error")
+
+        # 收尾 Recorder：flush 所有未 finalize 的 Run（events.jsonl 文件句柄、
+        # metrics/transcript 落盘），避免客户端断开时资源泄漏。
+        if self.recorder:
+            try:
+                await self.recorder.shutdown()
+            except Exception:
+                logger.exception("recorder shutdown error")
 
         if self._downlink_task:
             self._downlink_task.cancel()

@@ -1,6 +1,7 @@
 import type { Config } from "tailwindcss";
 
 const config: Config = {
+  darkMode: "class",
   content: [
     "./app/**/*.{ts,tsx}",
     "./components/**/*.{ts,tsx}",
@@ -8,7 +9,7 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        // 克制专业：白底黑字 + 中性灰
+        // 克制专业：白底黑字 + 中性灰（亮色令牌；暗色在 globals.css 里覆盖）
         bg: { DEFAULT: "#ffffff", subtle: "#fafafa" },
         fg: { DEFAULT: "#0a0a0a", muted: "#666666", subtle: "#999999" },
         border: "#e5e5e5",
@@ -18,7 +19,7 @@ const config: Config = {
           soft: "#eef2ff",
           ring: "rgba(79, 70, 229, 0.35)",
         },
-        // 状态色（克制）
+        // 状态色（克制）——亮暗共用，靠 alpha 叠在底色上自适应
         ok: "#16a34a",
         warn: "#d97706",
         err: "#dc2626",

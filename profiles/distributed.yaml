@@ -7,11 +7,13 @@ blocks:
   vad: {id: vad.silero, deployment: cpu-local}
   stt:
     id: stt.sensevoice-onnx
+    fallback: stt.sensevoice
     deployment: cpu-local
     config: {quantization: int8}
   llm: {id: llm.openai-compatible, deployment: remote-api}
   tts:
     id: tts.mlx-remote
+    fallback: tts.qwen3
     deployment: mac-mlx
     config:
       endpoint: ${MLX_TTS_ENDPOINT}

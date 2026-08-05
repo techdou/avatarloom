@@ -2,9 +2,22 @@
 @tailwind components;
 @tailwind utilities;
 
+/* 局部微动画——drawer 滑入 / toast 弹入。Tailwind 配色与 token 无关。 */
+@keyframes slideIn {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(0); }
+}
+@keyframes toastIn {
+  from { opacity: 0; transform: translateY(-6px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* 暗色模式令牌：深灰黑底 + 保留靛蓝点缀（不引入新主色）。
+   用 CSS 变量在 base 层重定义 Tailwind 生成的 bg/fg/border 颜色工具类，
+   这样组件类只需声明 dark 变体即可整体切换，不必逐页重写。 */
 @layer base {
   html {
-    @apply bg-bg text-fg antialiased;
+    @apply bg-bg text-fg antialiased dark:bg-[#0a0a0c] dark:text-[#ededf2];
   }
   body {
     @apply min-h-screen;
@@ -19,13 +32,16 @@
   .btn {
     @apply inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium
            border border-border bg-white text-fg shadow-card hover:bg-bg-subtle hover:border-fg/20
-           transition-all active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none;
+           transition-all active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none
+           dark:bg-bg-subtle dark:border-border dark:hover:bg-border/40;
   }
   .btn-primary {
-    @apply bg-accent text-white border-accent shadow-accent hover:bg-accent-hover;
+    @apply bg-accent text-white border-accent shadow-accent hover:bg-accent-hover
+           dark:border-accent dark:hover:bg-accent-hover;
   }
   .btn-ghost {
-    @apply border-transparent bg-transparent shadow-none hover:bg-border/40;
+    @apply border-transparent bg-transparent shadow-none hover:bg-border/40
+           dark:hover:bg-border/40;
   }
   .btn-danger {
     @apply text-err border-err/30 hover:bg-err/5;
@@ -34,18 +50,22 @@
     @apply px-2.5 py-1.5 text-xs rounded-md;
   }
   .card {
-    @apply bg-white border border-border rounded-xl p-4 shadow-card;
+    @apply bg-white border border-border rounded-xl p-4 shadow-card
+           dark:bg-bg-subtle dark:border-border dark:shadow-none;
   }
   .card-hover {
-    @apply transition-all hover:border-accent/40 hover:shadow-pop;
+    @apply transition-all hover:border-accent/40 hover:shadow-pop
+           dark:hover:border-accent/40;
   }
   .input {
     @apply w-full px-3 py-2 border border-border rounded-lg text-sm bg-white shadow-card
            focus:outline-none focus:ring-2 focus:ring-accent-ring focus:border-accent
-           placeholder:text-fg-subtle;
+           placeholder:text-fg-subtle
+           dark:bg-bg-subtle dark:border-border dark:shadow-none;
   }
   .badge {
-    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium border border-border bg-bg-subtle;
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium border border-border bg-bg-subtle
+           dark:border-border dark:bg-border/30;
   }
   .badge-ok { @apply text-ok border-ok/30 bg-ok/5; }
   .badge-warn { @apply text-warn border-warn/30 bg-warn/5; }

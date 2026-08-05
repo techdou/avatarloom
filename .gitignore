@@ -39,9 +39,11 @@ coverage/
 Thumbs.db
 
 # ---- AvatarLoom runtime data ----
+# 注意：runs/ 与 artifacts/ 必须锚定到 data/ 下，否则会误伤
+# apps/studio/app/runs/ 和未来的 app/artifacts/ 路由目录。
 data/
-runs/
-artifacts/
+data/runs/
+data/artifacts/
 *.db
 *.db-journal
 *.sqlite

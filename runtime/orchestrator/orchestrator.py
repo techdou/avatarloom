@@ -322,8 +322,26 @@ class Orchestrator:
         """装配单个 Block。失败时按 fallback 降级或 optional 跳过。"""
         entrypoint = BLOCK_REGISTRY.get(block_id)
         if entrypoint is None:
-            logger.warning("block %s not in registry, skipping", block_id)
-            return
+            # 与下方 setup 失败处理保持一致：fallback 降级 / optional 跳过 / 否则报错
+            if block_ref.fallback:
+                logger.warning(
+                    "block %s not in registry, degrading -> %s",
+                    block_id,
+                    block_ref.fallback,
+                )
+                await self._setup_block(category, block_ref.fallback, config, block_ref)
+                self.degraded_blocks[category] = block_ref.fallback
+                return
+            if block_ref.optional:
+                logger.info("optional block %s not in registry, continuing", block_id)
+                return
+            raise BlockSetupError(
+                block_id=block_id,
+                message=(
+                    f"block {block_id!r} not in BLOCK_REGISTRY. "
+                    "检查 profile 中是否写错了 id，或通过 register_block() 注册自定义 Block。"
+                ),
+            )
 
         try:
             from avatarloom_sdk import create_block

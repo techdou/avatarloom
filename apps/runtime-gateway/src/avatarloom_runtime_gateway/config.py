@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -21,6 +22,19 @@ class Settings(BaseSettings):
     # Control API 地址（用于查询 profile/persona）
     control_api_url: str = "http://127.0.0.1:8100"
 
+    # Control API 鉴权：与 control-api 的 AVATARLOOM_API_TOKEN 一致。
+    # control-api 关闭鉴权时留空即可（不会发送 Authorization header）。
+    control_api_token: str = Field(
+        default="",
+        description="Bearer token for Control API; empty sends no Authorization header.",
+    )
+
+    # CORS 白名单（allow_credentials=True 时不能用通配符）
+    cors_origins: list[str] = Field(
+        default_factory=lambda: ["http://localhost:3000", "http://127.0.0.1:3000"],
+        description="Allowed CORS origins (Studio frontend defaults included).",
+    )
+
     # 存储
     workspace_root: str = "."
     artifacts_root: str = "./data/artifacts"
@@ -35,3 +49,16 @@ class Settings(BaseSettings):
 
 def load_settings() -> Settings:
     return Settings()
+
+
+def control_api_auth_headers(settings: Settings) -> dict[str, str]:
+    """构造调 control-api 时的 Authorization header。
+
+    - control_api_token 为空 → 返回空 dict（不发送 header，对应开发模式）。
+    - 非空 → 返回 ``{"Authorization": "Bearer <token>"}``。
+    """
+    token = settings.control_api_token.strip()
+    if token:
+        return {"Authorization": f"Bearer {token}"}
+    return {}
+

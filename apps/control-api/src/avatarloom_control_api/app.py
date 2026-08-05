@@ -6,9 +6,10 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from avatarloom_control_api.auth import verify_token
 from avatarloom_control_api.config import Settings, ensure_dirs, load_settings
 from avatarloom_control_api.db import create_engine, create_session_factory, init_db
 from avatarloom_control_api.routers import (
@@ -57,12 +58,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         description="Composable Digital Human Runtime — Control Plane",
         version="0.1.0",
         lifespan=lifespan,
+        # 全局鉴权：env 未设 token 时 verify_token 直接放行（开发模式）；
+        # 设了 token 后所有 router 自动受保护。
+        dependencies=[Depends(verify_token)],
     )
 
-    # CORS——开发允许前端直连
+    # CORS——白名单（allow_credentials=True 时不能用通配符）
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],  # 生产收紧
+        allow_origins=settings.cors_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

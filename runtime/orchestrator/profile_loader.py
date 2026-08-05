@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import difflib
 import os
 import re
 from pathlib import Path
@@ -18,6 +19,7 @@ from typing import Any
 import yaml
 
 from runtime.orchestrator.config import BlockRef, OrchestratorConfig, SyncConfig
+from runtime.orchestrator.orchestrator import BLOCK_REGISTRY
 
 _ENV_PATTERN = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}")
 
@@ -88,6 +90,10 @@ def load_profile(profile_path: str | Path) -> OrchestratorConfig:
     )
 
     session_raw = data.get("session") or {}
+
+    # 校验：所有非 optional、无 fallback 的 block id 必须在 BLOCK_REGISTRY 中
+    _validate_block_ids(blocks, profile_id=profile_id)
+
     return OrchestratorConfig(
         profile_id=profile_id,
         blocks=blocks,
@@ -95,6 +101,48 @@ def load_profile(profile_path: str | Path) -> OrchestratorConfig:
         allow_interruption=bool(session_raw.get("allowInterruption", True)),
         event_log=bool(session_raw.get("eventLog", True)),
         session_mode=session_raw.get("mode", "single"),
+    )
+
+
+def _validate_block_ids(
+    blocks: dict[str, BlockRef],
+    *,
+    profile_id: str,
+) -> None:
+    """校验所有 block id 是否在 BLOCK_REGISTRY 中。
+
+    策略与 orchestrator._setup_block 保持一致：
+    - 在 registry 中 → 通过
+    - 不在 registry 但声明了 fallback → 通过（运行时走降级）
+    - 不在 registry 但 optional → 通过（运行时跳过）
+    - 否则 raise ProfileError，并给出 fuzzy 匹配建议
+    """
+    unknown: list[tuple[str, str]] = []  # (category, block_id)
+    for category, ref in blocks.items():
+        if ref.id in BLOCK_REGISTRY:
+            continue
+        if ref.fallback:
+            continue
+        if ref.optional:
+            continue
+        unknown.append((category, ref.id))
+
+    if not unknown:
+        return
+
+    known_ids = list(BLOCK_REGISTRY.keys())
+    details: list[str] = []
+    for category, block_id in unknown:
+        suggestions = difflib.get_close_matches(block_id, known_ids, n=3, cutoff=0.5)
+        hint = (
+            f"（你是不是想用：{', '.join(suggestions)}？）" if suggestions else ""
+        )
+        details.append(f"  - blocks.{category}.id={block_id!r}{hint}")
+
+    raise ProfileError(
+        f"profile {profile_id!r} 引用了未注册的 block id：\n"
+        + "\n".join(details)
+        + "\n请检查 id 拼写，或通过 register_block() 注册自定义 Block。"
     )
 
 
