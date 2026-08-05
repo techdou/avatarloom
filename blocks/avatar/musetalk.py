@@ -155,6 +155,9 @@ class MuseTalkAvatarBlock(Block):
             self._tasks.append(reader)
             await asyncio.wait_for(self._wait_line(30.0), timeout=35.0)
             await self._call_worker({"cmd": "ping"}, timeout=30.0)
+            # 后台预热：会话建立即加载 MuseTalk 模型，首次渲染免去模型加载等待
+            warm = asyncio.create_task(self._warm_worker(ctx))
+            self._tasks.append(warm)
         except Exception as e:
             leftover = " | ".join(list(self._worker_lines)[-10:])
             await self._stop_worker()
@@ -170,6 +173,18 @@ class MuseTalkAvatarBlock(Block):
             portrait=self._portrait_path,
             version=version,
         )
+
+    async def _warm_worker(self, ctx: BlockContext) -> None:
+        try:
+            async with self._worker_lock:
+                resp = await self._call_worker({"cmd": "warm"}, timeout=300)
+            await ctx.logger.ainfo(
+                "avatar.musetalk warm",
+                load_s=resp.get("load_s"),
+                warm_s=resp.get("warm_s"),
+            )
+        except Exception as e:
+            await ctx.logger.awarning("avatar.musetalk warm failed", error=str(e))
 
     async def process(self, ctx: BlockContext, event: Event) -> None:
         sid = ctx.session_id
@@ -315,6 +330,7 @@ class MuseTalkAvatarBlock(Block):
                 "crf": int(cfg.get("crf", 18)),
                 "extra_margin": int(cfg.get("extraMargin", 0)),
                 "max_side": int(cfg.get("maxSide", 1280)),
+                "parsing_mode": str(cfg.get("parsingMode", "auto")),
                 "keep_frames": True,
             }
             async with self._worker_lock:

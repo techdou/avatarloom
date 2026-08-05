@@ -212,6 +212,7 @@ class MuseEngine:
         crf: int = 18,
         extra_margin: int = 0,
         max_side: int = 1280,
+        parsing_mode: str = "auto",
         keep_frames: bool = True,
     ) -> dict:
         self._ensure_loaded()
@@ -240,7 +241,9 @@ class MuseEngine:
         )
 
         timesteps = torch.tensor([0], device=device)
-        mode = "jaw" if self.version == "v15" else "raw"
+        mode = parsing_mode if parsing_mode != "auto" else (
+            "jaw" if self.version == "v15" else "raw"
+        )
         # 静态肖像：融合蒙版只计算一次，每帧只做廉价粘贴
         mask_array, crop_box = get_image_prepare_material(
             frames[0], [x1, y1, x2, y2], fp=fp, mode=mode
@@ -341,6 +344,17 @@ def main() -> int:
         try:
             if cmd == "ping":
                 _reply({"ok": True, "cmd": "ping", "version": args.version})
+            elif cmd == "warm":
+                t0 = time.perf_counter()
+                engine._ensure_loaded()
+                _reply(
+                    {
+                        "ok": True,
+                        "cmd": "warm",
+                        "load_s": engine._models["load_s"],
+                        "warm_s": round(time.perf_counter() - t0, 2),
+                    }
+                )
             elif cmd == "render":
                 t0 = time.perf_counter()
                 meta = engine.render(
@@ -352,6 +366,7 @@ def main() -> int:
                     crf=int(req.get("crf", 18)),
                     extra_margin=int(req.get("extra_margin", 0)),
                     max_side=int(req.get("max_side", 1280)),
+                    parsing_mode=str(req.get("parsing_mode", "auto")),
                     keep_frames=bool(req.get("keep_frames", True)),
                 )
                 meta.update(
