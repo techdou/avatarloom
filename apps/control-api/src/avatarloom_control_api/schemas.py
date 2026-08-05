@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -55,6 +55,8 @@ class AvatarCreate(BaseModel):
     name: str = Field(min_length=1, max_length=256)
     persona_id: str | None = None
     profile_id: str | None = None
+    avatar_block: str | None = None
+    description: str | None = None
 
 
 class AvatarUpdate(BaseModel):
@@ -62,6 +64,8 @@ class AvatarUpdate(BaseModel):
     persona_id: str | None = None
     profile_id: str | None = None
     status: str | None = None
+    avatar_block: str | None = None
+    description: str | None = None
 
 
 class AvatarOut(ORMBase):
@@ -71,8 +75,34 @@ class AvatarOut(ORMBase):
     persona_id: str | None
     profile_id: str | None
     status: str
+    portrait_path: str | None
+    idle_video_path: str | None
+    voice_ref_path: str | None
+    voice_ref_text: str | None
+    avatar_block: str | None
+    description: str | None
+    extra_assets: dict[str, Any] | None
     created_at: datetime
     updated_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# Asset（Avatar 资产）
+# ---------------------------------------------------------------------------
+
+AssetKind = Literal["portrait", "idle_video", "voice_ref", "image", "video", "audio", "other"]
+
+
+class AssetOut(ORMBase):
+    id: str
+    kind: str
+    name: str
+    path: str
+    mime_type: str | None
+    size_bytes: int | None
+    avatar_id: str | None
+    extra_metadata: dict[str, Any] | None
+    created_at: datetime
 
 
 # ---------------------------------------------------------------------------
@@ -88,6 +118,7 @@ class PersonaCreate(BaseModel):
     package_path: str | None = None
     voice_ref: dict[str, Any] | None = None
     avatar_ref: dict[str, Any] | None = None
+    avatar_id: str | None = None
     behavior: dict[str, Any] | None = None
 
 
@@ -97,6 +128,7 @@ class PersonaUpdate(BaseModel):
     prompt: str | None = None
     voice_ref: dict[str, Any] | None = None
     avatar_ref: dict[str, Any] | None = None
+    avatar_id: str | None = None
     behavior: dict[str, Any] | None = None
 
 
@@ -109,6 +141,7 @@ class PersonaOut(ORMBase):
     package_path: str | None
     voice_ref: dict[str, Any] | None
     avatar_ref: dict[str, Any] | None
+    avatar_id: str | None
     behavior: dict[str, Any] | None
     created_at: datetime
     updated_at: datetime

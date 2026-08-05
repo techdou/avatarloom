@@ -13,6 +13,7 @@ from avatarloom_control_api.config import Settings, ensure_dirs, load_settings
 from avatarloom_control_api.db import create_engine, create_session_factory, init_db
 from avatarloom_control_api.routers import (
     artifacts,
+    assets,
     avatars,
     blocks,
     health,
@@ -78,5 +79,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(sessions.router, prefix="/api/sessions", tags=["sessions"])
     app.include_router(runs.router, prefix="/api/runs", tags=["runs"])
     app.include_router(artifacts.router, prefix="/api/artifacts", tags=["artifacts"])
+    app.include_router(assets.router, prefix="/api/assets", tags=["assets"])
 
     return app

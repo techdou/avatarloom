@@ -36,13 +36,15 @@ class MyVadBlock(Block):
         if event.type != AUDIO_APPENDED:
             return
         # 处理音频...
-        await ctx.emit(Event(
-            type=SPEECH_DETECTED,
-            session_id=ctx.session_id,
-            source="vad.myimpl",
-            run_id=ctx.run_id,
-            payload={"confidence": 0.9},
-        ))
+        await ctx.emit(
+            Event(
+                type=SPEECH_DETECTED,
+                session_id=ctx.session_id,
+                source="vad.myimpl",
+                run_id=ctx.run_id,
+                payload={"confidence": 0.9},
+            )
+        )
 
     async def reset(self, session_id: str) -> None:
         """用户打断时清状态。"""
@@ -60,6 +62,7 @@ BLOCK_REGISTRY["vad.myimpl"] = "blocks.vad.myimpl:MyVadBlock"
 
 ```python
 from runtime.orchestrator.orchestrator import register_block
+
 register_block("vad.myimpl", "blocks.vad.myimpl:MyVadBlock")
 ```
 
@@ -135,13 +138,15 @@ Orchestrator 会捕获 BlockSetupError 并降级到 fallback 或跳过 optional 
 ```python
 from avatarloom_protocol import Event, LLM_TEXT_DELTA
 
-await ctx.emit(Event(
-    type=LLM_TEXT_DELTA,
-    session_id=ctx.session_id,
-    source="llm.myblock",
-    run_id=ctx.run_id,
-    payload={"text": "你好"},
-))
+await ctx.emit(
+    Event(
+        type=LLM_TEXT_DELTA,
+        session_id=ctx.session_id,
+        source="llm.myblock",
+        run_id=ctx.run_id,
+        payload={"text": "你好"},
+    )
+)
 ```
 
 自定义事件类型用字符串——Block 的 manifest.inputs/outputs 声明订阅/产出的事件类型。

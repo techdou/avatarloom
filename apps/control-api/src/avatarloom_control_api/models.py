@@ -37,7 +37,11 @@ class Project(Base):
 
 
 class Avatar(Base):
-    """数字人实例——绑定一个 Persona 和 Profile。"""
+    """数字人形象资产实体——独立的形象资源对象。
+
+    与 Persona 解耦：Persona 通过 avatar_id 引用 Avatar。
+    Avatar 持有肖像图、idle 视频、voice ref 等资产。
+    """
 
     __tablename__ = "avatars"
 
@@ -48,11 +52,52 @@ class Avatar(Base):
     profile_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="draft")
     # draft | active | archived
+    # 当前资产引用（相对 assets_root 的路径）
+    portrait_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    idle_video_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    voice_ref_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    voice_ref_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 元数据
+    avatar_block: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 自定义资产（JSON: {key: path}）
+    extra_assets: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
     project: Mapped[Project] = relationship(back_populates="avatars")
     sessions: Mapped[list[Session]] = relationship(back_populates="avatar")
+    assets: Mapped[list[Asset]] = relationship(
+        back_populates="avatar", cascade="all, delete-orphan"
+    )
+
+
+class Asset(Base):
+    """独立资产对象——Avatar 的肖像/idle/voice 等文件。
+
+    单独建表便于复用 + 多 Avatar 引用同一资产。
+    """
+
+    __tablename__ = "assets"
+    __table_args__ = (
+        Index("ix_assets_avatar_id", "avatar_id"),
+        Index("ix_assets_kind", "kind"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(32))
+    # portrait | idle_video | voice_ref | image | video | audio | other
+    name: Mapped[str] = mapped_column(String(256))  # 原始文件名
+    path: Mapped[str] = mapped_column(String(512))  # 相对 assets_root
+    mime_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    size_bytes: Mapped[int | None] = mapped_column(nullable=True)
+    avatar_id: Mapped[str | None] = mapped_column(
+        ForeignKey("avatars.id", ondelete="SET NULL"), nullable=True
+    )
+    extra_metadata: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+    avatar: Mapped[Avatar | None] = relationship(back_populates="assets")
 
 
 class Persona(Base):
@@ -68,9 +113,14 @@ class Persona(Base):
     prompt: Mapped[str] = mapped_column(Text, default="")
     # 完整 Persona 包路径（相对 workspace）
     package_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    # voice / avatar 引用（JSON）
+    # voice 引用（JSON）
     voice_ref: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # avatar_ref 保留向后兼容；新数据用 avatar_id
     avatar_ref: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # 显式外键引用 Avatar 实体（推荐用法）
+    avatar_id: Mapped[str | None] = mapped_column(
+        ForeignKey("avatars.id", ondelete="SET NULL"), nullable=True
+    )
     behavior: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
