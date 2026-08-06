@@ -172,6 +172,19 @@ export function useRealtimeSession({
       setDebugInfo((d) => ({ ...d, framesSent: d.framesSent + 1 }));
     } catch (e) {
       setError(`摄像头不可用：${(e as Error).message}`);
+      // 通知后端截帧失败——同轮 Vision 等待立即降级，不必等超时
+      try {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(
+            JSON.stringify({
+              type: "vision.frame_error",
+              payload: { reason: String((e as Error).message || e) },
+            })
+          );
+        }
+      } catch {
+        /* 发送失败忽略 */
+      }
     } finally {
       track?.stop();
     }
@@ -304,7 +317,9 @@ export function useRealtimeSession({
     const urlWsPort = new URLSearchParams(window.location.search).get("wsPort");
     const tunnelWsPort = parseInt(pagePort) > 10000 ? String(parseInt(pagePort) + 5101) : null;
     const wsPort = urlWsPort || process.env.NEXT_PUBLIC_WS_PORT || tunnelWsPort || "8101";
-    const wsUrl = `ws://${window.location.hostname}:${wsPort}/ws/realtime`;
+    // HTTPS 页面必须 wss，否则浏览器拦截混合内容（AL-P2-005）
+    const wsProto = window.location.protocol === "https:" ? "wss" : "ws";
+    const wsUrl = `${wsProto}://${window.location.hostname}:${wsPort}/ws/realtime`;
     const ws = new WebSocket(wsUrl);
     ws.binaryType = "arraybuffer";
     wsRef.current = ws;
@@ -374,8 +389,14 @@ export function useRealtimeSession({
       recorderRef.current = new MicrophoneRecorder({
         targetSampleRate: 16000,
         onChunk: (pcm) => {
-          if (wsRef.current?.readyState === WebSocket.OPEN) {
-            wsRef.current.send(pcm.buffer);
+          const ws = wsRef.current;
+          if (ws?.readyState === WebSocket.OPEN) {
+            // 上行二进制协议：0x00 + PCM16（显式 tag，与摄像头 0x02 区分）
+            const bytes = new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength);
+            const frame = new Uint8Array(1 + bytes.length);
+            frame[0] = 0x00; // TAG_PCM_UPLINK
+            frame.set(bytes, 1);
+            ws.send(frame.buffer);
           }
         },
         onError: (e) => setError(`麦克风错误：${e.message}`),

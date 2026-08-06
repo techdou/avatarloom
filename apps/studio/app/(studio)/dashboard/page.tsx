@@ -56,7 +56,7 @@ export default async function DashboardPage() {
             ["回看运行记录", "/runs", "每轮对话的录制与指标"],
           ].map(([label, href, desc], i) => (
             <li key={href} className="flex items-start gap-3">
-              <span className="w-5 h-5 rounded-full bg-accent-soft text-accent text-[11px] font-semibold flex items-center justify-center shrink-0 mt-0.5">
+              <span className="w-5 h-5 rounded-full bg-accent-soft text-accent text-micro font-semibold flex items-center justify-center shrink-0 mt-0.5">
                 {i + 1}
               </span>
               <div>

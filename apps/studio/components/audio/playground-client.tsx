@@ -104,7 +104,7 @@ export function PlaygroundClient() {
       <div className="grid grid-cols-1 grid-rows-[50vh_1fr] md:grid-rows-none md:grid-cols-[minmax(360px,420px)_1fr] gap-2 flex-1 min-h-0">
         {/* Avatar 区 */}
         <div className="card flex flex-col overflow-hidden p-0 min-h-0">
-          <div className="relative flex-1 min-h-0 bg-bg-subtle flex items-center justify-center overflow-hidden dark:bg-[#131318]">
+          <div className="relative flex-1 min-h-0 bg-bg-subtle flex items-center justify-center overflow-hidden dark:bg-bg-subtle-dark">
             {session.frameUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img src={session.frameUrl} alt="avatar" className="w-full h-full object-cover" />
@@ -114,7 +114,7 @@ export function PlaygroundClient() {
               <PendingAvatar />
             )}
             {showDebug && (
-              <div className="absolute top-2 left-2 text-[10px] font-mono bg-black/60 text-white px-2 py-1 rounded-md">
+              <div className="absolute top-2 left-2 text-micro font-mono bg-black/60 text-white px-2 py-1 rounded-md">
                 {session.sessionState} · 帧 {session.debugInfo.framesShown}
               </div>
             )}
@@ -131,7 +131,7 @@ export function PlaygroundClient() {
             </div>
             <div className="flex items-center gap-3">
               {session.sessionId && (
-                <div className="text-[10px] font-mono text-fg-subtle truncate max-w-[200px]">
+                <div className="text-micro font-mono text-fg-subtle truncate max-w-[200px]">
                   {session.sessionId}
                 </div>
               )}
@@ -187,7 +187,7 @@ export function PlaygroundClient() {
                       : "bg-white border border-border rounded-bl-md dark:bg-bg-subtle dark:border-border"
                   )}
                 >
-                  <div className="text-[10px] text-fg-subtle mb-1">
+                  <div className="text-micro text-fg-subtle mb-1">
                     {item.role === "user" ? "你" : "小灵"}
                   </div>
                   <div className="whitespace-pre-wrap break-words">{item.text}</div>
@@ -197,7 +197,7 @@ export function PlaygroundClient() {
             {session.llmDelta && (
               <div className="flex justify-start">
                 <div className="max-w-[78%] rounded-2xl rounded-bl-md bg-white border border-border px-3.5 py-2.5 text-sm leading-relaxed shadow-card dark:bg-bg-subtle dark:border-border">
-                  <div className="text-[10px] text-fg-subtle mb-1">小灵 · 思考中</div>
+                  <div className="text-micro text-fg-subtle mb-1">小灵 · 思考中</div>
                   <div className="whitespace-pre-wrap break-words">
                     {session.llmDelta}
                     <span className="inline-block w-1.5 h-3.5 bg-accent ml-0.5 align-middle animate-pulse" />
@@ -237,7 +237,7 @@ export function PlaygroundClient() {
               </button>
             )}
             {showDebug && (
-              <div className="ml-auto text-[10px] font-mono text-fg-subtle">
+              <div className="ml-auto text-micro font-mono text-fg-subtle">
                 {session.debugInfo.framesShown}f · {session.debugInfo.audioChunks}a · q{session.debugInfo.queueLen}
               </div>
             )}
@@ -282,7 +282,7 @@ function WelcomePane({
       <UserCircle2 className="w-16 h-16 text-accent/60 dark:text-accent/50" strokeWidth={1.25} />
 
       <div className="max-w-xs mt-4">
-        <div className="text-base font-semibold tracking-tight text-fg dark:text-[#ededf2]">
+        <div className="text-base font-semibold tracking-tight text-fg dark:text-fg-dark">
           实时数字人 · 小灵
         </div>
         <p className="text-xs text-fg-muted mt-1.5 leading-relaxed dark:text-fg-muted">
@@ -292,9 +292,9 @@ function WelcomePane({
 
         {/* 能力 chips */}
         <div className="flex flex-wrap items-center justify-center gap-1.5 mt-3">
-          <span className="badge badge-accent text-[10px]">DeepSeek LLM</span>
-          <span className="badge text-[10px]">VoxCPM2 TTS</span>
-          <span className="badge text-[10px]">MuseTalk</span>
+          <span className="badge badge-accent text-micro">DeepSeek LLM</span>
+          <span className="badge text-micro">VoxCPM2 TTS</span>
+          <span className="badge text-micro">MuseTalk</span>
         </div>
 
         <button
@@ -307,12 +307,12 @@ function WelcomePane({
         </button>
 
         {error ? (
-          <div className="mt-2.5 flex items-start gap-1.5 text-[11px] text-err text-left">
+          <div className="mt-2.5 flex items-start gap-1.5 text-micro text-err text-left">
             <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
             <span className="leading-snug">{error}</span>
           </div>
         ) : (
-          <div className="mt-2.5 text-[11px] text-fg-subtle">
+          <div className="mt-2.5 text-micro text-fg-subtle">
             需要本地 Runtime Gateway 监听 <code className="font-mono">:8101</code>
           </div>
         )}

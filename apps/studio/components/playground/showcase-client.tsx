@@ -50,7 +50,7 @@ export function ShowcaseClient({ profileId, personaId }: { profileId: string; pe
       {/* 顶部细连接状态条 */}
       <div className="absolute top-0 inset-x-0 h-8 flex items-center justify-center gap-2 bg-gradient-to-b from-black/50 to-transparent">
         <span className={clsx("w-2 h-2 rounded-full", connDot)} />
-        <span className="text-[11px] text-white/80 font-medium tracking-wide">
+        <span className="text-micro text-white/80 font-medium tracking-wide">
           {session.conn === "connected"
             ? "已连接"
             : session.conn === "connecting"
@@ -73,7 +73,7 @@ export function ShowcaseClient({ profileId, personaId }: { profileId: string; pe
       {/* 错误提示（极简，不打断演示） */}
       {session.error && (
         <div className="absolute top-10 inset-x-3 flex justify-center pointer-events-none">
-          <div className="rounded-md bg-err/90 text-white text-[11px] px-3 py-1.5">
+          <div className="rounded-md bg-err/90 text-white text-micro px-3 py-1.5">
             {session.error}
           </div>
         </div>

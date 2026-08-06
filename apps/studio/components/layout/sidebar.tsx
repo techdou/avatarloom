@@ -40,7 +40,7 @@ export function Sidebar() {
   const pathname = usePathname();
 
   return (
-    <aside className="w-60 shrink-0 border-r border-border bg-bg-subtle min-h-screen flex flex-col dark:bg-[#131318] dark:border-border">
+    <aside className="w-60 shrink-0 border-r border-border bg-bg-subtle min-h-screen flex flex-col dark:bg-bg-subtle-dark dark:border-border">
       <div className="px-5 py-4 border-b border-border dark:border-border">
         <Link href="/playground" className="flex items-center gap-2.5 group">
           <div className="w-8 h-8 rounded-lg bg-accent text-white flex items-center justify-center">
@@ -51,7 +51,7 @@ export function Sidebar() {
           </div>
           <div>
             <div className="text-sm font-semibold tracking-tight leading-none">AvatarLoom</div>
-            <div className="text-[11px] text-fg-muted mt-1 dark:text-fg-muted">灵构 Studio</div>
+            <div className="text-micro text-fg-muted mt-1 dark:text-fg-muted">灵构 Studio</div>
           </div>
         </Link>
       </div>
@@ -85,7 +85,7 @@ export function Sidebar() {
       </nav>
 
       <div className="px-3 py-3 border-t border-border flex items-center justify-between dark:border-border">
-        <div className="text-[11px] text-fg-subtle pl-2">AutoDL RTX 5090 · v0.2.0</div>
+        <div className="text-micro text-fg-subtle pl-2">AutoDL RTX 5090 · v0.2.0</div>
         {/* 桌面端主题切换（移动端在顶栏） */}
         <div className="md:flex hidden">
           <ThemeToggle />

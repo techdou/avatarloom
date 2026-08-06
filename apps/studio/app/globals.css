@@ -12,12 +12,20 @@
   to   { opacity: 1; transform: translateY(0) scale(1); }
 }
 
+/* 尊重系统减弱动效设置——所有动画/过渡近即时完成。 */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 /* 暗色模式令牌：深灰黑底 + 保留靛蓝点缀（不引入新主色）。
-   用 CSS 变量在 base 层重定义 Tailwind 生成的 bg/fg/border 颜色工具类，
-   这样组件类只需声明 dark 变体即可整体切换，不必逐页重写。 */
+   暗色值登记为 tailwind token（bg-dark / fg-dark / bg-subtle-dark），
+   组件类只需声明 dark 变体即可整体切换，禁止再写 dark:xx-[#...] 任意值。 */
 @layer base {
   html {
-    @apply bg-bg text-fg antialiased dark:bg-[#0a0a0c] dark:text-[#ededf2];
+    @apply bg-bg text-fg antialiased dark:bg-bg-dark dark:text-fg-dark;
   }
   body {
     @apply min-h-screen;
@@ -33,7 +41,7 @@
     @apply inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium
            border border-border bg-white text-fg shadow-card hover:bg-bg-subtle hover:border-fg/20
            transition-all active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none
-           dark:bg-bg-subtle dark:border-border dark:hover:bg-border/40;
+           dark:bg-bg-subtle-dark dark:border-border dark:hover:bg-border/40;
   }
   .btn-primary {
     @apply bg-accent text-white border-accent hover:bg-accent-hover
@@ -49,9 +57,12 @@
   .btn-sm {
     @apply px-2.5 py-1.5 text-xs rounded-md;
   }
+  .btn-lg {
+    @apply px-5 py-2.5 text-base;
+  }
   .card {
     @apply bg-white border border-border rounded-xl p-4 shadow-card
-           dark:bg-bg-subtle dark:border-border dark:shadow-none;
+           dark:bg-bg-subtle-dark dark:border-border dark:shadow-none;
   }
   .card-hover {
     @apply transition-all hover:border-accent/40 hover:shadow-pop
@@ -61,7 +72,7 @@
     @apply w-full px-3 py-2 border border-border rounded-lg text-sm bg-white shadow-card
            focus:outline-none focus:ring-2 focus:ring-accent-ring focus:border-accent
            placeholder:text-fg-subtle
-           dark:bg-bg-subtle dark:border-border dark:shadow-none;
+           dark:bg-bg-subtle-dark dark:border-border dark:shadow-none;
   }
   .badge {
     @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium border border-border bg-bg-subtle
@@ -71,6 +82,7 @@
   .badge-warn { @apply text-warn border-warn/30 bg-warn/5; }
   .badge-err { @apply text-err border-err/30 bg-err/5; }
   .badge-accent { @apply text-accent border-accent/30 bg-accent/5; }
+  .badge-info { @apply text-info border-info/30 bg-info/5; }
   .page-header {
     @apply flex items-end justify-between gap-4 mb-6;
   }
@@ -81,6 +93,9 @@
     @apply text-sm text-fg-muted mt-1;
   }
   .section-label {
-    @apply text-[11px] font-semibold uppercase tracking-wider text-fg-subtle;
+    @apply text-micro font-semibold uppercase tracking-wider text-fg-subtle;
+  }
+  .text-meta {
+    @apply text-micro tracking-tight;
   }
 }

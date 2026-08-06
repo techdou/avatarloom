@@ -171,7 +171,7 @@ export default async function AvatarDetailPage({ params }: PageProps) {
                 {assets.map((a) => (
                   <div key={a.id} className="flex items-center justify-between text-xs py-1">
                     <span className="truncate flex-1">{a.name}</span>
-                    <span className="badge text-[10px] ml-2">{a.kind}</span>
+                    <span className="badge text-micro ml-2">{a.kind}</span>
                   </div>
                 ))}
               </div>

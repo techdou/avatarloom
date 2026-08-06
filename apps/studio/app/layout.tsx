@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import "./globals.css";
-import { QueryProvider } from "@/components/layout/query-provider";
 import { ToastProvider } from "@/components/ui/toast";
 
 export const metadata: Metadata = {
@@ -33,9 +32,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
       </head>
       <body>
-        <QueryProvider>
-          <ToastProvider>{children}</ToastProvider>
-        </QueryProvider>
+        <ToastProvider>{children}</ToastProvider>
       </body>
     </html>
   );

@@ -1,5 +1,7 @@
 // TODO: P5 - Blocks API Explorer
 import { apiFetch, type BlockDefinition } from "@/lib/api";
+import { EmptyState } from "@/components/ui/empty-state";
+import { ErrorBanner } from "@/components/ui/error-banner";
 
 export default async function BlocksPage() {
   let blocks: BlockDefinition[] = [];
@@ -19,23 +21,25 @@ export default async function BlocksPage() {
 
   return (
     <div>
-      <h1 className="mb-6">Block Registry</h1>
-
-      {error && (
-        <div className="card border-err/40 text-err text-sm mb-4">
-          Control API 连接失败：{error}
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">模块注册表</h1>
+          <p className="page-desc">已注册的 Block 定义，按类别分组</p>
         </div>
-      )}
+      </div>
+
+      {error && <div className="mb-4"><ErrorBanner error={error} hint="请确认 control-api 已启动（默认端口 8100）" /></div>}
 
       {categories.length === 0 && !error ? (
-        <div className="card text-center text-fg-muted text-sm py-12">
-          暂无 Block 定义。可通过 Control API 注册。
-        </div>
+        <EmptyState
+          title="暂无 Block 定义"
+          description="Block 定义可通过 Control API 注册。"
+        />
       ) : (
         <div className="space-y-6">
           {categories.map((cat) => (
             <div key={cat}>
-              <h2 className="text-sm font-medium text-fg-muted mb-2 uppercase tracking-wide">
+              <h2 className="section-label mb-2">
                 {cat}
               </h2>
               <div className="space-y-1">

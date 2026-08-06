@@ -75,7 +75,7 @@ export function AssetUploader({
           <div className="text-xs text-fg-muted dark:text-fg-muted">{hint}</div>
         </div>
         {hasCurrent && (
-          <span className="badge badge-ok text-[10px]">
+          <span className="badge badge-ok text-micro">
             <CheckCircle2 className="w-3 h-3" />
             已设置
           </span>

@@ -140,7 +140,7 @@ export default async function RunDetailPage({ params }: PageProps) {
                 <div className="text-xs text-fg-muted mb-2 dark:text-fg-muted">模块版本</div>
                 <div className="flex flex-wrap gap-1.5">
                   {Object.entries(metrics.block_versions).map(([name, ver]) => (
-                    <span key={name} className="badge font-mono text-[10px]">
+                    <span key={name} className="badge font-mono text-micro">
                       {name}@{String(ver)}
                     </span>
                   ))}
@@ -205,7 +205,7 @@ function MetricBar({
     <div>
       <div className="flex items-center justify-between text-xs mb-1.5">
         <span className="text-fg-muted dark:text-fg-muted">{label}</span>
-        <span className="font-mono text-fg dark:text-[#ededf2]">
+        <span className="font-mono text-fg dark:text-fg-dark">
           {hasValue ? `${valueMs}ms` : "—"}
         </span>
       </div>
@@ -233,7 +233,7 @@ function TranscriptBubble({ role, text }: { role: "user" | "assistant"; text: st
             : "bg-bg-subtle border border-border rounded-bl-md dark:bg-border/20 dark:border-border"
         )}
       >
-        <div className="text-[10px] text-fg-subtle mb-1">{isUser ? "你" : "小灵"}</div>
+        <div className="text-micro text-fg-subtle mb-1">{isUser ? "你" : "小灵"}</div>
         <div className="whitespace-pre-wrap break-words">{text}</div>
       </div>
     </div>
@@ -252,7 +252,7 @@ function Stat({
   const toneClass = {
     warn: "text-warn",
     err: "text-err",
-    muted: "text-fg dark:text-[#ededf2]",
+    muted: "text-fg dark:text-fg-dark",
   }[tone];
   return (
     <div>
@@ -269,9 +269,9 @@ function ArtifactRow({ artifact }: { artifact: Artifact }) {
     <div className="border border-border rounded-md p-2.5 dark:border-border">
       <div className="flex items-center justify-between gap-2 mb-1">
         <span className="text-xs font-medium truncate">{artifact.path.split(/[\\/]/).pop() || artifact.path}</span>
-        <span className="badge text-[10px] shrink-0">{artifact.kind}</span>
+        <span className="badge text-micro shrink-0">{artifact.kind}</span>
       </div>
-      <div className="flex items-center gap-2 text-[11px] text-fg-subtle font-mono">
+      <div className="flex items-center gap-2 text-micro text-fg-subtle font-mono">
         <span>{artifact.mime_type || "unknown"}</span>
         {artifact.size_bytes != null && (
           <span>· {formatBytes(artifact.size_bytes)}</span>
@@ -280,7 +280,7 @@ function ArtifactRow({ artifact }: { artifact: Artifact }) {
       {/* 注：暂无 artifact 文件流端点；当 kind 为媒体且后端提供时此处预留回放位。
           run_dir 是服务端工作区路径，前端不可直接访问。 */}
       {(isVideo || isAudio) && (
-        <div className="mt-2 text-[11px] text-fg-subtle italic">
+        <div className="mt-2 text-micro text-fg-subtle italic">
           {isVideo ? "视频" : "音频"}回放需通过产物文件端点访问（暂未开放）。
         </div>
       )}

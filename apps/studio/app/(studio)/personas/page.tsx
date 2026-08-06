@@ -1,5 +1,8 @@
 import { apiFetch, type Persona } from "@/lib/api";
 import Link from "next/link";
+import { UserCircle2 } from "lucide-react";
+import { EmptyState } from "@/components/ui/empty-state";
+import { ErrorBanner } from "@/components/ui/error-banner";
 
 export default async function PersonasPage() {
   let personas: Persona[] = [];
@@ -21,15 +24,18 @@ export default async function PersonasPage() {
       </div>
 
       {error && (
-        <div className="rounded-xl border border-err/30 bg-err/5 text-err text-sm px-4 py-3 mb-4">
-          Control API 连接失败：{error}。请确认 control-api 服务已启动（默认端口 8100）。
+        <div className="mb-4">
+          <ErrorBanner error={error} hint="请确认 control-api 服务已启动（默认端口 8100）" />
         </div>
       )}
 
       {personas.length === 0 && !error ? (
-        <div className="card text-center text-fg-muted text-sm py-16">
-          暂无 Persona。点击「新建」创建第一个数字人人设。
-        </div>
+        <EmptyState
+          icon={<UserCircle2 className="w-5 h-5" />}
+          title="暂无人设"
+          description="人设定义数字人的性格、语气与回复风格。"
+          action={{ label: "创建第一个 Persona", href: "/personas/new" }}
+        />
       ) : (
         <div className="space-y-2.5">
           {personas.map((p) => (

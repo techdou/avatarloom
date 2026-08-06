@@ -32,7 +32,7 @@ export function PipelineTimeline({ metrics }: { metrics: RunMetrics }) {
             )}
           />
           <div className="flex items-center justify-between gap-3">
-            <span className={clsx("text-sm", s.ready ? "text-fg dark:text-[#ededf2]" : "text-fg-subtle")}>
+            <span className={clsx("text-sm", s.ready ? "text-fg dark:text-fg-dark" : "text-fg-subtle")}>
               <span className="text-fg-subtle font-mono text-xs mr-2">{String(i + 1).padStart(2, "0")}</span>
               {s.label}
             </span>

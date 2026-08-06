@@ -116,13 +116,13 @@ function RunRow({
         ) : (
           <ChevronRight className="w-3.5 h-3.5 text-fg-subtle shrink-0" />
         )}
-        <span className={clsx("badge text-[10px] shrink-0", statusBadge(run.status))}>
+        <span className={clsx("badge text-micro shrink-0", statusBadge(run.status))}>
           {run.status}
         </span>
         <span className="text-xs text-fg-muted truncate dark:text-fg-muted">
           {run.user_text || "(无输入)"}
         </span>
-        <span className="ml-auto text-[10px] text-fg-subtle font-mono shrink-0">
+        <span className="ml-auto text-micro text-fg-subtle font-mono shrink-0">
           {startedAt.toLocaleTimeString()}
         </span>
       </button>
@@ -137,20 +137,20 @@ function RunRow({
 
       {expanded && (
         <div className="border-t border-border px-3 py-3 dark:border-border">
-          <div className="text-[11px] text-fg-muted mb-2 dark:text-fg-muted">管道时序</div>
+          <div className="text-micro text-fg-muted mb-2 dark:text-fg-muted">管道时序</div>
           <PipelineTimeline metrics={metrics} />
           {(run.user_text || run.assistant_text) && (
             <div className="mt-3 space-y-1.5">
               {run.user_text && (
                 <div className="text-xs">
                   <span className="text-fg-subtle">你：</span>
-                  <span className="text-fg dark:text-[#ededf2]">{run.user_text}</span>
+                  <span className="text-fg dark:text-fg-dark">{run.user_text}</span>
                 </div>
               )}
               {run.assistant_text && (
                 <div className="text-xs">
                   <span className="text-fg-subtle">小灵：</span>
-                  <span className="text-fg dark:text-[#ededf2]">{run.assistant_text}</span>
+                  <span className="text-fg dark:text-fg-dark">{run.assistant_text}</span>
                 </div>
               )}
             </div>
@@ -165,8 +165,8 @@ function Metric({ label, valueMs }: { label: string; valueMs?: number | null }) 
   const has = valueMs != null;
   return (
     <div className="rounded-md bg-bg-subtle dark:bg-border/20 py-1.5">
-      <div className="text-[10px] text-fg-subtle">{label}</div>
-      <div className={clsx("text-xs font-mono mt-0.5", has ? "text-fg dark:text-[#ededf2]" : "text-fg-subtle")}>
+      <div className="text-micro text-fg-subtle">{label}</div>
+      <div className={clsx("text-xs font-mono mt-0.5", has ? "text-fg dark:text-fg-dark" : "text-fg-subtle")}>
         {has ? `${valueMs}ms` : "—"}
       </div>
     </div>

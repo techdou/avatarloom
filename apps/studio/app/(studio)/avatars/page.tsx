@@ -1,5 +1,8 @@
 import Link from "next/link";
+import { ImageOff } from "lucide-react";
 import { apiFetch, avatarPortraitUrl, type Avatar } from "@/lib/api";
+import { EmptyState } from "@/components/ui/empty-state";
+import { ErrorBanner } from "@/components/ui/error-banner";
 
 async function getAvatars(): Promise<{ avatars: Avatar[]; error: string | null }> {
   try {
@@ -24,22 +27,18 @@ export default async function AvatarsPage() {
       </div>
 
       {error && (
-        <div className="rounded-xl border border-err/30 bg-err/5 text-err text-sm px-4 py-3 mb-4">
-          Control API 连接失败：{error}。请确认 control-api 服务已启动（默认端口 8100）。
+        <div className="mb-4">
+          <ErrorBanner error={error} hint="请确认 control-api 服务已启动（默认端口 8100）" />
         </div>
       )}
 
       {avatars.length === 0 && !error ? (
-        <div className="card text-center text-fg-muted py-16">
-          <div className="w-12 h-12 mx-auto rounded-full bg-accent-soft text-accent flex items-center justify-center mb-3">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className="w-6 h-6">
-              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z" strokeLinecap="round" />
-            </svg>
-          </div>
-          <div className="text-base mb-1.5">暂无 Avatar</div>
-          <p className="text-sm mb-4">创建一个数字人形象，上传肖像图，独立于人设管理。</p>
-          <Link href="/avatars/new" className="btn btn-primary">创建第一个 Avatar</Link>
-        </div>
+        <EmptyState
+          icon={<ImageOff className="w-5 h-5" />}
+          title="暂无数字人形象"
+          description="创建一个数字人形象，上传肖像图，独立于人设管理。"
+          action={{ label: "创建第一个 Avatar", href: "/avatars/new" }}
+        />
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
           {avatars.map((av) => (
@@ -63,11 +62,11 @@ export default async function AvatarsPage() {
               <div className="p-3.5">
                 <div className="font-medium text-sm truncate">{av.name}</div>
                 <div className="flex items-center gap-1.5 mt-1.5">
-                  <span className={`badge text-[10px] ${av.status === "active" ? "badge-ok" : ""}`}>
+                  <span className={`badge text-micro ${av.status === "active" ? "badge-ok" : ""}`}>
                     {av.status}
                   </span>
                   {av.avatar_block && (
-                    <span className="badge text-[10px] font-mono">{av.avatar_block}</span>
+                    <span className="badge text-micro font-mono">{av.avatar_block}</span>
                   )}
                 </div>
               </div>

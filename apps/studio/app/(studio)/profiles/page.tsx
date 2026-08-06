@@ -1,4 +1,7 @@
 import { apiFetch, type RuntimeProfile } from "@/lib/api";
+import { SlidersHorizontal } from "lucide-react";
+import { EmptyState } from "@/components/ui/empty-state";
+import { ErrorBanner } from "@/components/ui/error-banner";
 
 export default async function ProfilesPage() {
   let profiles: RuntimeProfile[] = [];
@@ -22,15 +25,17 @@ export default async function ProfilesPage() {
       </div>
 
       {error && (
-        <div className="rounded-xl border border-err/30 bg-err/5 text-err text-sm px-4 py-3 mb-4">
-          Control API 连接失败：{error}。请确认 control-api 服务已启动（默认端口 8100）。
+        <div className="mb-4">
+          <ErrorBanner error={error} hint="请确认 control-api 服务已启动（默认端口 8100）" />
         </div>
       )}
 
       {profiles.length === 0 && !error ? (
-        <div className="card text-center text-fg-muted text-sm py-16">
-          暂无 Profile。可加载 profiles/ 目录下的 YAML 文件。
-        </div>
+        <EmptyState
+          icon={<SlidersHorizontal className="w-5 h-5" />}
+          title="暂无运行时配置"
+          description="可加载 profiles/ 目录下的 YAML 文件注册配置。"
+        />
       ) : (
         <div className="space-y-3">
           {profiles.map((p) => {
@@ -56,7 +61,7 @@ export default async function ProfilesPage() {
                     const blockRef = (p.blocks as Record<string, { id?: string }>)[cat];
                     const local = (p.blocks as Record<string, { deployment?: string }>)[cat]?.deployment !== "remote";
                     return (
-                      <span key={cat} className={local ? "badge font-mono text-[11px]" : "badge badge-warn font-mono text-[11px]"}>
+                      <span key={cat} className={local ? "badge font-mono text-micro" : "badge badge-warn font-mono text-micro"}>
                         {cat}: {blockRef?.id || "?"}
                       </span>
                     );

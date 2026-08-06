@@ -59,7 +59,7 @@ export function DebugDrawer({
           {open ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronUp className="w-3.5 h-3.5" />}
           调试
         </span>
-        <span className="font-mono text-[10px] text-fg-subtle">
+        <span className="font-mono text-micro text-fg-subtle">
           {debugInfo.framesShown}f · {debugInfo.audioChunks}a · q{debugInfo.queueLen}
         </span>
       </button>
@@ -68,7 +68,7 @@ export function DebugDrawer({
         <div className="px-3 pb-3 grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
           {/* 管线时间轴 */}
           <div className="rounded-md border border-border p-2.5 dark:border-border">
-            <div className="text-[11px] font-semibold uppercase tracking-wider text-fg-subtle mb-2">
+            <div className="text-micro font-semibold uppercase tracking-wider text-fg-subtle mb-2">
               管线时间轴
             </div>
             <Timeline label="transcript 完成" value={rel(timing.transcriptTs)} baseline />
@@ -76,7 +76,7 @@ export function DebugDrawer({
             <Timeline label="首音 PCM" value={rel(timing.firstPcmTs)} />
             <Timeline label="首帧 JPEG" value={rel(timing.firstFrameTs)} />
             {base == null && (
-              <div className="text-[10px] text-fg-subtle mt-1.5 italic">
+              <div className="text-micro text-fg-subtle mt-1.5 italic">
                 基准 t0 未定（用户尚未开口）；显示绝对 ms 时间戳。
               </div>
             )}
@@ -84,7 +84,7 @@ export function DebugDrawer({
 
           {/* 实时指标 + session */}
           <div className="rounded-md border border-border p-2.5 space-y-1.5 dark:border-border">
-            <div className="text-[11px] font-semibold uppercase tracking-wider text-fg-subtle mb-1">
+            <div className="text-micro font-semibold uppercase tracking-wider text-fg-subtle mb-1">
               实时指标
             </div>
             <Kv k="连接" v={conn} />
@@ -120,7 +120,7 @@ function Timeline({
         />
         {label}
       </span>
-      <span className="font-mono text-fg dark:text-[#ededf2]">{value}</span>
+      <span className="font-mono text-fg dark:text-fg-dark">{value}</span>
     </div>
   );
 }
@@ -129,7 +129,7 @@ function Kv({ k, v, mono = false }: { k: string; v: string; mono?: boolean }) {
   return (
     <div className="flex items-center justify-between gap-3">
       <span className="text-fg-subtle">{k}</span>
-      <span className={clsx("text-fg dark:text-[#ededf2]", mono && "font-mono text-[11px]")}>{v}</span>
+      <span className={clsx("text-fg dark:text-fg-dark", mono && "font-mono text-micro")}>{v}</span>
     </div>
   );
 }
