@@ -69,6 +69,8 @@ export interface RealtimeSession {
   toggleMic: () => Promise<void>;
   interrupt: () => void;
   captureAndSendFrame: () => Promise<void>;
+  /** 当前麦克风音量（0-1）。供 UI 波形轮询，麦克风未开时返回 0。 */
+  getMicLevel: () => number;
 }
 
 /**
@@ -113,6 +115,9 @@ export function useRealtimeSession({
   const playerRef = useRef<PcmPlayer | null>(null);
   const avmuxRef = useRef<AVMux | null>(null);
   const llmDeltaRef = useRef("");
+  // 断线重连：intentional 标记主动断开；connectRef 打破 onclose → connect 的自引用
+  const reconnectRef = useRef({ attempts: 0, intentional: false, timer: 0 });
+  const connectRef = useRef<(() => Promise<void>) | null>(null);
 
   // 最新 profile/persona，避免 connect 闭包陈旧
   const profileRef = useRef(profileId);
@@ -323,6 +328,7 @@ export function useRealtimeSession({
   const connect = useCallback(async () => {
     setConn("connecting");
     setError(null);
+    reconnectRef.current.intentional = false;
 
     playerRef.current = new PcmPlayer({ sampleRate: 16000, audioDelayMs: 600 });
     // 音频主时钟驱动视频（对齐 VoxEMW）：AVMux 从 PcmPlayer 读播放位置
@@ -355,6 +361,7 @@ export function useRealtimeSession({
 
     ws.onopen = () => {
       setConn("connected");
+      reconnectRef.current.attempts = 0;
       ws.send(
         JSON.stringify({
           type: "session.start",
@@ -384,10 +391,27 @@ export function useRealtimeSession({
       setConn("disconnected");
       dispatch({ kind: "disconnected" });
       setMicActive(false);
+      // 非主动断开（网络抖动/服务端掉线）→ 指数退避自动重连，最多 3 次
+      const r = reconnectRef.current;
+      if (!r.intentional && r.attempts < 3) {
+        const delay = [500, 1000, 2000][r.attempts];
+        r.attempts += 1;
+        r.timer = window.setTimeout(() => {
+          void connectRef.current?.();
+        }, delay);
+      }
     };
   }, [handleFrame, handleMessage, handleBinary]);
 
+  // connect 最新引用转发（onclose 重连用，打破 useCallback 自引用）
+  useEffect(() => {
+    connectRef.current = connect;
+  }, [connect]);
+
   const disconnect = useCallback(() => {
+    // 主动断开：取消挂起的自动重连
+    reconnectRef.current.intentional = true;
+    window.clearTimeout(reconnectRef.current.timer);
     recorderRef.current?.stop();
     recorderRef.current = null;
     setMicActive(false);
@@ -442,6 +466,8 @@ export function useRealtimeSession({
     avmuxRef.current?.interrupt();
   }, []);
 
+  const getMicLevel = useCallback(() => recorderRef.current?.getLevel() ?? 0, []);
+
   // llmDelta 同步到 ref（llm.text.done 兜底用）
   useEffect(() => {
     llmDeltaRef.current = llmDelta;
@@ -450,6 +476,7 @@ export function useRealtimeSession({
   // 卸载清理
   useEffect(() => {
     return () => {
+      window.clearTimeout(reconnectRef.current.timer);
       recorderRef.current?.stop();
       playerRef.current?.close();
       wsRef.current?.close();
@@ -494,5 +521,6 @@ export function useRealtimeSession({
     toggleMic,
     interrupt,
     captureAndSendFrame,
+    getMicLevel,
   };
 }

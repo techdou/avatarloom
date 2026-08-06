@@ -21,6 +21,8 @@ export class MicrophoneRecorder {
   private stream: MediaStream | null = null;
   private node: AudioWorkletNode | null = null;
   private source: MediaStreamAudioSourceNode | null = null;
+  private analyser: AnalyserNode | null = null;
+  private levelBuf: Uint8Array | null = null;
   private targetRate: number;
   private onChunk: (pcm: Int16Array) => void;
   private onError?: (e: Error) => void;
@@ -57,6 +59,11 @@ export class MicrophoneRecorder {
 
       this.source = this.ctx.createMediaStreamSource(this.stream);
       this.node = new AudioWorkletNode(this.ctx, "avatarloom-recorder");
+
+      // 音量采样支路（UI 波形指示用，不影响 PCM 链路）
+      this.analyser = this.ctx.createAnalyser();
+      this.analyser.fftSize = 256;
+      this.source.connect(this.analyser);
 
       // worklet 输出原始采样率的 PCM16，主线程重采样到 targetRate
       const ratio = sourceRate / this.targetRate;
@@ -98,12 +105,33 @@ export class MicrophoneRecorder {
     }
   }
 
+  /** 当前麦克风音量（0-1，RMS 压缩映射）。未激活时返回 0。UI 波形轮询用。 */
+  getLevel(): number {
+    if (!this.analyser || !this._active) return 0;
+    if (!this.levelBuf || this.levelBuf.length !== this.analyser.fftSize) {
+      this.levelBuf = new Uint8Array(this.analyser.fftSize);
+    }
+    this.analyser.getByteTimeDomainData(this.levelBuf);
+    let sum = 0;
+    for (let i = 0; i < this.levelBuf.length; i++) {
+      const v = (this.levelBuf[i] - 128) / 128;
+      sum += v * v;
+    }
+    const rms = Math.sqrt(sum / this.levelBuf.length);
+    // 语音 RMS 典型 0.02-0.3，放大并截断到 0-1
+    return Math.min(1, rms * 3.5);
+  }
+
   stop() {
     this._active = false;
     if (this.node) {
       this.node.port.close();
       this.node.disconnect();
       this.node = null;
+    }
+    if (this.analyser) {
+      this.analyser.disconnect();
+      this.analyser = null;
     }
     if (this.source) {
       this.source.disconnect();

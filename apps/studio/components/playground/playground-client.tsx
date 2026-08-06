@@ -99,6 +99,28 @@ export function PlaygroundClient() {
   const currentPersona = personas.find((p) => p.id === personaId);
   const personaLabel = currentPersona?.label || currentPersona?.name || personaId;
 
+  // 空格键切换麦克风（输入控件 focus 时豁免；长按不重复触发）
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code !== "Space" || e.repeat) return;
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.tagName === "SELECT" ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      if (session.conn !== "connected") return;
+      e.preventDefault();
+      void session.toggleMic();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [session.conn, session.toggleMic]);
+
   return (
     <div className="flex flex-col gap-2 h-[calc(100vh-3.5rem)] md:h-[calc(100vh-0px)] md:p-2">
       {/* 顶部上下文条（连接 / profile / persona / 调试 / 主题） */}
@@ -150,6 +172,7 @@ export function PlaygroundClient() {
             onInterrupt={session.interrupt}
             showDebug={showDebug}
             debugInfo={session.debugInfo}
+            getMicLevel={session.getMicLevel}
           />
         </div>
       </div>
