@@ -209,7 +209,11 @@ class VoxCpm2TtsBlock(Block):
 
     @staticmethod
     def _resolve_path(path_str: str | None, ctx: BlockContext) -> str | None:
-        """把相对路径解析为绝对路径（相对 workspace_root）。"""
+        """把相对路径解析为绝对路径（相对 workspace_root）。
+
+        文件不存在时记 warning 而非静默 None——缺失 voiceRef 会导致
+        克隆无参考音，合成失败且难排查。
+        """
         if not path_str:
             return None
         from pathlib import Path
@@ -217,7 +221,14 @@ class VoxCpm2TtsBlock(Block):
         p = Path(path_str)
         if not p.is_absolute():
             p = Path(ctx.workspace_root) / p
-        return str(p) if p.exists() else None
+        if not p.exists():
+            import logging
+
+            logging.getLogger("tts.voxcpm2").warning(
+                "voiceRef 不存在: %s（音色克隆将退化为默认音色）", p
+            )
+            return None
+        return str(p)
 
     def _load_model(self, model_name: str, device: str) -> Any:
         from voxcpm import VoxCPM  # type: ignore

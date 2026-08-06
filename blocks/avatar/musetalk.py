@@ -215,7 +215,9 @@ class MuseTalkAvatarBlock(Block):
         for t in self._tasks:
             try:
                 await t
-            except (asyncio.CancelledError, Exception):
+            except asyncio.CancelledError:
+                raise  # 取消语义透传（Python 3.8+）
+            except Exception:
                 pass
         self._tasks.clear()
 

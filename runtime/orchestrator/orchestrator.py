@@ -398,11 +398,19 @@ class Orchestrator:
                 queue_size=128,
             )
 
-        # STT 订阅 speech.ended（语音端点）
+        # STT 订阅 audio.appended（累积音频缓冲）+ speech.ended（触发转写）。
+        # 真实 SenseVoice 需要 audio.appended 才能拿到 PCM——只订 speech.* 时
+        # _audio_buffers 恒空，transcript 永不触发（mock 测试掩盖了此 bug）。
         if CATEGORY_STT in self.blocks:
             stt = self.blocks[CATEGORY_STT]
             await self.event_bus.subscribe(
-                "speech.*",
+                AUDIO_APPENDED,
+                self._make_block_handler(stt),
+                policy=BackpressurePolicy.DROP_OLDEST,
+                queue_size=128,
+            )
+            await self.event_bus.subscribe(
+                SPEECH_ENDED,
                 self._make_block_handler(stt),
             )
 

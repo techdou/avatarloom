@@ -111,6 +111,19 @@ async def main() -> int:
     print(f"[env] portrait={portrait}")
     print(f"[env] voice_ref={voice_ref}")
 
+    # 资产预检：缺文件直接报错（而不是深处 BlockSetupError 难定位）。
+    # persona 三件套不在 git 仓库，需服务器预先生成（generate_asset_matrix.sh）。
+    missing_assets = [str(p) for p in (user_wav, PROJECT_ROOT / portrait, PROJECT_ROOT / voice_ref) if not Path(p).exists()]
+    if missing_assets:
+        print(
+            "[FATAL] 资产缺失（persona 三件套不在仓库，需先跑 "
+            "scripts/generate_asset_matrix.sh 或手动放置）：",
+            file=sys.stderr,
+        )
+        for m in missing_assets:
+            print(f"  - {m}", file=sys.stderr)
+        return 2
+
     profile_name = os.environ.get("E2E_PROFILE", "autodl-best")
     profile_path = PROJECT_ROOT / "profiles" / f"{profile_name}.yaml"
     is_flashhead = "flashhead" in profile_name

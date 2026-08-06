@@ -74,9 +74,7 @@ class OpenAILlmBlock(Block):
 
     async def setup(self, ctx: BlockContext) -> None:
         cfg = ctx.config
-        self._base_url = str(
-            cfg.get("baseUrl") or cfg.get("baseUrl") or "https://api.openai.com/v1"
-        )
+        self._base_url = str(cfg.get("baseUrl") or "https://api.openai.com/v1")
         # apiKeyEnv 指向环境变量名；apiKey 直接给值（二选一）
         api_key_env = str(cfg.get("apiKeyEnv") or "LLM_API_KEY")
         self._api_key = str(cfg.get("apiKey") or _read_env(api_key_env))
@@ -85,6 +83,8 @@ class OpenAILlmBlock(Block):
         self._temperature = float(cfg.get("temperature", 0.7))
         self._disable_thinking = bool(cfg.get("disableThinking", False))
         self._batch_sentences = int(cfg.get("batchSentences", 1))
+        # 请求超时（秒）——云端 LLM 首 token 可能慢，可配置防误超时
+        self._timeout = float(cfg.get("timeoutS", self._timeout))
         self._mark_ready()
         await ctx.logger.ainfo(
             "llm.openai-compatible ready",

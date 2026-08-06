@@ -125,6 +125,20 @@ class FlashHeadAvatarBlock(Block):
         port = int(cfg.get("servicePort", 8767))
         jpeg_quality = int(cfg.get("jpegQuality", 85))
 
+        # 路径预检：缺失时明确报错（而不是 spawn 失败难定位）
+        if not Path(service_python).exists():
+            raise BlockSetupError(
+                "avatar.flashhead", f"service python not found: {service_python}"
+            )
+        if not Path(model_dir).is_dir():
+            raise BlockSetupError(
+                "avatar.flashhead", f"FlashHead 模型目录不存在: {model_dir}"
+            )
+        if not Path(wav2vec_dir).is_dir():
+            raise BlockSetupError(
+                "avatar.flashhead", f"wav2vec 目录不存在: {wav2vec_dir}"
+            )
+
         log_path = "/tmp/flashhead_service.log"
         log_file = open(log_path, "ab")
         try:
@@ -335,7 +349,9 @@ class FlashHeadAvatarBlock(Block):
             self._reader_task.cancel()
             try:
                 await self._reader_task
-            except (asyncio.CancelledError, Exception):
+            except asyncio.CancelledError:
+                raise  # 取消语义透传（Python 3.8+）
+            except Exception:
                 pass
             self._reader_task = None
         if self._ws is not None:
