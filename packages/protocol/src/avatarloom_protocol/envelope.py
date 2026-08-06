@@ -58,6 +58,7 @@ TRANSCRIPT_COMPLETED = EventType("transcript.completed")
 TRANSCRIPT_PARTIAL = EventType("transcript.partial")
 
 # llm.*
+LLM_REQUEST = EventType("llm.request")  # Orchestrator 决策后驱动 LLM 生成（可带视觉上下文）
 LLM_TEXT_DELTA = EventType("llm.text.delta")
 LLM_TEXT_DONE = EventType("llm.text.done")
 LLM_ERROR = EventType("llm.error")

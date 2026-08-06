@@ -17,6 +17,7 @@ import asyncio
 import re
 
 from avatarloom_protocol import (
+    LLM_REQUEST,
     LLM_TEXT_DELTA,
     LLM_TEXT_DONE,
     TRANSCRIPT_COMPLETED,
@@ -58,7 +59,7 @@ class MockLlmBlock(Block):
             category="llm",
             runtime_type="mock",
             capabilities=Capability(streaming=True, interruption=True),
-            inputs=[TRANSCRIPT_COMPLETED],
+            inputs=[LLM_REQUEST, TRANSCRIPT_COMPLETED],
             outputs=[LLM_TEXT_DELTA, LLM_TEXT_DONE],
             config_schema={
                 "type": "object",
@@ -78,7 +79,8 @@ class MockLlmBlock(Block):
         await ctx.logger.ainfo("llm.mock ready", delay_ms=self._chunk_delay_ms)
 
     async def process(self, ctx: BlockContext, event: Event) -> None:
-        if event.type != TRANSCRIPT_COMPLETED:
+        # 主链路消费 llm.request；兼容 transcript.completed（单测/直连）
+        if event.type not in (LLM_REQUEST, TRANSCRIPT_COMPLETED):
             return
 
         user_text: str = event.payload.get("text", "")

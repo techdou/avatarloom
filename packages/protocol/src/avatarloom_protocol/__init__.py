@@ -23,6 +23,7 @@ from avatarloom_protocol.envelope import (
     BLOCK_SETUP,
     LLM_ERROR,
     # llm.*
+    LLM_REQUEST,
     LLM_TEXT_DELTA,
     LLM_TEXT_DONE,
     # persona.*
@@ -114,6 +115,7 @@ __all__ = [
     "SPEECH_ENDED",
     "TRANSCRIPT_COMPLETED",
     "TRANSCRIPT_PARTIAL",
+    "LLM_REQUEST",
     "LLM_TEXT_DELTA",
     "LLM_TEXT_DONE",
     "LLM_ERROR",

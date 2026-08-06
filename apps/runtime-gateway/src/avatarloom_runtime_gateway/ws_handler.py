@@ -37,8 +37,10 @@ from starlette.websockets import WebSocketState
 
 from avatarloom_runtime_gateway.config import Settings
 from avatarloom_runtime_gateway.protocol import (
+    MAX_CAMERA_FRAME_BYTES,
     TAG_AVATAR_JPEG,
     TAG_CAMERA_FRAME,
+    TAG_PCM_UPLINK,
     TAG_TTS_PCM_DOWNLINK,
     ClientMessage,
 )
@@ -87,6 +89,7 @@ class WebSocketSession:
         self._downlink_queue: asyncio.Queue[dict[str, Any] | bytes] = asyncio.Queue(maxsize=512)
         self._downlink_task: asyncio.Task[None] | None = None
         self._closed = False
+        self._warned_unknown_tag = False
 
     async def run(self) -> None:
         """主循环：接收上行消息，处理控制 + 音频。"""
@@ -129,24 +132,58 @@ class WebSocketSession:
             await self._handle_audio_chunk(msg.payload)
         elif msg.type == "audio.interrupt":
             await self._handle_interrupt()
+        elif msg.type == "vision.frame_error":
+            # 浏览器截帧失败（摄像头拒绝/不可用）→ 立即降级，不等 vision 超时
+            await self._handle_vision_frame_error(msg.payload)
         elif msg.type == "ping":
             await self._enqueue_json({"type": "pong"})
 
     async def _handle_bytes(self, data: bytes) -> None:
-        """处理上行二进制：0x02=摄像头截帧（vision），其余当作 PCM16。"""
+        """处理上行二进制：显式 tag 路由（AL-P1-001）。
+
+        0x00 + PCM16 → STT；0x02 + JPEG → Vision；未知 tag 拒绝。
+        不再"其他一律 PCM"——裸 PCM 首字节可能恰为 0x02 被误送 Vision。
+        """
         if not self.session or not self.orchestrator:
             return
-        # 0x02 + JPEG：摄像头截帧 → vision 多模态分析
-        if data and data[0] == TAG_CAMERA_FRAME:
-            jpeg = data[1:]
-            if jpeg:
-                jpeg_b64 = base64.b64encode(jpeg).decode("ascii")
-                await self.orchestrator.ingest_vision_frame(self.session, jpeg_b64)
+        if not data:
             return
-        # 16-bit samples（无 tag / 0x00 = 上行 PCM）
-        samples = len(data) // 2
-        pcm_b64 = base64.b64encode(data).decode("ascii")
-        await self.orchestrator.ingest_audio(self.session, pcm_b64, samples)
+        tag = data[0]
+
+        if tag == TAG_PCM_UPLINK:
+            pcm = data[1:]
+            # 奇数字节/空 chunk 无法按 int16 解码，丢弃
+            if len(pcm) < 2 or len(pcm) % 2 != 0:
+                return
+            samples = len(pcm) // 2
+            pcm_b64 = base64.b64encode(pcm).decode("ascii")
+            await self.orchestrator.ingest_audio(self.session, pcm_b64, samples)
+            return
+
+        if tag == TAG_CAMERA_FRAME:
+            jpeg = data[1:]
+            # AL-P1-011：大小 + JPEG SOI header 校验，防任意内容打远程 Vision API
+            if len(jpeg) > MAX_CAMERA_FRAME_BYTES:
+                logger.warning("camera frame too large: %d bytes, rejected", len(jpeg))
+                await self._send_error(
+                    f"camera frame too large ({len(jpeg)} > {MAX_CAMERA_FRAME_BYTES})"
+                )
+                return
+            if not jpeg.startswith(b"\xff\xd8\xff"):
+                logger.warning("camera frame is not JPEG (bad SOI), rejected")
+                await self._send_error("camera frame is not a valid JPEG")
+                return
+            jpeg_b64 = base64.b64encode(jpeg).decode("ascii")
+            await self.orchestrator.ingest_vision_frame(self.session, jpeg_b64)
+            return
+
+        # 未知 tag：拒绝。error JSON 每连接只发一次，避免旧前端裸 PCM 刷屏
+        logger.warning("unknown uplink binary tag 0x%02x (%d bytes), rejected", tag, len(data))
+        if not self._warned_unknown_tag:
+            self._warned_unknown_tag = True
+            await self._send_error(
+                f"unknown binary tag 0x{tag:02x}——上行协议要求 0x00+PCM16 / 0x02+JPEG"
+            )
 
     async def _handle_audio_chunk(self, payload: dict[str, Any]) -> None:
         """处理 audio.chunk JSON 消息（带 pcm_b64）。"""
@@ -162,6 +199,13 @@ class WebSocketSession:
         if not self.session or not self.orchestrator:
             return
         await self.orchestrator.handle_user_speech_started(self.session)
+
+    async def _handle_vision_frame_error(self, payload: dict[str, Any]) -> None:
+        """浏览器截帧失败——通知 Orchestrator 降级（唤醒同轮 Vision 等待）。"""
+        if not self.session or not self.orchestrator:
+            return
+        reason = str(payload.get("reason") or "unknown")
+        await self.orchestrator.handle_vision_frame_error(self.session, reason)
 
     # ------------------------------------------------------------------
     # 会话生命周期

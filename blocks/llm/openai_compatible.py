@@ -23,6 +23,7 @@ from typing import Any
 
 import httpx
 from avatarloom_protocol import (
+    LLM_REQUEST,
     LLM_TEXT_DELTA,
     LLM_TEXT_DONE,
     TRANSCRIPT_COMPLETED,
@@ -54,7 +55,7 @@ class OpenAILlmBlock(Block):
             category="llm",
             runtime_type="http_remote",
             capabilities=Capability(streaming=True, interruption=True),
-            inputs=[TRANSCRIPT_COMPLETED],
+            inputs=[LLM_REQUEST, TRANSCRIPT_COMPLETED],
             outputs=[LLM_TEXT_DELTA, LLM_TEXT_DONE],
             resources=ResourceRequirements_stub(),
             config_schema={
@@ -94,7 +95,9 @@ class OpenAILlmBlock(Block):
         )
 
     async def process(self, ctx: BlockContext, event: Event) -> None:
-        if event.type != TRANSCRIPT_COMPLETED:
+        # 主链路消费 llm.request（Orchestrator 完成 Vision 同轮编排后发出）；
+        # 兼容 transcript.completed——便于脱离 Orchestrator 的单测/直连调用。
+        if event.type not in (LLM_REQUEST, TRANSCRIPT_COMPLETED):
             return
 
         user_text = event.payload.get("text", "")

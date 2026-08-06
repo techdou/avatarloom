@@ -47,7 +47,13 @@ class MockVisionBlock(Block):
         # 实际触发通过 Orchestrator 显式调用 describe_frame()
         pass
 
-    async def describe_frame(self, ctx: BlockContext) -> Event:
+    async def describe_frame(
+        self,
+        ctx: BlockContext,
+        image_b64: str | None = None,
+        prompt: str = "描述这张图片",
+        request_id: str | None = None,
+    ) -> Event:
         """显式触发：返回 Mock 视觉描述。"""
         import random
 
@@ -57,7 +63,12 @@ class MockVisionBlock(Block):
             session_id=ctx.session_id,
             source="vision.mock",
             run_id=ctx.run_id,
-            payload={"description": desc, "objects": [], "confidence": 0.5},
+            payload={
+                "description": desc,
+                "objects": [],
+                "confidence": 0.5,
+                "request_id": request_id,
+            },
         )
         await ctx.emit(event)
         return event

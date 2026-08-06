@@ -23,12 +23,15 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
+import uuid
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
 from avatarloom_protocol import (
     AUDIO_APPENDED,
+    LLM_REQUEST,
     LLM_TEXT_DELTA,
     SPEECH_DETECTED,
     SPEECH_ENDED,
@@ -53,6 +56,9 @@ logger = logging.getLogger(__name__)
 
 # 视觉触发词：用户说出这些词 → 下行 vision.request 让浏览器截帧分析
 _VISION_TRIGGER_RE = re.compile(r"看看|评价|describe|looks?\s+like", re.IGNORECASE)
+
+# 视觉上下文有效期（秒）：超过后不再注入 LLM
+_VISION_CONTEXT_TTL_S = 30.0
 
 
 # Block category 标准名（和 Profile yaml 的 key 对齐）
@@ -124,13 +130,18 @@ class Orchestrator:
 
         # 装配的 Block 实例（category -> Block）
         self.blocks: dict[str, Block] = {}
+        # 各 Block 的运行期配置（category -> config），process 阶段注入 BlockContext
+        self._block_configs: dict[str, dict[str, Any]] = {}
         # 失败/降级记录
         self.degraded_blocks: dict[str, str] = {}  # category -> fallback block_id
         # Persona 上下文（session_id -> dict），切换 Persona 时更新
         self._persona_contexts: dict[str, dict[str, Any]] = {}
-        # 视觉感知上下文（session_id -> 最近一次 describe_frame 的描述），
-        # 供 LLM 下一轮回复注入（"用户让你看的画面"）
-        self._vision_contexts: dict[str, str] = {}
+        # 视觉感知上下文：session_id -> {"description", "request_id", "ts"}，
+        # 单次消费 + TTL（_VISION_CONTEXT_TTL_S），供 LLM 下一轮回复注入
+        self._vision_contexts: dict[str, dict[str, Any]] = {}
+        # 同轮 Vision 等待：session_id -> (request_id, Future)。
+        # 触发词命中后挂起，ingest_vision_frame/超时/打断时 resolve。
+        self._vision_pending: dict[str, tuple[str, asyncio.Future[None]]] = {}
         # 内部任务（订阅消费者等）
         self._tasks: list[asyncio.Task[None]] = []
         self._setup_done = False
@@ -231,7 +242,13 @@ class Orchestrator:
         return session
 
     async def end_session(self, session: Session, reason: str = "normal") -> None:
-        """结束会话。"""
+        """结束会话——同时清理 Persona/Vision 上下文和 pending Vision 等待。"""
+        # 取消挂起的同轮 Vision 等待（等待方收到 CancelledError 后跳过 LLM）
+        pending = self._vision_pending.pop(session.session_id, None)
+        if pending is not None and not pending[1].done():
+            pending[1].cancel()
+        self._persona_contexts.pop(session.session_id, None)
+        self._vision_contexts.pop(session.session_id, None)
         await session.close(reason)
         self.sessions.remove(session.session_id)
 
@@ -323,17 +340,22 @@ class Orchestrator:
     async def ingest_vision_frame(self, session: Session, jpeg_b64: str) -> None:
         """接收浏览器摄像头截帧（0x02 上行），调用 vision block 多模态分析。
 
-        结果存到 _vision_contexts（供 LLM 下一轮注入），VISION_RESULT 事件
-        由 describe_frame emit。vision block 缺席时静默跳过（不阻断主链路）。
+        结果存到 _vision_contexts（单次消费 + TTL，供 LLM 注入）；若本轮有
+        挂起的同轮 Vision 等待（触发词命中），resolve 它让 LLM 立即继续。
+        vision block 缺席时静默跳过（不阻断主链路）。
         """
         vision = self.blocks.get(CATEGORY_VISION)
         if vision is None:
             logger.info("vision block 未装配，跳过摄像头帧分析")
+            self._resolve_vision_pending(session.session_id)
             return
+        pending = self._vision_pending.get(session.session_id)
+        request_id = pending[0] if pending else None
         ctx = BlockContext(
             session_id=session.session_id,
             run_id=session.current_run_id,
             workspace_root=".",
+            config=self._block_configs.get(CATEGORY_VISION, {}),
             _emit_fn=self._on_event,
         )
         try:
@@ -344,17 +366,41 @@ class Orchestrator:
                     "描述这张图片里的内容，包括人物外貌特征、穿着、表情、"
                     "以及周围环境。用中文，2-3 句话。"
                 ),
+                request_id=request_id,
             )
             description = result.payload.get("description", "")
             if description and "视觉感知失败" not in description:
-                self._vision_contexts[session.session_id] = description
+                self._vision_contexts[session.session_id] = {
+                    "description": description,
+                    "request_id": request_id,
+                    "ts": time.monotonic(),
+                }
                 logger.info(
-                    "vision 分析完成 (session %s): %.60s",
+                    "vision 分析完成 (session %s, req %s): %.60s",
                     session.session_id[:12],
+                    (request_id or "-")[:12],
                     description,
                 )
         except Exception as e:
             logger.warning("vision describe_frame 失败: %s", e)
+        finally:
+            # 成功/失败都唤醒同轮等待——失败走降级回答，不让 LLM 干等超时
+            self._resolve_vision_pending(session.session_id)
+
+    async def handle_vision_frame_error(self, session: Session, reason: str) -> None:
+        """浏览器截帧失败（摄像头拒绝/不可用）——立即降级，不等超时。"""
+        logger.info(
+            "vision 截帧失败 (session %s): %s——降级为无视觉回答",
+            session.session_id[:12],
+            reason,
+        )
+        self._resolve_vision_pending(session.session_id)
+
+    def _resolve_vision_pending(self, session_id: str) -> None:
+        """唤醒 session 上挂起的同轮 Vision 等待（若有）。"""
+        pending = self._vision_pending.pop(session_id, None)
+        if pending is not None and not pending[1].done():
+            pending[1].set_result(None)
 
     async def handle_user_speech_started(self, session: Session) -> None:
         """VAD 检测到用户开始说话——可能触发打断。
@@ -434,6 +480,9 @@ class Orchestrator:
             # 预热（warmup）可选
             await block.warmup()
             self.blocks[category] = block
+            # 保存运行期配置——process 阶段注入 BlockContext（AL-P1-009：
+            # 此前只在 setup 注入，LLM 运行期读 systemPrompt 恒为空）
+            self._block_configs[category] = config
             logger.info("block ready: %s -> %s", category, block_id)
         except Exception:
             logger.exception("block %s setup failed", block_id)
@@ -453,12 +502,12 @@ class Orchestrator:
 
     async def _wire_event_bus(self) -> None:
         """连事件订阅：把 Block 的 process() 挂到对应事件类型。"""
-        # VAD 订阅 audio.appended
+        # VAD 订阅 audio.appended（DROP_OLDEST 可接受：VAD 丢帧只影响检测粒度）
         if CATEGORY_VAD in self.blocks:
             vad = self.blocks[CATEGORY_VAD]
             await self.event_bus.subscribe(
                 AUDIO_APPENDED,
-                self._make_block_handler(vad),
+                self._make_block_handler(vad, CATEGORY_VAD),
                 policy=BackpressurePolicy.DROP_OLDEST,
                 queue_size=128,
             )
@@ -466,25 +515,28 @@ class Orchestrator:
         # STT 订阅 audio.appended（累积音频缓冲）+ speech.ended（触发转写）。
         # 真实 SenseVoice 需要 audio.appended 才能拿到 PCM——只订 speech.* 时
         # _audio_buffers 恒空，transcript 永不触发（mock 测试掩盖了此 bug）。
+        # AL-P1-007：STT 累积 PCM，DROP_OLDEST 丢一条就剪一段语音——改 BLOCK
+        # （背压沿 WS/TCP 自然回传，浏览器端音频缓冲承受，不丢音频）。
         if CATEGORY_STT in self.blocks:
             stt = self.blocks[CATEGORY_STT]
             await self.event_bus.subscribe(
                 AUDIO_APPENDED,
-                self._make_block_handler(stt),
-                policy=BackpressurePolicy.DROP_OLDEST,
-                queue_size=128,
+                self._make_block_handler(stt, CATEGORY_STT),
+                policy=BackpressurePolicy.BLOCK,
+                queue_size=512,
             )
             await self.event_bus.subscribe(
                 SPEECH_ENDED,
-                self._make_block_handler(stt),
+                self._make_block_handler(stt, CATEGORY_STT),
             )
 
-        # LLM 订阅 transcript.completed
+        # LLM 订阅 llm.request（AL-P1-002：不再直接消费 transcript.completed——
+        # Orchestrator 先做 Vision 同轮决策，vision.result/超时后才发 llm.request）
         if CATEGORY_LLM in self.blocks:
             llm = self.blocks[CATEGORY_LLM]
             await self.event_bus.subscribe(
-                TRANSCRIPT_COMPLETED,
-                self._make_block_handler(llm),
+                LLM_REQUEST,
+                self._make_block_handler(llm, CATEGORY_LLM),
             )
 
         # TTS 订阅 llm.text.delta/done
@@ -492,7 +544,7 @@ class Orchestrator:
             tts = self.blocks[CATEGORY_TTS]
             await self.event_bus.subscribe(
                 "llm.text.*",
-                self._make_block_handler(tts),
+                self._make_block_handler(tts, CATEGORY_TTS),
             )
 
         # Avatar 订阅 tts.audio.*（双写：TTS 同时给浏览器和 Avatar）
@@ -501,11 +553,11 @@ class Orchestrator:
             avatar = self.blocks[CATEGORY_AVATAR]
             await self.event_bus.subscribe(
                 "tts.audio.*",
-                self._make_block_handler(avatar),
+                self._make_block_handler(avatar, CATEGORY_AVATAR),
             )
             await self.event_bus.subscribe(
                 "speech.*",
-                self._make_block_handler(avatar),
+                self._make_block_handler(avatar, CATEGORY_AVATAR),
             )
 
         # Session 状态机订阅关键事件——驱动 trigger
@@ -530,24 +582,32 @@ class Orchestrator:
             self._on_tts_completed,
         )
 
-    def _make_block_handler(self, block: Block) -> Callable[[Event], Awaitable[None]]:
+    def _make_block_handler(
+        self, block: Block, category: str
+    ) -> Callable[[Event], Awaitable[None]]:
         """把 Block 包装成 EventBus handler。
 
-        每次调用重建 ctx（带正确 session_id/run_id）。
+        每次调用重建 ctx（带正确 session_id/run_id/config/persona）。
+        Vision 描述只注入 LLM（单次消费 + TTL），其他 category 不触碰。
         """
 
         async def handler(event: Event) -> None:
             persona_ctx = self._persona_contexts.get(event.session_id, {})
+            # AL-P1-003：只有 LLM 消费视觉描述——其他 Block 经手会提前消耗
+            vision_description = None
+            if category == CATEGORY_LLM:
+                vision_description = self._consume_vision_context(event.session_id)
             ctx = BlockContext(
                 session_id=event.session_id,
                 run_id=event.run_id,
                 workspace_root=".",
+                config=self._block_configs.get(category, {}),
                 _emit_fn=self._on_event,
                 persona_id=persona_ctx.get("persona_id"),
                 persona_instructions=persona_ctx.get("instructions"),
                 persona_voice_ref=persona_ctx.get("voice_ref"),
                 persona_avatar_ref=persona_ctx.get("avatar_ref"),
-                vision_description=self._vision_contexts.get(event.session_id),
+                vision_description=vision_description,
             )
             try:
                 await block.process(ctx, event)
@@ -562,6 +622,17 @@ class Orchestrator:
                 logger.exception("unhandled error in block %s", block.manifest().block_id)
 
         return handler
+
+    def _consume_vision_context(self, session_id: str) -> str | None:
+        """取出 session 的视觉描述（单次消费 + TTL 过期清理）。"""
+        entry = self._vision_contexts.pop(session_id, None)
+        if entry is None:
+            return None
+        age = time.monotonic() - float(entry.get("ts", 0.0))
+        if age > _VISION_CONTEXT_TTL_S:
+            logger.info("vision context 已过期（%.1fs），丢弃", age)
+            return None
+        return str(entry.get("description") or "") or None
 
     # ------------------------------------------------------------------
     # 内部：事件出口（emit）
@@ -602,6 +673,13 @@ class Orchestrator:
         await self.handle_user_speech_ended(session)
 
     async def _on_transcript_completed(self, event: Event) -> None:
+        """transcript 决策中枢（AL-P1-002 同轮编排）：
+
+        1. 先建新 Run（AL-P1-005：下游 vision/llm/tts 都带正确 run_id）
+        2. 命中触发词且有 vision block → 下行 vision.request 并等待
+           vision.result（成功/失败/截帧报错都唤醒）或超时降级
+        3. 发 llm.request 驱动 LLM 生成——LLM 不再直接消费 transcript
+        """
         session = self.sessions.get(event.session_id)
         if session is None:
             return
@@ -609,21 +687,97 @@ class Orchestrator:
         if not text.strip():
             await session.try_trigger("transcript_empty")
             return
-        # 触发词检测：命中 → 下行 vision.request 让浏览器截帧上行
-        m = _VISION_TRIGGER_RE.search(text)
-        if m:
-            await self._on_event(
-                Event(
-                    type=VISION_REQUEST,
-                    session_id=session.session_id,
-                    source="orchestrator.trigger",
-                    run_id=session.current_run_id,
-                    payload={"keyword": m.group(0)},
-                )
-            )
-        # 开始新一轮 Run
+
+        # 新一轮 Run——必须在发下游事件之前
         await session.start_new_run()
-        await session.trigger("transcript_ready")
+        # 状态机驱动用 try_trigger：transcript 在 thinking/speaking 期间到达
+        # 属合法边缘（VAD 未捕获 speech_started），不能让状态缺口杀掉回答链路
+        new_state = await session.try_trigger("transcript_ready")
+        if new_state is None:
+            logger.warning(
+                "transcript_ready 在当前状态 %s 下非法，仍继续 LLM 链路（session %s）",
+                session.state.value,
+                session.session_id[:12],
+            )
+
+        # 触发词检测：命中 → 截帧分析，等同轮视觉结果再回答
+        m = _VISION_TRIGGER_RE.search(text)
+        if m and CATEGORY_VISION in self.blocks:
+            proceed = await self._request_vision_and_wait(session, keyword=m.group(0))
+            if not proceed:
+                # 被打断/会话结束——跳过本轮 LLM
+                return
+        elif m:
+            logger.info("命中视觉触发词但 vision block 未装配，直接回答")
+
+        await self._on_event(
+            Event(
+                type=LLM_REQUEST,
+                session_id=session.session_id,
+                source="orchestrator",
+                run_id=session.current_run_id,
+                payload={
+                    "text": text,
+                    "language": event.payload.get("language", "zh"),
+                    "transcript_event_id": event.id,
+                },
+            )
+        )
+
+    async def _request_vision_and_wait(self, session: Session, keyword: str) -> bool:
+        """下行 vision.request 并挂起等待截帧分析。返回 True=继续 LLM。
+
+        唤醒路径：ingest_vision_frame（成功/失败）/ handle_vision_frame_error /
+        超时降级。打断或会话结束 → Future 被 cancel → 返回 False 跳过 LLM。
+        """
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[None] = loop.create_future()
+        request_id = f"vreq_{uuid.uuid4().hex[:12]}"
+        # 同 session 已有 pending（连说两次触发词）→ 取消旧的，以新请求为准
+        old = self._vision_pending.pop(session.session_id, None)
+        if old is not None and not old[1].done():
+            old[1].cancel()
+        self._vision_pending[session.session_id] = (request_id, fut)
+
+        await self._on_event(
+            Event(
+                type=VISION_REQUEST,
+                session_id=session.session_id,
+                source="orchestrator.trigger",
+                run_id=session.current_run_id,
+                payload={"keyword": keyword, "request_id": request_id},
+            )
+        )
+
+        timeout = float(self.config.vision_timeout_s)
+        try:
+            # shield：超时只放弃等待，不取消 fut——迟到的截帧仍可存上下文
+            await asyncio.wait_for(asyncio.shield(fut), timeout=timeout)
+            return True
+        except TimeoutError:
+            self._vision_pending.pop(session.session_id, None)
+            logger.info(
+                "vision 等待超时（%.1fs, session %s）——降级为无视觉回答",
+                timeout,
+                session.session_id[:12],
+            )
+            return True
+        except asyncio.CancelledError:
+            # 区分两种取消（Python 语义：吞掉 task.cancel() 又不 re-raise，
+            # 任务会继续跑——asyncio.run/shutdown 的 gather 会因此永远等它）：
+            # - fut 被 _do_interrupt/end_session 取消（任务本身未被 cancel）
+            #   → 内部打断，跳过本轮 LLM，返回 False
+            # - 消费者任务自身被 cancel（bus 关闭/loop teardown）
+            #   → 必须 re-raise 让任务正常消亡
+            task = asyncio.current_task()
+            if fut.cancelled() and (task is None or task.cancelling() == 0):
+                self._vision_pending.pop(session.session_id, None)
+                logger.info(
+                    "vision 等待被打断（session %s），跳过本轮 LLM",
+                    session.session_id[:12],
+                )
+                return False
+            raise
 
     async def _on_llm_text_delta(self, event: Event) -> None:
         session = self.sessions.get(event.session_id)
@@ -645,9 +799,13 @@ class Orchestrator:
 
     async def _do_interrupt(self, session: Session) -> None:
         """执行打断：
-        1. 重置所有 Block（清缓冲）
-        2. 等用户是否继续说话决定转 LISTENING 或 IDLE
+        1. 取消挂起的同轮 Vision 等待（跳过本轮 LLM）
+        2. 重置所有 Block（清缓冲）
+        3. 等用户是否继续说话决定转 LISTENING 或 IDLE
         """
+        pending = self._vision_pending.pop(session.session_id, None)
+        if pending is not None and not pending[1].done():
+            pending[1].cancel()
         for block in self.blocks.values():
             try:
                 await block.reset(session.session_id)

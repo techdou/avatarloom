@@ -7,7 +7,13 @@
 
 from __future__ import annotations
 
-from avatarloom_protocol import LLM_TEXT_DELTA, LLM_TEXT_DONE, TRANSCRIPT_COMPLETED, Event
+from avatarloom_protocol import (
+    LLM_REQUEST,
+    LLM_TEXT_DELTA,
+    LLM_TEXT_DONE,
+    TRANSCRIPT_COMPLETED,
+    Event,
+)
 from avatarloom_sdk import Block, BlockContext, BlockManifest, Capability, ResourceRequirements
 
 
@@ -25,7 +31,7 @@ class OllamaLlmBlock(Block):
             category="llm",
             runtime_type="http_remote",
             capabilities=Capability(streaming=True, interruption=True),
-            inputs=[TRANSCRIPT_COMPLETED],
+            inputs=[LLM_REQUEST, TRANSCRIPT_COMPLETED],
             outputs=[LLM_TEXT_DELTA, LLM_TEXT_DONE],
             resources=ResourceRequirements(),
             config_schema={

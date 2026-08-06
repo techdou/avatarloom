@@ -101,6 +101,9 @@ def load_profile(profile_path: str | Path) -> OrchestratorConfig:
         allow_interruption=bool(session_raw.get("allowInterruption", True)),
         event_log=bool(session_raw.get("eventLog", True)),
         session_mode=session_raw.get("mode", "single"),
+        vision_timeout_s=float(
+            session_raw.get("visionTimeoutS", session_raw.get("vision_timeout_s", 8.0))
+        ),
     )
 
 

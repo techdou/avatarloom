@@ -46,3 +46,8 @@ class OrchestratorConfig(BaseModel):
     allow_interruption: bool = True
     event_log: bool = True
     session_mode: Literal["single", "multi"] = "single"
+    vision_timeout_s: float = Field(
+        default=8.0,
+        gt=0,
+        description="触发词命中后等待 vision.result 的最长秒数，超时降级为无视觉回答",
+    )

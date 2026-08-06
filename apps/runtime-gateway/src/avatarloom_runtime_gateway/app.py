@@ -30,6 +30,14 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[4]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
+# 加载项目根 .env 到 os.environ（不覆盖已有环境变量）。
+# Block 的 apiKeyEnv（如 VISION_API_KEY）按文档优先级 ".env < 环境变量" 从
+# os.environ 读取；pydantic-settings 的 env_file 只填 Settings 字段、不进
+# os.environ，这里补齐。
+from dotenv import load_dotenv  # noqa: E402
+
+load_dotenv(_PROJECT_ROOT / ".env", override=False)
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 

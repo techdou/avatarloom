@@ -67,7 +67,11 @@ blocks:
     id: vision.openai-compatible
     deployment: remote
     optional: true
-    # baseUrl/model 缺省时从环境变量 VISION_BASE_URL / VISION_MODEL 读取
+    config:
+      # MiniMax 多模态（OpenAI 兼容端点）；Key 从环境变量 VISION_API_KEY 读取
+      baseUrl: ${VISION_BASE_URL}
+      apiKeyEnv: VISION_API_KEY
+      model: ${VISION_MODEL}
 sync:
   audio_delay_ms: 600
   video_lag_frames: 0

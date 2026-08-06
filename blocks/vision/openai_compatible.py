@@ -1,15 +1,23 @@
 """OpenAI-compatible Vision Block。
 
-基于多模态 LLM 的视觉感知（GPT-4o / Gemini / Qwen-VL 等）。
+基于多模态 LLM 的视觉感知（MiniMax minimax-m3 / GPT-4o / Qwen-VL 等）。
 
-可缺席——不订阅主链路事件，通过 Control API 显式触发。
+可缺席——不订阅主链路事件，通过 Orchestrator 显式触发。
+
+注意：推理型多模态模型（如 minimax-m3）会在 content 里输出
+<think>...</think> 推理段，注入 LLM 上下文前必须剥离。
 """
 
 from __future__ import annotations
 
+import re
+
 import httpx
 from avatarloom_protocol import VISION_RESULT, Event
 from avatarloom_sdk import Block, BlockContext, BlockManifest, Capability, ResourceRequirements
+
+# 推理模型的思维链段（minimax-m3 等）：<think>...</think>
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 
 class OpenAIVisionBlock(Block):
@@ -59,7 +67,11 @@ class OpenAIVisionBlock(Block):
         pass
 
     async def describe_frame(
-        self, ctx: BlockContext, image_b64: str, prompt: str = "描述这张图片"
+        self,
+        ctx: BlockContext,
+        image_b64: str,
+        prompt: str = "描述这张图片",
+        request_id: str | None = None,
     ) -> Event:
         """显式触发——发送图片到多模态 LLM 描述。"""
         try:
@@ -82,12 +94,12 @@ class OpenAIVisionBlock(Block):
                             ],
                         }
                     ],
-                    "max_tokens": 300,
+                    "max_tokens": 512,  # 推理模型需留 think 余量（minimax-m3）
                 }
                 resp = await client.post("/chat/completions", json=payload)
                 resp.raise_for_status()
                 result = resp.json()
-                description = result["choices"][0]["message"]["content"]
+                description = _strip_think(result["choices"][0]["message"]["content"])
         except Exception as e:
             await ctx.logger.aerror("vision error", error=str(e))
             description = "（视觉感知失败）"
@@ -97,7 +109,19 @@ class OpenAIVisionBlock(Block):
             session_id=ctx.session_id,
             source="vision.openai-compatible",
             run_id=ctx.run_id,
-            payload={"description": description, "objects": [], "confidence": 0.9},
+            payload={
+                "description": description,
+                "objects": [],
+                "confidence": 0.9,
+                "request_id": request_id,
+            },
         )
         await ctx.emit(event)
         return event
+
+
+def _strip_think(content: str) -> str:
+    """剥离推理模型的 <think>...</think> 段，返回最终回答文本。"""
+    if not content:
+        return ""
+    return _THINK_RE.sub("", content).strip()
