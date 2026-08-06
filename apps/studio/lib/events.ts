@@ -59,7 +59,15 @@ export const INITIAL_RUNTIME: SessionRuntime = {
 export type RuntimeAction =
   | { kind: "sessionStarted"; sessionId: string; state: string; ts: number }
   | { kind: "stateChanged"; to: string; ts: number }
-  | { kind: "event"; type: string; summary: string; ts: number }
+  | {
+      kind: "event";
+      type: string;
+      summary: string;
+      ts: number;
+      /** AL-P1-005：orchestrator 以新 run_id 重发的 transcript.completed——
+          只进事件流，不重置本轮 timing（t0 已由原始事件锚定）。 */
+      reEmitted?: boolean;
+    }
   | { kind: "milestone"; key: "firstDeltaTs" | "firstPcmTs" | "firstFrameTs"; ts: number }
   | { kind: "disconnected" };
 
@@ -99,8 +107,9 @@ export function sessionRuntimeReducer(
 
     case "event": {
       const ev: SessionEvent = { type: action.type, ts: action.ts, summary: action.summary };
-      // transcript.completed 开启新一轮：重置 timing 并锚定 t0
-      if (action.type === "transcript.completed") {
+      // transcript.completed 开启新一轮：重置 timing 并锚定 t0。
+      // 重发副本（re_emitted）只进事件流，不动 timing——t0 已由原始事件锚定。
+      if (action.type === "transcript.completed" && !action.reEmitted) {
         return {
           ...state,
           timing: { ...EMPTY_TIMING, transcriptTs: action.ts },

@@ -72,10 +72,23 @@ class OpenAITtsBlock(Block):
         self._voice = str(cfg.get("voice") or "alloy")
         self._total_samples = 0
         self._sentence_buffers = {}
+        # 按 run 隔离 + 打断协作（同 voxcpm2 模式，见 AL-P2-003 / AL-P1-006）
+        self._run_id: str | None = None
+        self._cancelled_run_ids: set[str] = set()
         self._mark_ready()
         await ctx.logger.ainfo("tts.openai-compatible ready", voice=self._voice)
 
+    def _sync_run_state(self, ctx: BlockContext) -> bool:
+        """按 run 隔离状态；True = 本 run 已打断，调用方直接 return。"""
+        if ctx.run_id != self._run_id:
+            self._total_samples = 0
+            self._sentence_buffers = {}
+            self._run_id = ctx.run_id
+        return ctx.run_id is not None and ctx.run_id in self._cancelled_run_ids
+
     async def process(self, ctx: BlockContext, event: Event) -> None:
+        if self._sync_run_state(ctx):
+            return
         if event.type == LLM_TEXT_DELTA:
             text = event.payload.get("text", "")
             idx = event.payload.get("sentence_index", 0)
@@ -130,10 +143,12 @@ class OpenAITtsBlock(Block):
         if not pcm16:
             return
 
-        # 分块流式输出
+        # 分块流式输出（循环内检查打断标记——合成完成后被打断则丢弃）
         chunk_size = 1600  # 100ms @ 16kHz
         offset = 0
         while offset < len(pcm16):
+            if ctx.run_id is not None and ctx.run_id in self._cancelled_run_ids:
+                return
             chunk = pcm16[offset : offset + chunk_size]
             offset += chunk_size
             self._total_samples += len(chunk) // 2
@@ -153,6 +168,8 @@ class OpenAITtsBlock(Block):
             )
 
     async def reset(self, session_id: str) -> None:
+        if self._run_id is not None:
+            self._cancelled_run_ids.add(self._run_id)
         self._total_samples = 0
         self._sentence_buffers = {}
 

@@ -68,6 +68,27 @@ describe("sessionRuntimeReducer", () => {
     expect(state.events[0].summary).toBe("idle → listening");
   });
 
+  it("reEmitted 副本只进事件流，不重置 timing（AL-P1-005）", () => {
+    let state = reduce(INITIAL_RUNTIME, {
+      kind: "event",
+      type: "transcript.completed",
+      summary: "原始",
+      ts: T0,
+    });
+    state = reduce(state, { kind: "milestone", key: "firstDeltaTs", ts: T0 + 200 });
+    // 重发副本到达：t0 与已锁里程碑必须保持
+    state = reduce(state, {
+      kind: "event",
+      type: "transcript.completed",
+      summary: "副本",
+      ts: T0 + 5,
+      reEmitted: true,
+    });
+    expect(state.timing.transcriptTs).toBe(T0);
+    expect(state.timing.firstDeltaTs).toBe(T0 + 200);
+    expect(state.events.at(-1)?.summary).toBe("副本");
+  });
+
   it("事件流 ring buffer 截断到 MAX_EVENTS", () => {
     let state = INITIAL_RUNTIME;
     for (let i = 0; i < MAX_EVENTS + 30; i++) {

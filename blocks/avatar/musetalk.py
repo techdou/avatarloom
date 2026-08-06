@@ -51,6 +51,9 @@ class MuseTalkAvatarBlock(Block):
     _last_activity: dict[str, float] = {}
     _frame_indexes: dict[str, int] = {}
     _tasks: list[asyncio.Task[None]] = []
+    # 按 session 的回复渲染 task（AL-P1-006：reset 时按 session 精确取消，
+    # 此前只进 _tasks 列表、打断后旧渲染继续跑并与新 run 交错下发）
+    _render_tasks: dict[str, asyncio.Task[None]] = {}
     _portrait_bytes: bytes = b""
     _portrait_jpeg: bytes = b""
     _portrait_path: str = ""
@@ -199,10 +202,21 @@ class MuseTalkAvatarBlock(Block):
                     pass
             await self._emit_activity(ctx, sid)
         elif event.type == TTS_AUDIO_COMPLETED:
+            # 同 session 旧渲染还在跑先取消（连说两轮的场景）——以新回复为准
+            old = self._render_tasks.pop(sid, None)
+            if old is not None and not old.done():
+                old.cancel()
             task = asyncio.create_task(self._render_reply(ctx))
+            self._render_tasks[sid] = task
             self._tasks.append(task)
 
     async def reset(self, session_id: str) -> None:
+        # 打断：取消本 session 进行中的回复渲染（AL-P1-006）。
+        # 注意：worker 进程侧的当次渲染无法中止（协议无 abort cmd），
+        # 取消只释放 Python 侧——渲染结果随 task 消亡被丢弃，不会交错下发。
+        task = self._render_tasks.pop(session_id, None)
+        if task is not None and not task.done():
+            task.cancel()
         self._bufs.pop(session_id, None)
         self._last_activity.pop(session_id, None)
         self._frame_indexes[session_id] = 0
@@ -341,6 +355,9 @@ class MuseTalkAvatarBlock(Block):
                     resp = await self._call_worker(req, timeout=self._render_timeout_s)
                 finally:
                     monitor.cancel()
+        except asyncio.CancelledError:
+            # 打断（reset 取消了本 task）——静默退出，不 emit 任何帧/视频事件
+            return
         except Exception as e:
             tail = " | ".join(list(self._worker_lines)[-5:])
             await ctx.logger.aerror(

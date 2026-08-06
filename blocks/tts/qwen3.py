@@ -89,10 +89,23 @@ class Qwen3TtsBlock(Block):
 
         self._total_samples = 0
         self._sentence_buffers = {}
+        # 按 run 隔离 + 打断协作（同 voxcpm2 模式，见 AL-P2-003 / AL-P1-006）
+        self._run_id: str | None = None
+        self._cancelled_run_ids: set[str] = set()
         self._mark_ready()
         await ctx.logger.ainfo("tts.qwen3 ready", model=self._model_name, device=self._device)
 
+    def _sync_run_state(self, ctx: BlockContext) -> bool:
+        """按 run 隔离状态；True = 本 run 已打断，调用方直接 return。"""
+        if ctx.run_id != self._run_id:
+            self._total_samples = 0
+            self._sentence_buffers = {}
+            self._run_id = ctx.run_id
+        return ctx.run_id is not None and ctx.run_id in self._cancelled_run_ids
+
     async def process(self, ctx: BlockContext, event: Event) -> None:
+        if self._sync_run_state(ctx):
+            return
         if event.type == LLM_TEXT_DELTA:
             text = event.payload.get("text", "")
             idx = event.payload.get("sentence_index", 0)
@@ -125,6 +138,9 @@ class Qwen3TtsBlock(Block):
             return
 
         for pcm in pcm_chunks:
+            # 打断检查（AL-P1-006）：丢弃已打断 run 的剩余输出
+            if ctx.run_id is not None and ctx.run_id in self._cancelled_run_ids:
+                return
             # Qwen3-TTS 输出 24kHz，降到 16kHz
             pcm16 = resample_pcm(pcm, source_sr=24000, target_sr=TARGET_SR)
             if not pcm16:
@@ -149,6 +165,8 @@ class Qwen3TtsBlock(Block):
                 )
 
     async def reset(self, session_id: str) -> None:
+        if self._run_id is not None:
+            self._cancelled_run_ids.add(self._run_id)
         self._total_samples = 0
         self._sentence_buffers = {}
 

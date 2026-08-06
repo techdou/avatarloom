@@ -256,3 +256,41 @@ class TestMockPipeline:
         assert session.state in (State.INTERRUPTING, State.IDLE, State.LISTENING)
 
         await orch.shutdown()
+
+
+@pytest.mark.integration
+class TestRunTranscriptReEmitted:
+    """AL-P1-005：orchestrator 建新 run 后以新 run_id 重发 transcript.completed。
+
+    STT 发出的原始事件携带旧 run_id（或 None），会被 Recorder 丢弃；
+    重发副本（re_emitted=True）让 Recorder 落录本轮用户文本、前端正确归属。
+    """
+
+    async def test_transcript_re_emitted_with_new_run_id(self) -> None:
+        emitted: list[Event] = []
+
+        async def sink(e: Event) -> None:
+            emitted.append(e)
+
+        orch = Orchestrator(_mock_config(), event_sink=sink)
+        await orch.setup()
+        session = await orch.start_session()
+
+        for _ in range(3):
+            await orch.ingest_audio(session, _loud_pcm(), 1600)
+            await asyncio.sleep(0.01)
+        for _ in range(4):
+            await orch.ingest_audio(session, _silent_pcm(), 1600)
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.3)
+
+        transcripts = [e for e in emitted if e.type == TRANSCRIPT_COMPLETED]
+        re_emitted = [e for e in transcripts if e.payload.get("re_emitted") is True]
+        assert re_emitted, "应有 orchestrator 重发的 transcript.completed 副本"
+        # 重发副本必须携带当前 run_id（非 None），供 Recorder 落录
+        assert re_emitted[-1].run_id is not None
+        assert re_emitted[-1].run_id == session.current_run_id
+        # 原文保持不变
+        assert re_emitted[-1].payload.get("text") == "你好数字人"
+
+        await orch.shutdown()

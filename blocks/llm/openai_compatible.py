@@ -86,6 +86,10 @@ class OpenAILlmBlock(Block):
         self._batch_sentences = int(cfg.get("batchSentences", 1))
         # 请求超时（秒）——云端 LLM 首 token 可能慢，可配置防误超时
         self._timeout = float(cfg.get("timeoutS", self._timeout))
+        # 打断协作状态（AL-P1-006）——实例级，不能放类属性（可变对象跨实例共享）
+        self._interrupted_run_ids: set[str] = set()
+        self._active_run_id: str | None = None
+        self._active_resp: httpx.Response | None = None
         self._mark_ready()
         await ctx.logger.ainfo(
             "llm.openai-compatible ready",
@@ -93,6 +97,21 @@ class OpenAILlmBlock(Block):
             model=self._model,
             has_key=bool(self._api_key),
         )
+
+    async def reset(self, session_id: str) -> None:
+        """打断（AL-P1-006）：标记当前 run 为 interrupted 并立即关闭 HTTP 流。
+
+        双保险：aclose() 让阻塞中的 aiter_lines 立刻解脱（抛 StreamError），
+        标记检查让流式循环走可控 break 路径。旧 run 不再产生后续 delta。
+        """
+        if self._active_run_id is not None:
+            self._interrupted_run_ids.add(self._active_run_id)
+        resp = self._active_resp
+        if resp is not None:
+            try:
+                await resp.aclose()
+            except Exception:
+                pass
 
     async def process(self, ctx: BlockContext, event: Event) -> None:
         # 主链路消费 llm.request（Orchestrator 完成 Vision 同轮编排后发出）；
@@ -102,6 +121,9 @@ class OpenAILlmBlock(Block):
 
         user_text = event.payload.get("text", "")
         if not user_text.strip():
+            return
+        # 打断后迟到的 request（旧 run）不再生成——新 run 的 request run_id 不同，不受影响
+        if ctx.run_id is not None and ctx.run_id in self._interrupted_run_ids:
             return
 
         system_prompt = ctx.persona_instructions or str(ctx.config.get("systemPrompt") or "")
@@ -116,6 +138,8 @@ class OpenAILlmBlock(Block):
         full_text = ""
         sentence_buf = ""
         sentence_idx = 0
+        interrupted = False
+        self._active_run_id = ctx.run_id
 
         try:
             async with httpx.AsyncClient(
@@ -136,42 +160,30 @@ class OpenAILlmBlock(Block):
 
                 async with client.stream("POST", "/chat/completions", json=payload) as resp:
                     resp.raise_for_status()
-                    async for line in resp.aiter_lines():
-                        if not line or not line.startswith("data: "):
-                            continue
-                        data = line[6:].strip()
-                        if data == "[DONE]":
-                            break
-                        try:
-                            chunk = json.loads(data)
-                        except json.JSONDecodeError:
-                            continue
-                        delta = _extract_delta(chunk)
-                        if not delta:
-                            continue
+                    self._active_resp = resp
+                    try:
+                        async for line in resp.aiter_lines():
+                            # 打断检查（AL-P1-006）——reset() 已标记本 run
+                            if ctx.run_id is not None and ctx.run_id in self._interrupted_run_ids:
+                                interrupted = True
+                                break
+                            if not line or not line.startswith("data: "):
+                                continue
+                            data = line[6:].strip()
+                            if data == "[DONE]":
+                                break
+                            try:
+                                chunk = json.loads(data)
+                            except json.JSONDecodeError:
+                                continue
+                            delta = _extract_delta(chunk)
+                            if not delta:
+                                continue
 
-                        full_text += delta
-                        sentence_buf += delta
+                            full_text += delta
+                            sentence_buf += delta
 
-                        # 流式 emit 每个 delta
-                        await ctx.emit(
-                            Event(
-                                type=LLM_TEXT_DELTA,
-                                session_id=ctx.session_id,
-                                source="llm.openai-compatible",
-                                run_id=ctx.run_id,
-                                payload={
-                                    "text": delta,
-                                    "sentence_index": sentence_idx,
-                                    "is_sentence_end": False,
-                                },
-                            )
-                        )
-
-                        # 按句切分（sentence 不直接用，TTS 按 sentence_index 累积）
-                        while _has_sentence_end(sentence_buf):
-                            _unused, sentence_buf = _split_sentence(sentence_buf)
-                            sentence_idx += 1
+                            # 流式 emit 每个 delta
                             await ctx.emit(
                                 Event(
                                     type=LLM_TEXT_DELTA,
@@ -179,12 +191,38 @@ class OpenAILlmBlock(Block):
                                     source="llm.openai-compatible",
                                     run_id=ctx.run_id,
                                     payload={
-                                        "text": "",
-                                        "sentence_index": sentence_idx - 1,
-                                        "is_sentence_end": True,
+                                        "text": delta,
+                                        "sentence_index": sentence_idx,
+                                        "is_sentence_end": False,
                                     },
                                 )
                             )
+
+                            # 按句切分（sentence 不直接用，TTS 按 sentence_index 累积）
+                            while _has_sentence_end(sentence_buf):
+                                _unused, sentence_buf = _split_sentence(sentence_buf)
+                                sentence_idx += 1
+                                await ctx.emit(
+                                    Event(
+                                        type=LLM_TEXT_DELTA,
+                                        session_id=ctx.session_id,
+                                        source="llm.openai-compatible",
+                                        run_id=ctx.run_id,
+                                        payload={
+                                            "text": "",
+                                            "sentence_index": sentence_idx - 1,
+                                            "is_sentence_end": True,
+                                        },
+                                    )
+                                )
+                    except httpx.StreamError:
+                        # reset() 里 resp.aclose() 会让 aiter_lines 抛 StreamError
+                        if ctx.run_id is not None and ctx.run_id in self._interrupted_run_ids:
+                            interrupted = True
+                        else:
+                            raise
+                    finally:
+                        self._active_resp = None
 
         except httpx.HTTPStatusError as e:
             await ctx.emit(
@@ -203,6 +241,21 @@ class OpenAILlmBlock(Block):
             raise RuntimeError(
                 f"LLM HTTP error {e.response.status_code}: {e.response.text[:200]}"
             ) from e
+        finally:
+            self._active_run_id = None
+
+        # 被打断：不发句尾剩余，直接以 interrupted 收尾（AL-P1-006）
+        if interrupted:
+            await ctx.emit(
+                Event(
+                    type=LLM_TEXT_DONE,
+                    session_id=ctx.session_id,
+                    source="llm.openai-compatible",
+                    run_id=ctx.run_id,
+                    payload={"full_text": full_text, "finish_reason": "interrupted"},
+                )
+            )
+            return
 
         # 句尾剩余
         if sentence_buf.strip():

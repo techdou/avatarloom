@@ -109,6 +109,12 @@ class VoxCpm2TtsBlock(Block):
             raise BlockSetupError("tts.voxcpm2", f"加载失败: {e}") from e
 
         self._mark_ready()
+        # 按 run 隔离的可变状态（AL-P2-003）+ 打断协作标记（AL-P1-006）。
+        # 必须实例级初始化——类属性 dict/set 会跨实例共享。
+        self._run_id: str | None = None
+        self._cancelled_run_ids: set[str] = set()
+        self._sentence_buffers = {}
+        self._total_samples = 0
         await ctx.logger.ainfo(
             "tts.voxcpm2 ready",
             device=self._device,
@@ -116,7 +122,22 @@ class VoxCpm2TtsBlock(Block):
             streaming=self._streaming,
         )
 
+    def _sync_run_state(self, ctx: BlockContext) -> bool:
+        """按 run 隔离状态；返回 True 表示本 run 已被打断（调用方应直接 return）。
+
+        - run_id 变化（新一轮）→ 清零 total_samples/sentence_buffers（AL-P2-003：
+          此前只在 reset 清零，正常完成一轮后累计到下一轮）
+        - run_id 在 cancelled 集合（打断后旧 run 的迟到事件）→ 丢弃（AL-P1-006）
+        """
+        if ctx.run_id != self._run_id:
+            self._total_samples = 0
+            self._sentence_buffers = {}
+            self._run_id = ctx.run_id
+        return ctx.run_id is not None and ctx.run_id in self._cancelled_run_ids
+
     async def process(self, ctx: BlockContext, event: Event) -> None:
+        if self._sync_run_state(ctx):
+            return
         if event.type == LLM_TEXT_DELTA:
             idx = event.payload.get("sentence_index", 0)
             text = event.payload.get("text", "")
@@ -159,6 +180,10 @@ class VoxCpm2TtsBlock(Block):
         phase = 0  # 跨 chunk 降采样相位（防边界爆音）
         try:
             for wav48 in gen:
+                # 打断检查（AL-P1-006）：同步 generator 无法真取消，
+                # 跳出循环丢弃剩余输出——当前 chunk 推理完即停，不再 emit
+                if ctx.run_id is not None and ctx.run_id in self._cancelled_run_ids:
+                    return
                 # 48k float32 -> 16k int16（线性插值，带 rate 语速补偿 + 相位连续）
                 pcm16, phase = _resample_48k_to_16k(wav48, rate=self._rate, phase=phase)
                 buf16 = np.concatenate([buf16, pcm16])
@@ -205,6 +230,9 @@ class VoxCpm2TtsBlock(Block):
             await ctx.logger.aerror("voxcpm2 stream error", error=str(e))
 
     async def reset(self, session_id: str) -> None:
+        # 标记当前 run 已打断（AL-P1-006）——进行中的推理循环检查后丢弃输出
+        if self._run_id is not None:
+            self._cancelled_run_ids.add(self._run_id)
         self._total_samples = 0
         self._sentence_buffers = {}
 

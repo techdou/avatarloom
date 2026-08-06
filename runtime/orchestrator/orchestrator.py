@@ -697,6 +697,10 @@ class Orchestrator:
            vision.result（成功/失败/截帧报错都唤醒）或超时降级
         3. 发 llm.request 驱动 LLM 生成——LLM 不再直接消费 transcript
         """
+        # 重发副本（re_emitted）防御：副本只应走 sink，若意外进 bus 直接丢弃，
+        # 否则本 handler 会被副本再次触发——start_new_run → 重发 → 无限循环。
+        if event.payload.get("re_emitted"):
+            return
         session = self.sessions.get(event.session_id)
         if session is None:
             return
@@ -707,6 +711,25 @@ class Orchestrator:
 
         # 新一轮 Run——必须在发下游事件之前
         await session.start_new_run()
+        # AL-P1-005：STT 发出的原始 transcript.completed 携带旧 run_id（或 None），
+        # 到达 Recorder 时新 run 尚未建立而被丢弃——用新 run_id 重发一份，
+        # 让 Recorder 落录本轮用户文本、前端事件流正确归属新 run。
+        # 副本只经 sink（Gateway/Recorder/前端），不回灌 bus——
+        # 否则本 handler 会被副本再次触发，无限创建 run（实测卡死）。
+        # re_emitted 标记：handler 防御性丢弃 + 前端去重不重复渲染气泡。
+        if self.event_sink is not None:
+            try:
+                await self.event_sink(
+                    Event(
+                        type=TRANSCRIPT_COMPLETED,
+                        session_id=session.session_id,
+                        source="orchestrator.run",
+                        run_id=session.current_run_id,
+                        payload={**event.payload, "re_emitted": True},
+                    )
+                )
+            except Exception:
+                logger.exception("event_sink error")
         # 状态机驱动用 try_trigger：transcript 在 thinking/speaking 期间到达
         # 属合法边缘（VAD 未捕获 speech_started），不能让状态缺口杀掉回答链路
         new_state = await session.try_trigger("transcript_ready")

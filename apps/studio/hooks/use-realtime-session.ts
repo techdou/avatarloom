@@ -221,10 +221,11 @@ export function useRealtimeSession({
         }
         case "transcript.completed": {
           const text = (msg.payload?.text as string) || "";
-          // reducer 侧：开新一轮 timing 窗口 + 压事件流
+          // AL-P1-005：orchestrator 重发副本只记事件流，不重复渲染气泡、不重锚 t0
+          const reEmitted = msg.payload?.re_emitted === true;
           const summary = summarizeEvent(msg.type, msg.payload) ?? "";
-          dispatch({ kind: "event", type: msg.type, summary, ts });
-          if (text) {
+          dispatch({ kind: "event", type: msg.type, summary, ts, reEmitted });
+          if (!reEmitted && text) {
             setTranscript((prev) => [...prev, { role: "user", text, ts }]);
             setLlmDelta("");
           }
