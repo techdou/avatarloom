@@ -121,6 +121,8 @@ export function useRealtimeSession({
   // 断线重连：intentional 标记主动断开；connectRef 打破 onclose → connect 的自引用
   const reconnectRef = useRef({ attempts: 0, intentional: false, timer: 0 });
   const connectRef = useRef<(() => Promise<void>) | null>(null);
+  // 心跳定时器（AL-P2-007）
+  const pingTimerRef = useRef(0);
 
   // 最新 profile/persona，避免 connect 闭包陈旧
   const profileRef = useRef(profileId);
@@ -375,6 +377,13 @@ export function useRealtimeSession({
           },
         })
       );
+      // 心跳保活（AL-P2-007）：20s ping，防 gateway 90s idle 判定半开连接
+      window.clearInterval(pingTimerRef.current);
+      pingTimerRef.current = window.setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "ping" }));
+        }
+      }, 20000);
     };
     ws.onmessage = (ev) => {
       if (typeof ev.data === "string") {
@@ -392,6 +401,7 @@ export function useRealtimeSession({
       setError("WebSocket 连接失败——确认 Runtime Gateway 已启动（端口 8101）");
     };
     ws.onclose = () => {
+      window.clearInterval(pingTimerRef.current);
       setConn("disconnected");
       dispatch({ kind: "disconnected" });
       setMicActive(false);
@@ -413,9 +423,10 @@ export function useRealtimeSession({
   }, [connect]);
 
   const disconnect = useCallback(() => {
-    // 主动断开：取消挂起的自动重连
+    // 主动断开：取消挂起的自动重连 + 停心跳
     reconnectRef.current.intentional = true;
     window.clearTimeout(reconnectRef.current.timer);
+    window.clearInterval(pingTimerRef.current);
     recorderRef.current?.stop();
     recorderRef.current = null;
     setMicActive(false);
@@ -478,6 +489,7 @@ export function useRealtimeSession({
   useEffect(() => {
     return () => {
       window.clearTimeout(reconnectRef.current.timer);
+      window.clearInterval(pingTimerRef.current);
       recorderRef.current?.stop();
       playerRef.current?.close();
       wsRef.current?.close();

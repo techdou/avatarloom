@@ -77,6 +77,24 @@ def _mock_profile_config() -> OrchestratorConfig:
     )
 
 
+# ------------------------------------------------------------------
+# 模块级 helper
+# ------------------------------------------------------------------
+
+
+def _put_drop_oldest(q: asyncio.Queue[bytes], item: bytes) -> None:
+    """非阻塞入队；队满丢最旧（音频跳段/视频跳帧，绝不反压事件出口）。"""
+    if q.full():
+        try:
+            q.get_nowait()
+        except asyncio.QueueEmpty:
+            pass
+    try:
+        q.put_nowait(item)
+    except asyncio.QueueFull:
+        pass
+
+
 class WebSocketSession:
     """单浏览器连接的 WS 会话。"""
 
@@ -86,19 +104,34 @@ class WebSocketSession:
         self.orchestrator: Orchestrator | None = None
         self.session: Session | None = None
         self.recorder: RunRecorder | None = None
-        self._downlink_queue: asyncio.Queue[dict[str, Any] | bytes] = asyncio.Queue(maxsize=512)
+        # 下行三队列（AL-P2-006）：控制 / 音频 / 视频分离——
+        # 此前单队列混排，队满无差别丢最旧，error/response.done 也会被丢；
+        # 且 TTS/Avatar 阻塞 put 让慢客户端反压整个 Orchestrator 事件出口。
+        self._control_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=512)
+        # TTS PCM：32ms/块，64 块 ≈ 2s 缓冲；队满丢最旧（音频可跳段）
+        self._audio_queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=64)
+        # Avatar 帧：25fps，32 帧 ≈ 1.3s 缓冲；队满丢最旧（视频可跳帧）
+        self._video_queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=32)
         self._downlink_task: asyncio.Task[None] | None = None
         self._closed = False
         self._warned_unknown_tag = False
 
     async def run(self) -> None:
-        """主循环：接收上行消息，处理控制 + 音频。"""
+        """主循环：接收上行消息，处理控制 + 音频。
+
+        90s idle 超时（AL-P2-007）：半开连接（断网未发 FIN）不再永久悬挂——
+        前端 20s ping 保活，正常连接不会触发；超时主动断开走 cleanup。
+        """
         # 启动下行发送任务
         self._downlink_task = asyncio.create_task(self._downlink_sender())
 
         try:
             while not self._closed:
-                msg = await self.ws.receive()
+                try:
+                    msg = await asyncio.wait_for(self.ws.receive(), timeout=90)
+                except TimeoutError:
+                    logger.info("ws idle timeout (90s)——主动断开半开连接")
+                    break
                 if msg["type"] == "websocket.disconnect":
                     break
                 if "text" in msg and msg["text"] is not None:
@@ -268,11 +301,28 @@ class WebSocketSession:
         await self.cleanup()
 
     async def _set_persona(self, persona_id: str | None) -> None:
-        """切换 Persona。v0.1 简化：只 emit persona.changed，实际切换在阶段 7 完善。"""
-        if not self.session:
+        """切换 Persona（AL-P1-004）：加载并调用 orchestrator.switch_persona()。
+
+        此前只改 session.persona_id 就发 persona.changed——假切换：
+        LLM prompt / TTS voice ref / Avatar portrait / memory namespace 都不同步。
+        现在真切换成功才发 changed；加载/切换失败回明确 error。
+        """
+        if not self.session or not self.orchestrator:
+            await self._send_error("persona.set 需要先建立会话（session.start）")
             return
-        if persona_id:
-            self.session.persona_id = persona_id
+        if not persona_id:
+            await self._send_error("persona.set 缺少 persona_id")
+            return
+        try:
+            from blocks.persona.loader import load_persona
+
+            workspace = Path(self.settings.workspace_root)
+            persona = load_persona(workspace / "personas" / persona_id, workspace_root=str(workspace))
+            await self.orchestrator.switch_persona(self.session, persona)
+        except Exception as e:
+            logger.warning("persona.set %s failed: %s", persona_id, e)
+            await self._send_error(f"persona 切换失败（{persona_id}）：{e}")
+            return
         await self._enqueue_json(
             {
                 "type": "persona.changed",
@@ -351,11 +401,11 @@ class WebSocketSession:
             if pcm_b64:
                 try:
                     pcm = base64.b64decode(pcm_b64)
-                    # 下行格式：0x03 + PCM
-                    await self._downlink_queue.put(bytes([TAG_TTS_PCM_DOWNLINK]) + pcm)
+                    # 下行格式：0x03 + PCM；音频队列非阻塞丢最旧（不反压事件出口）
+                    _put_drop_oldest(self._audio_queue, bytes([TAG_TTS_PCM_DOWNLINK]) + pcm)
                 except Exception:
                     pass
-            # 元数据（不含 pcm_b64，减小 JSON 体积）
+            # 元数据（不含 pcm_b64，减小 JSON 体积）——控制队列，不丢
             meta = {k: v for k, v in event.payload.items() if k != "pcm_b64"}
             await self._enqueue_json({"type": "tts.audio.delta", "payload": meta})
 
@@ -373,43 +423,66 @@ class WebSocketSession:
             if frame_b64:
                 try:
                     jpeg = base64.b64decode(frame_b64)
-                    # 下行格式：0x01 + 0x00/0x01(子tag) + JPEG
+                    # 下行格式：0x01 + 0x00/0x01(子tag) + JPEG；视频队列丢最旧
                     sub_tag = 0x01 if event.type == AVATAR_SPEECH_FRAME else 0x00
-                    await self._downlink_queue.put(bytes([TAG_AVATAR_JPEG, sub_tag]) + jpeg)
+                    _put_drop_oldest(self._video_queue, bytes([TAG_AVATAR_JPEG, sub_tag]) + jpeg)
                 except Exception:
                     pass
 
     async def _downlink_sender(self) -> None:
-        """独立任务：从队列取消息发送，避免阻塞 Orchestrator。"""
+        """独立任务：三队列优先级调度发送（控制 > 音频 > 视频）。
+
+        每轮从 control 开始轮询，发一条即重排——控制事件绝对优先；
+        全空时 5ms 短睡眠（25fps 帧间隔 40ms，无感）。避免阻塞 Orchestrator。
+        """
         try:
             while not self._closed:
-                msg = await self._downlink_queue.get()
-                if self.ws.client_state != WebSocketState.CONNECTED:
-                    break
+                sent = False
+                # 控制队列（JSON）
                 try:
-                    if isinstance(msg, bytes):
-                        await self.ws.send_bytes(msg)
-                    else:
-                        import json
+                    data = self._control_queue.get_nowait()
+                    if self.ws.client_state != WebSocketState.CONNECTED:
+                        break
+                    import json
 
-                        await self.ws.send_text(json.dumps(msg, ensure_ascii=False))
-                except Exception:
-                    logger.exception("downlink send error")
-                    break
-        except asyncio.CancelledError:
-            pass
-
-    async def _enqueue_json(self, data: dict[str, Any]) -> None:
-        """入队 JSON 下行消息。队满丢最旧。"""
-        try:
-            if self._downlink_queue.full():
-                try:
-                    self._downlink_queue.get_nowait()
+                    await self.ws.send_text(json.dumps(data, ensure_ascii=False))
+                    sent = True
                 except asyncio.QueueEmpty:
                     pass
-            self._downlink_queue.put_nowait(data)
-        except asyncio.QueueFull:
+                # 音频队列
+                if not sent:
+                    try:
+                        data = self._audio_queue.get_nowait()
+                        if self.ws.client_state != WebSocketState.CONNECTED:
+                            break
+                        await self.ws.send_bytes(data)
+                        sent = True
+                    except asyncio.QueueEmpty:
+                        pass
+                # 视频队列
+                if not sent:
+                    try:
+                        data = self._video_queue.get_nowait()
+                        if self.ws.client_state != WebSocketState.CONNECTED:
+                            break
+                        await self.ws.send_bytes(data)
+                        sent = True
+                    except asyncio.QueueEmpty:
+                        pass
+                if not sent:
+                    await asyncio.sleep(0.005)
+        except asyncio.CancelledError:
             pass
+        except Exception:
+            logger.exception("downlink send error")
+
+    async def _enqueue_json(self, data: dict[str, Any]) -> None:
+        """入队 JSON 控制消息——不丢（AL-P2-006）。
+
+        控制事件量小（状态/错误/边界），512 深度几乎不会满；
+        真满说明客户端已不消费——await 反压比静默丢 error/response.done 安全。
+        """
+        await self._control_queue.put(data)
 
     async def _send_error(self, message: str) -> None:
         await self._enqueue_json({"type": "error", "payload": {"message": message}})
