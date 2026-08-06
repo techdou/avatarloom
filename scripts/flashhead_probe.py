@@ -86,7 +86,13 @@ async def main() -> int:
         try:
             async for message in ws:
                 if isinstance(message, (bytes, bytearray)):
-                    (frame_dir / f"{frames:05d}.jpg").write_bytes(bytes(message))
+                    data = bytes(message)
+                    # 服务下行协议：首字节 tag（0x00=idle / 0x01=speech）+ JPEG
+                    if data and data[0] in (0x00, 0x01):
+                        data = data[1:]
+                    if not data:
+                        continue
+                    (frame_dir / f"{frames:05d}.jpg").write_bytes(data)
                     frames += 1
                     if frames % 25 == 0:
                         print(f"    frames={frames}", flush=True)
