@@ -181,14 +181,18 @@ class SileroVadBlock(Block):
             onnx=False,
         )
         model.to(device)
-        # 探测 forward 签名：不同版本 (x, sr) 或 (x, sr, h)，决定调用方式
-        import inspect
+        # 试跑探测 forward 签名：JIT 模型 inspect 拿不到真实签名（返回含 self 的
+        # 占位参数），只能用静音 chunk 试调用判断是 (x, sr) 还是 (x, sr, h)。
+        # 用 try/except TypeError 区分——JIT 版本缺参/多参都会抛 RuntimeError。
+        import torch as _t
 
+        probe = _t.zeros(1, 512)
         try:
-            sig = inspect.signature(model.forward)
-            self._forward_has_state = len(sig.parameters) >= 3
-        except (ValueError, TypeError):
-            self._forward_has_state = True  # 保守：假设带 state
+            with _t.no_grad():
+                model(probe, _SAMPLE_RATE)  # 2 参：新版 JIT（状态内部管理）
+            self._forward_has_state = False
+        except Exception:
+            self._forward_has_state = True  # 3 参：旧版（返回 (out, h)）
         return model, utils
 
     def _infer(self, chunk: np.ndarray, h: Any) -> tuple[float, Any]:
