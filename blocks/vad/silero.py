@@ -42,6 +42,7 @@ class SileroVadBlock(Block):
     _min_silence_samples: int = 0
     _model: Any = None  # torch.jit.ScriptModule，运行时加载
     _h: Any = None  # LSTM hidden state
+    _forward_has_state: bool = True  # 探测 forward 签名（见 _load_model）
     _is_speaking: bool = False
     _silence_count: int = 0
 
@@ -180,17 +181,31 @@ class SileroVadBlock(Block):
             onnx=False,
         )
         model.to(device)
+        # 探测 forward 签名：不同版本 (x, sr) 或 (x, sr, h)，决定调用方式
+        import inspect
+
+        try:
+            sig = inspect.signature(model.forward)
+            self._forward_has_state = len(sig.parameters) >= 3
+        except (ValueError, TypeError):
+            self._forward_has_state = True  # 保守：假设带 state
         return model, utils
 
     def _infer(self, chunk: np.ndarray, h: Any) -> tuple[float, Any]:
         """单次推理。返回 (prob, new_hidden_state)。
 
-        Silero VAD 的 forward 签名是 (x, sr, h)——新版模型 sr 必须显式传，
-        否则 torch 2.8+ 报 "Expected value of type 'int' for argument 'sr'"。
+        Silero VAD 的 forward 签名随版本而异：
+        - 旧版/官方 torch 版：forward(x, sr, h) → (out, h)
+        - 新版（JIT merge）：forward(x, sr) → out（状态内部管理）
+        加载时探测签名，按版本调用。
         """
         import torch
 
         t = torch.from_numpy(chunk).unsqueeze(0)
         with torch.no_grad():
-            out, h = self._model(t, _SAMPLE_RATE, h)
+            if self._forward_has_state:
+                out, h = self._model(t, _SAMPLE_RATE, h)
+            else:
+                out = self._model(t, _SAMPLE_RATE)
+                h = None  # 状态由模型内部管理，外部无需维护
         return float(out.item()), h
