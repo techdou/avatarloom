@@ -73,18 +73,21 @@ client 组件      ──fetch("/api/control/*")──> Next rewrites ──> :8
 
 ```
 useRealtimeSession
-  ├─ 上行 JSON：session.start / session.stop / audio.interrupt
-  ├─ 上行二进制：裸 PCM16（麦克风，16kHz int16）｜ 0x02+JPEG（摄像头截帧）
-  ├─ 下行 JSON：session.started / session.state_changed / transcript.completed /
-  │             run.started / llm.text.delta / llm.text.done / tts.audio.delta(meta) /
+  ├─ 上行 JSON：session.start / session.stop / audio.interrupt / ping(20s) /
+  │             vision.frame_error（截帧失败立即降级）
+  ├─ 上行二进制：0x00+PCM16（麦克风，显式 tag，AL-P1-001）｜ 0x02+JPEG（摄像头截帧）
+  ├─ 下行 JSON：session.started / session.state_changed / transcript.completed
+  │             （含 orchestrator 重发副本 re_emitted，AL-P1-005）/ run.started /
+  │             llm.text.delta / llm.text.done / tts.audio.delta(meta) /
   │             tts.audio.completed / response.done / vision.request / vision.result /
   │             avatar.video.ready / persona.changed / error / pong
   └─ 下行二进制：0x03+PCM16（TTS 音频）｜ 0x01+subtag+JPEG（Avatar 帧，subtag 0x01=speech）
 ```
 
 - 音频是**主时钟**：`PcmPlayer` 用 `AudioContext.currentTime` 调度，`AVMux` 按音频播放位置消费视频帧（对齐 VoxEMW，见 docs/02）。
-- WS URL 推导优先级：`?wsPort=` 参数 > `NEXT_PUBLIC_WS_PORT` env > 隧道推导（页面端口>10000 时 +5101）> 默认 8101。
-- 已知协议债：上行裸 PCM 与 `0x02` 存在首字节歧义（AL-P1-001，后端批次处理，前端届时同步）。
+- WS URL 推导优先级：`?wsPort=` 参数 > `NEXT_PUBLIC_WS_PORT` env > 隧道推导（页面端口>10000 时 +5101）> 默认 8101；https 页面自动 `wss://`（AL-P2-005）。
+- 下行通道（Gateway 侧，AL-P2-006）：control/audio/video 三队列，控制不丢、媒体丢最旧；心跳 20s ping + gateway 90s idle 断开（AL-P2-007）。
+- 帧构造纯函数在 `lib/frames.ts`（`buildPcmUplinkFrame` / `buildCameraUplinkFrame`，配协议单测）。
 
 ---
 
@@ -211,7 +214,7 @@ PlaygroundClient          orchestration only（状态接线，无视觉细节）
 | 文档 | 关系 |
 |---|---|
 | `docs/08-studio-ui-spec.md` | 视觉规格（色值/组件状态/逐页清单）。本文生效后，08 的 P0 批（令牌收尾、EmptyState/ErrorBanner、page-header 统一）视为已实施；P1-1 状态机重构以本文 §3 为准（分组而非全量 useReducer）。 |
-| `docs/02-事件协议状态机与音画同步.md` | WS 协议与音画同步的权威定义，本文 §2.2 是它的前端投影。 |
+| `docs/02-事件协议状态机与音画同步.md` | WS 协议与音画同步的权威定义（含浏览器↔Gateway 通道协议章节，AL-P1-001 后已补录），本文 §2.2 是它的前端投影。 |
 | `docs/10-handover-maintenance-next-agent.md` | 后端协议债（AL-P1-001/002）修复时，前端需同步：上行 PCM 加 0x00 tag、vision 结果区分工具消息与正式回复。 |
 
 ---
