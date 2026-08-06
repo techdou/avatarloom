@@ -41,7 +41,7 @@ from avatarloom_protocol import (  # noqa: E402
 from runtime.orchestrator import Orchestrator  # noqa: E402
 from runtime.orchestrator.profile_loader import load_profile  # noqa: E402
 
-OUT_ROOT = Path("/root/autodl-tmp/avatarloom/runs/e2e-real")
+OUT_ROOT = Path(os.environ.get("E2E_OUT_DIR", "/root/autodl-tmp/avatarloom/runs/e2e-real"))
 
 
 def _wav_bytes_16k(pcm16: bytes, sr: int = 16000) -> bytes:
@@ -135,6 +135,8 @@ async def main() -> int:
     print(f"[1] profile={config.profile_id} blocks={list(config.blocks)}")
 
     events: list[tuple[float, Event]] = []
+    # 首事件时刻（相对 t_start 秒）——落盘到 manifest.metrics.first_event_ts
+    first_event_ts: dict[str, float] = {}
 
     async def sink(e: Event) -> None:
         events.append((time.perf_counter() - t_start, e))
@@ -177,6 +179,9 @@ async def main() -> int:
     tts_pcm = bytearray()
     frames: list[bytes] = []
     last_heartbeat = time.perf_counter()
+    # 消费游标：AL-E2E-001 修复——每轮 poll 只处理新增事件，
+    # 此前全量重扫导致 TTS PCM / Avatar 帧被重复累计，音频时长与帧数全部失真。
+    cursor = 0
     while time.perf_counter() < deadline and not (got["tts_done"] and got["avatar"]):
         now = time.perf_counter()
         if now - last_heartbeat >= 30:
@@ -193,28 +198,37 @@ async def main() -> int:
                 flush=True,
             )
         await asyncio.sleep(0.2)
-        for dt, e in events:
+        new_events = events[cursor:]
+        cursor = len(events)
+        for dt, e in new_events:
             if e.type == TRANSCRIPT_COMPLETED and not got["transcript"]:
                 transcript_text = e.payload.get("text", "")
                 got["transcript"] = True
+                first_event_ts["transcript"] = dt
                 print(f"    [event] transcript @{dt:.2f}s: {transcript_text!r}")
             elif e.type == LLM_TEXT_DELTA and not got["llm_delta"]:
                 got["llm_delta"] = True
+                first_event_ts["first_llm_delta"] = dt
                 print(f"    [event] first llm delta @{dt:.2f}s: {e.payload.get('text', '')!r}")
             elif e.type == LLM_TEXT_DONE:
                 llm_full = e.payload.get("full_text", llm_full)
             elif e.type == TTS_AUDIO_DELTA and not got["tts_delta"]:
                 got["tts_delta"] = True
+                first_event_ts["first_tts_delta"] = dt
                 print(f"    [event] first tts delta @{dt:.2f}s")
             if e.type == TTS_AUDIO_DELTA:
                 tts_pcm += base64.b64decode(e.payload.get("pcm_b64", ""))
             elif e.type == TTS_AUDIO_COMPLETED:
                 got["tts_done"] = True
+                first_event_ts["tts_completed"] = dt
                 print(f"    [event] tts completed @{dt:.2f}s")
             elif e.type == AVATAR_SPEECH_FRAME and not got["avatar"]:
                 got["avatar"] = True
+                first_event_ts["first_avatar_frame"] = dt
                 print(f"    [event] first avatar frame @{dt:.2f}s")
             elif e.type == AVATAR_VIDEO_READY:
+                if not got["video"]:
+                    first_event_ts["video_ready"] = dt
                 got["video"] = True
                 video_path = e.payload.get("video_path", "")
                 print(
@@ -227,18 +241,29 @@ async def main() -> int:
 
     # 真口型视频是异步渲染的——给 avatar.video.ready 留出渲染时间
     if got["tts_done"] and not got["video"]:
-        if is_flashhead:
-            # FlashHead 是流式帧驱动：帧即视频，无需 reply 级 mp4
-            print("[6.5] flashhead streaming: frames == video")
+        # 只有真实渲染型 avatar（musetalk）才产出 reply 级 mp4；
+        # flashhead 流式帧即视频，mock/static 无渲染概念——跳过等待，
+        # 否则 mock 链路本地验证会在此处空等 720s。
+        avatar_block_id = ""
+        try:
+            avatar_block_id = orch.blocks["avatar"].manifest().block_id if "avatar" in orch.blocks else ""
+        except Exception:
+            pass
+        if is_flashhead or avatar_block_id in ("avatar.mock", "avatar.static"):
+            print(f"[6.5] {avatar_block_id or 'flashhead'}: frames == video (no reply mp4)")
             got["video"] = True
         else:
             video_deadline = time.perf_counter() + 720
             print("[6.5] waiting for avatar video render ...")
             while time.perf_counter() < video_deadline and not got["video"]:
                 await asyncio.sleep(0.2)
-                for dt, e in events:
+                # 复用主循环游标续扫——同样只处理新增事件
+                new_events = events[cursor:]
+                cursor = len(events)
+                for dt, e in new_events:
                     if e.type == AVATAR_VIDEO_READY:
                         got["video"] = True
+                        first_event_ts["video_ready"] = dt
                         video_path = e.payload.get("video_path", "")
                         print(
                             f"    [event] avatar video ready @{dt:.2f}s "
@@ -252,10 +277,18 @@ async def main() -> int:
     tts_wav.write_bytes(_wav_bytes_16k(bytes(tts_pcm)))
     (out_dir / "transcript.txt").write_text(transcript_text, encoding="utf-8")
     (out_dir / "llm_reply.txt").write_text(llm_full, encoding="utf-8")
+    # 事件类型分布（验收诊断：定位链路卡点）
+    from collections import Counter
+
+    event_type_counts = dict(Counter(e.type for _, e in events).most_common())
+
     manifest = {
         "ts": ts,
         "profile": config.profile_id,
         "session_id": session.session_id,
+        # AL-E2E-002：fallback 必须显式记录——输出 PASS 不等于目标真实 Block 成功
+        "ready_blocks": _ready_block_ids(orch),
+        "degraded_blocks": dict(orch.degraded_blocks),
         "inputs": {
             "user_wav": str(user_wav),
             "portrait": portrait,
@@ -267,11 +300,14 @@ async def main() -> int:
         "transcript": transcript_text,
         "llm_reply": llm_full,
         "events": {k: bool(v) for k, v in got.items()},
+        "event_type_counts": event_type_counts,
         "metrics": {
             "total_e2e_s": round(e2e, 3),
             "tts_audio_seconds": round(len(tts_pcm) / 2 / 16000, 3),
             "frames": len(frames),
+            "first_event_ts": {k: round(v, 3) for k, v in first_event_ts.items()},
         },
+        "gpu": _gpu_snapshot(),
         "outputs": {"tts_wav": str(tts_wav)},
     }
 
@@ -324,6 +360,43 @@ async def main() -> int:
     print(f"E2E total: {e2e:.2f}s | TTS audio: {len(tts_pcm) / 2 / 16000:.2f}s | frames: {len(frames)}")
     print(f"OUTPUTS: {out_dir}")
     return 0 if ok else 1
+
+
+def _ready_block_ids(orch: Orchestrator) -> dict[str, str]:
+    """实际就绪的 block id 清单（fallback 后是降级 block 的 id）。"""
+    ids: dict[str, str] = {}
+    for cat, blk in orch.blocks.items():
+        try:
+            ids[cat] = blk.manifest().block_id
+        except Exception:
+            ids[cat] = type(blk).__name__
+    return ids
+
+
+def _gpu_snapshot() -> dict[str, str]:
+    """GPU/VRAM 快照（nvidia-smi 存在时）。本地无 GPU 返回空 dict。"""
+    try:
+        r = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=name,memory.total,memory.used,driver_version",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if r.returncode != 0:
+            return {}
+        name, total, used, driver = [x.strip() for x in r.stdout.strip().splitlines()[0].split(",")]
+        return {
+            "name": name,
+            "vram_total_mb": total,
+            "vram_used_mb": used,
+            "driver": driver,
+        }
+    except Exception:
+        return {}
 
 
 if __name__ == "__main__":

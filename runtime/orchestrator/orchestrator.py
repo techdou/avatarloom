@@ -429,8 +429,25 @@ class Orchestrator:
         block_id: str,
         config: dict[str, Any],
         block_ref: Any,
+        _visited: frozenset[str] = frozenset(),
     ) -> None:
-        """装配单个 Block。失败时按 fallback 降级或 optional 跳过。"""
+        """装配单个 Block。失败时按 fallback 降级或 optional 跳过。
+
+        _visited 防 fallback 链自指/成环：flashhead→musetalk 失败后，
+        musetalk 再失败会用同一 block_ref.fallback 无限递归（真实发生过的隐患）。
+        """
+        if block_id in _visited:
+            if block_ref.optional:
+                logger.info("optional block %s fallback cycle, skipping", block_id)
+                return
+            raise BlockSetupError(
+                block_id=block_id,
+                message=(
+                    f"fallback 链成环：{' -> '.join(sorted(_visited | {block_id}))}。"
+                    "检查 profile 中 fallback 配置。"
+                ),
+            )
+        visited = _visited | {block_id}
         entrypoint = BLOCK_REGISTRY.get(block_id)
         if entrypoint is None:
             # 与下方 setup 失败处理保持一致：fallback 降级 / optional 跳过 / 否则报错
@@ -440,7 +457,7 @@ class Orchestrator:
                     block_id,
                     block_ref.fallback,
                 )
-                await self._setup_block(category, block_ref.fallback, config, block_ref)
+                await self._setup_block(category, block_ref.fallback, config, block_ref, visited)
                 self.degraded_blocks[category] = block_ref.fallback
                 return
             if block_ref.optional:
@@ -461,7 +478,7 @@ class Orchestrator:
         except BlockSetupError as e:
             logger.warning("block %s setup import failed: %s", block_id, e)
             if block_ref.fallback:
-                await self._setup_block(category, block_ref.fallback, config, block_ref)
+                await self._setup_block(category, block_ref.fallback, config, block_ref, visited)
                 self.degraded_blocks[category] = block_ref.fallback
                 return
             if block_ref.optional:
@@ -488,7 +505,7 @@ class Orchestrator:
             logger.exception("block %s setup failed", block_id)
             if block_ref.fallback:
                 logger.info("degrading %s -> %s", block_id, block_ref.fallback)
-                await self._setup_block(category, block_ref.fallback, config, block_ref)
+                await self._setup_block(category, block_ref.fallback, config, block_ref, visited)
                 self.degraded_blocks[category] = block_ref.fallback
                 return
             if block_ref.optional:
