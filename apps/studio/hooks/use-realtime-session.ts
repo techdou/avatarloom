@@ -260,7 +260,9 @@ export function useRealtimeSession({
     const tag = view[0];
 
     if (tag === 0x03) {
-      const pcm = new Int16Array(data, 2);
+      const pcmBytes = data.slice(1);
+      if (pcmBytes.byteLength % 2 !== 0) return;
+      const pcm = new Int16Array(pcmBytes);
       playerRef.current?.enqueue(pcm);
       setPlaying(true);
       setDebugInfo((d) => ({ ...d, audioChunks: d.audioChunks + 1 }));
