@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import "./globals.css";
-import { AppShell } from "@/components/layout/app-shell";
 import { QueryProvider } from "@/components/layout/query-provider";
 import { ToastProvider } from "@/components/ui/toast";
 
@@ -22,6 +21,11 @@ const themeInitScript = `
 })();
 `;
 
+/**
+ * Root layout——只承载全局 providers。
+ * AppShell（sidebar + 全屏路由判断）放在 (studio)/layout.tsx 里，
+ * 让 /show 等独立演示路由可以脱离 sidebar 渲染。
+ */
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="zh-CN" suppressHydrationWarning>
@@ -30,9 +34,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body>
         <QueryProvider>
-          <ToastProvider>
-            <AppShell>{children}</AppShell>
-          </ToastProvider>
+          <ToastProvider>{children}</ToastProvider>
         </QueryProvider>
       </body>
     </html>

@@ -1,3 +1,4 @@
+// TODO: P5 - Blocks API Explorer
 import { apiFetch, type BlockDefinition } from "@/lib/api";
 
 export default async function BlocksPage() {

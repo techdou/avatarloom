@@ -4,41 +4,32 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { clsx } from "clsx";
 import {
-  LayoutDashboard,
   MessageSquare,
   SlidersHorizontal,
   UserCircle2,
   Image as ImageIcon,
-  Blocks,
   History,
-  ListChecks,
   Settings,
 } from "lucide-react";
 import { ThemeToggle } from "./theme-toggle";
 
 type NavItem = { href: string; label: string; icon: React.ReactNode };
 
+// 对话优先信息架构：对话为主，配置/记录降级为管理组。
+// dashboard/blocks/sessions 不再出现在主导航。
 const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
   {
-    label: "工作台",
+    label: "对话",
     items: [
-      { href: "/dashboard", label: "总览", icon: <LayoutDashboard className="w-4 h-4 shrink-0" /> },
       { href: "/playground", label: "实时对话", icon: <MessageSquare className="w-4 h-4 shrink-0" /> },
     ],
   },
   {
-    label: "配置",
+    label: "管理",
     items: [
       { href: "/profiles", label: "运行时配置", icon: <SlidersHorizontal className="w-4 h-4 shrink-0" /> },
       { href: "/personas", label: "人设", icon: <UserCircle2 className="w-4 h-4 shrink-0" /> },
       { href: "/avatars", label: "数字人形象", icon: <ImageIcon className="w-4 h-4 shrink-0" /> },
-      { href: "/blocks", label: "模块注册表", icon: <Blocks className="w-4 h-4 shrink-0" /> },
-    ],
-  },
-  {
-    label: "运行",
-    items: [
-      { href: "/sessions", label: "会话", icon: <ListChecks className="w-4 h-4 shrink-0" /> },
       { href: "/runs", label: "运行记录", icon: <History className="w-4 h-4 shrink-0" /> },
       { href: "/settings", label: "设置", icon: <Settings className="w-4 h-4 shrink-0" /> },
     ],
@@ -51,8 +42,8 @@ export function Sidebar() {
   return (
     <aside className="w-60 shrink-0 border-r border-border bg-bg-subtle min-h-screen flex flex-col dark:bg-[#131318] dark:border-border">
       <div className="px-5 py-4 border-b border-border dark:border-border">
-        <Link href="/dashboard" className="flex items-center gap-2.5 group">
-          <div className="w-8 h-8 rounded-lg bg-accent text-white flex items-center justify-center shadow-accent">
+        <Link href="/playground" className="flex items-center gap-2.5 group">
+          <div className="w-8 h-8 rounded-lg bg-accent text-white flex items-center justify-center">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4.5 h-4.5">
               <path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z" strokeLinejoin="round" />
               <path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4" strokeLinecap="round" />
@@ -85,7 +76,6 @@ export function Sidebar() {
                   >
                     {item.icon}
                     <span>{item.label}</span>
-                    {active && <span className="ml-auto w-1.5 h-1.5 rounded-full bg-accent" />}
                   </Link>
                 );
               })}

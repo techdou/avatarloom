@@ -11,10 +11,16 @@ import { ThemeToggle } from "./theme-toggle";
  * - md 以上：固定 240px sidebar（保持原视觉）
  * - md 以下：顶栏汉堡按钮 + 抽屉（drawer）覆盖
  * 抽屉状态由本组件持有；路由变化后自动关闭。
+ *
+ * 全屏路由（/playground、/show）main 区域不加 max-w/padding，让 Playground 占满视口；
+ * 其他路由维持 max-w-7xl p-4 md:p-6 容器。
  */
+const FULLSCREEN_ROUTES = ["/playground", "/show"];
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const pathname = usePathname();
+  const fullscreen = FULLSCREEN_ROUTES.some((p) => pathname?.startsWith(p));
 
   // 路由变化后关闭抽屉（移动端点完导航项自动收起）
   useEffect(() => {
@@ -53,7 +59,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       {drawerOpen && (
         <div className="md:hidden fixed inset-0 z-50">
           <div
-            className="absolute inset-0 bg-black/40 backdrop-blur-[1px]"
+            className="absolute inset-0 bg-black/40"
             onClick={() => setDrawerOpen(false)}
             aria-hidden
           />
@@ -72,13 +78,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       )}
 
       <div className="flex-1 min-w-0 flex flex-col">
-        {/* 移动端顶栏：仅在 md 以下出现 */}
+        {/* 移动端顶栏：仅在 md 以下出现。全屏路由（/show 无 AppShell；/playground 保留入口） */}
         <header className="md:hidden sticky top-0 z-30 flex items-center justify-between gap-3 px-4 h-14 border-b border-border bg-white/90 backdrop-blur supports-[backdrop-filter]:bg-white/70 dark:bg-bg-subtle/90 dark:border-border">
           <button
             type="button"
             onClick={() => setDrawerOpen(true)}
             aria-label="打开菜单"
-            className="inline-flex items-center justify-center w-9 h-9 rounded-md border border-border text-fg-muted hover:text-fg hover:bg-border/40 transition-colors dark:border-border"
+            className="inline-flex items-center justify-center w-10 h-10 rounded-md border border-border text-fg-muted hover:text-fg hover:bg-border/40 transition-colors dark:border-border"
           >
             <Menu className="w-5 h-5" />
           </button>
@@ -87,7 +93,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </header>
 
         <main className="flex-1 overflow-auto">
-          <div className="mx-auto max-w-7xl p-4 md:p-6">{children}</div>
+          {fullscreen ? (
+            children
+          ) : (
+            <div className="mx-auto max-w-7xl p-4 md:p-6">{children}</div>
+          )}
         </main>
       </div>
     </div>

@@ -36,7 +36,7 @@
            dark:bg-bg-subtle dark:border-border dark:hover:bg-border/40;
   }
   .btn-primary {
-    @apply bg-accent text-white border-accent shadow-accent hover:bg-accent-hover
+    @apply bg-accent text-white border-accent hover:bg-accent-hover
            dark:border-accent dark:hover:bg-accent-hover;
   }
   .btn-ghost {
