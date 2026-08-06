@@ -1,9 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { MicrophoneRecorder } from "@/lib/audio/recorder";
 import { PcmPlayer } from "@/lib/audio/player";
 import { AVMux, type AvatarFrame } from "@/lib/audio/sync";
+import {
+  sessionRuntimeReducer,
+  summarizeEvent,
+  INITIAL_RUNTIME,
+  type RoundTiming,
+  type SessionEvent,
+} from "@/lib/events";
 
 export type ConnState = "disconnected" | "connecting" | "connected" | "error";
 
@@ -24,17 +31,8 @@ export interface TranscriptItem {
   ts: number;
 }
 
-/** 关键里程碑时间戳（相对 session 开始）。debug drawer / showcase 字幕用。 */
-export interface SessionTiming {
-  /** transcript.completed 时刻（用户说完）。作为 t0 基准。 */
-  transcriptTs: number | null;
-  /** llm.text.delta 首次时刻 */
-  firstDeltaTs: number | null;
-  /** 首个二进制 PCM（0x03）时刻 */
-  firstPcmTs: number | null;
-  /** 首个二进制 JPEG（0x01）时刻 */
-  firstFrameTs: number | null;
-}
+/** 关键里程碑时间戳（相对本轮 t0 = transcript.completed）。类型沿用旧名以兼容渲染层。 */
+export type SessionTiming = RoundTiming;
 
 export interface DebugInfo {
   framesShown: number;
@@ -62,6 +60,10 @@ export interface RealtimeSession {
   error: string | null;
   debugInfo: DebugInfo;
   timing: SessionTiming;
+  /** 下行 JSON 事件滚动记录（ring buffer 200 条）——调试面板事件流数据源。 */
+  events: SessionEvent[];
+  /** 最近一次 run.started 时刻（payload 不带 run_id，仅作展示锚点）。 */
+  lastRunAt: number | null;
   connect: () => Promise<void>;
   disconnect: () => void;
   toggleMic: () => Promise<void>;
@@ -74,8 +76,13 @@ export interface RealtimeSession {
  * MicrophoneRecorder 生命周期管理全部集中在此。渲染层（PlaygroundClient / ShowcaseClient）
  * 只消费返回值，不再直接持有 ws/audio ref。
  *
+ * 状态分组（见 docs/11 §3）：conn/error 连接组 useState；sessionState/sessionId/timing/events
+ * 会话运行时组 useReducer（lib/events.ts 纯函数，可单测）；transcript/frameUrl/debugInfo
+ * 高频渲染组 useState。
+ *
  * 音频是主时钟：PcmPlayer 用 AudioContext.currentTime 调度，AVMux 按节奏消费帧。
- * 二进制协议：首字节 tag，0x03=PCM（offset 2 起 Int16），0x01=Avatar JPEG（subtag 在 byte[1]）。
+ * 二进制协议：上行 0x00+PCM16 / 0x02+JPEG；下行 0x03=PCM（offset 2 起 Int16），
+ * 0x01=Avatar JPEG（subtag 在 byte[1]）。
  *
  * profile/persona 变更不会自动重连——调用方应 disconnect() 再 connect()。
  * autoConnect=true 时，挂载 + profile/persona 就绪即连一次；卸载自动清理。
@@ -86,8 +93,6 @@ export function useRealtimeSession({
   autoConnect = false,
 }: UseRealtimeSessionArgs): RealtimeSession {
   const [conn, setConn] = useState<ConnState>("disconnected");
-  const [sessionState, setSessionState] = useState<string>("idle");
-  const [sessionId, setSessionId] = useState<string | null>(null);
   const [transcript, setTranscript] = useState<TranscriptItem[]>([]);
   const [llmDelta, setLlmDelta] = useState("");
   const [frameUrl, setFrameUrl] = useState<string | null>(null);
@@ -100,12 +105,8 @@ export function useRealtimeSession({
     queueLen: 0,
     framesSent: 0,
   });
-  const [timing, setTiming] = useState<SessionTiming>({
-    transcriptTs: null,
-    firstDeltaTs: null,
-    firstPcmTs: null,
-    firstFrameTs: null,
-  });
+  // 会话运行时：sessionState / sessionId / timing / events / lastRunAt（联动强，归 reducer）
+  const [runtime, dispatch] = useReducer(sessionRuntimeReducer, INITIAL_RUNTIME);
 
   const wsRef = useRef<WebSocket | null>(null);
   const recorderRef = useRef<MicrophoneRecorder | null>(null);
@@ -132,12 +133,14 @@ export function useRealtimeSession({
       return url;
     });
     setDebugInfo((d) => ({ ...d, framesShown: d.framesShown + 1 }));
-    setTiming((t) => (t.firstFrameTs == null ? { ...t, firstFrameTs: Date.now() } : t));
+    // 首帧以"实际显示"时刻计（比到达时刻更接近用户感知）
+    dispatch({ kind: "milestone", key: "firstFrameTs", ts: Date.now() });
   }, []);
 
   /**
    * 摄像头截帧上行（0x02 + JPEG）。一次性取流：截完即停，不常驻摄像头。
    * 供"看看我"按钮与下行 vision.request 触发。
+   * 截帧失败时上行 vision.frame_error——后端同轮 Vision 等待立即降级，不必等超时。
    */
   const captureAndSendFrame = useCallback(async () => {
     const ws = wsRef.current;
@@ -192,76 +195,102 @@ export function useRealtimeSession({
 
   const handleMessage = useCallback(
     (msg: { type: string; payload?: Record<string, unknown> }) => {
+      const ts = Date.now();
       switch (msg.type) {
         case "session.started":
-          setSessionId((msg.payload?.session_id as string) || null);
-          setSessionState((msg.payload?.state as string) || "idle");
-          // 重置 timing 基准
-          setTiming({
-            transcriptTs: null,
-            firstDeltaTs: null,
-            firstPcmTs: null,
-            firstFrameTs: null,
+          dispatch({
+            kind: "sessionStarted",
+            sessionId: (msg.payload?.session_id as string) || "",
+            state: (msg.payload?.state as string) || "idle",
+            ts,
           });
           break;
-        case "session.state_changed":
-          setSessionState((msg.payload?.to as string) || "idle");
-          if (msg.payload?.to === "interrupting") {
+        case "session.state_changed": {
+          const to = (msg.payload?.to as string) || "idle";
+          dispatch({ kind: "stateChanged", to, ts });
+          if (to === "interrupting") {
             playerRef.current?.interrupt();
             avmuxRef.current?.interrupt();
           }
           break;
+        }
         case "transcript.completed": {
           const text = (msg.payload?.text as string) || "";
+          // reducer 侧：开新一轮 timing 窗口 + 压事件流
+          const summary = summarizeEvent(msg.type, msg.payload) ?? "";
+          dispatch({ kind: "event", type: msg.type, summary, ts });
           if (text) {
-            setTranscript((prev) => [...prev, { role: "user", text, ts: Date.now() }]);
+            setTranscript((prev) => [...prev, { role: "user", text, ts }]);
             setLlmDelta("");
           }
-          setTiming((t) => (t.transcriptTs == null ? { ...t, transcriptTs: Date.now() } : t));
           break;
         }
         case "llm.text.delta": {
+          // 高频：不进事件流，只锁里程碑
           const t = (msg.payload?.text as string) || "";
           setLlmDelta((prev) => prev + t);
-          setTiming((tm) =>
-            tm.firstDeltaTs == null ? { ...tm, firstDeltaTs: Date.now() } : tm
-          );
+          dispatch({ kind: "milestone", key: "firstDeltaTs", ts });
           break;
         }
         case "llm.text.done": {
           const full = (msg.payload?.full_text as string) || llmDeltaRef.current;
+          dispatch({
+            kind: "event",
+            type: msg.type,
+            summary: summarizeEvent(msg.type, msg.payload) ?? "",
+            ts,
+          });
           if (full) {
             setTranscript((prev) => [
               ...prev,
-              { role: "assistant", text: full, ts: Date.now() },
+              { role: "assistant", text: full, ts },
             ]);
           }
           setLlmDelta("");
           break;
         }
         case "tts.audio.delta":
-          // 元数据——实际 PCM 在二进制消息里
+          // 元数据——实际 PCM 在二进制消息里；高频不进事件流
           break;
+        case "run.started":
+        case "tts.audio.completed":
+        case "avatar.video.ready":
+        case "persona.changed":
         case "response.done":
-          setPlaying(false);
+        case "vision.request": {
+          const summary = summarizeEvent(msg.type, msg.payload) ?? "";
+          dispatch({ kind: "event", type: msg.type, summary, ts });
+          if (msg.type === "response.done") setPlaying(false);
+          if (msg.type === "vision.request") void captureAndSendFrame();
           break;
-        case "vision.request":
-          // 后端触发词命中 → 自动截帧上行
-          void captureAndSendFrame();
-          break;
+        }
         case "vision.result": {
           const desc = (msg.payload?.description as string) || "";
+          dispatch({
+            kind: "event",
+            type: msg.type,
+            summary: summarizeEvent(msg.type, msg.payload) ?? "",
+            ts,
+          });
           if (desc) {
             setTranscript((prev) => [
               ...prev,
-              { role: "assistant", text: `【视觉】${desc}`, ts: Date.now() },
+              { role: "assistant", text: `【视觉】${desc}`, ts },
             ]);
           }
           break;
         }
-        case "error":
-          setError((msg.payload?.message as string) || "unknown error");
+        case "error": {
+          const message = (msg.payload?.message as string) || "unknown error";
+          dispatch({
+            kind: "event",
+            type: msg.type,
+            summary: summarizeEvent(msg.type, msg.payload) ?? message,
+            ts,
+          });
+          setError(message);
           break;
+        }
       }
     },
     [captureAndSendFrame]
@@ -279,7 +308,7 @@ export function useRealtimeSession({
       playerRef.current?.enqueue(pcm);
       setPlaying(true);
       setDebugInfo((d) => ({ ...d, audioChunks: d.audioChunks + 1 }));
-      setTiming((t) => (t.firstPcmTs == null ? { ...t, firstPcmTs: Date.now() } : t));
+      dispatch({ kind: "milestone", key: "firstPcmTs", ts: Date.now() });
     } else if (tag === 0x01) {
       const subtag = view[1] ?? 0;
       const jpeg = data.slice(2);
@@ -353,7 +382,7 @@ export function useRealtimeSession({
     };
     ws.onclose = () => {
       setConn("disconnected");
-      setSessionState("idle");
+      dispatch({ kind: "disconnected" });
       setMicActive(false);
     };
   }, [handleFrame, handleMessage, handleBinary]);
@@ -448,8 +477,8 @@ export function useRealtimeSession({
 
   return {
     conn,
-    sessionState,
-    sessionId,
+    sessionState: runtime.sessionState,
+    sessionId: runtime.sessionId,
     transcript,
     llmDelta,
     frameUrl,
@@ -457,7 +486,9 @@ export function useRealtimeSession({
     playing,
     error,
     debugInfo,
-    timing,
+    timing: runtime.timing,
+    events: runtime.events,
+    lastRunAt: runtime.lastRunAt,
     connect,
     disconnect,
     toggleMic,
