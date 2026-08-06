@@ -233,12 +233,16 @@ export function useRealtimeSession({
     );
     void playerRef.current.resume();
 
-    // WS 端口推导：
-    // 1. URL 参数 ?wsPort=xxxxx（隧道场景显式指定）
+    // WS 端口推导（优先级从高到低）：
+    // 1. URL 参数 ?wsPort=xxxxx（显式指定）
     // 2. NEXT_PUBLIC_WS_PORT 环境变量（build 时注入）
-    // 3. 默认 8101（与 gateway 直连）
+    // 3. 隧道自动推导：页面端口 > 10000 时，WS 端口 = 页面端口 + 5101
+    //    （隧道映射规律：studio 13000→3000，gateway 18101→8101，偏移 5101）
+    // 4. 默认 8101（与 gateway 直连）
+    const pagePort = window.location.port;
     const urlWsPort = new URLSearchParams(window.location.search).get("wsPort");
-    const wsPort = urlWsPort || process.env.NEXT_PUBLIC_WS_PORT || "8101";
+    const tunnelWsPort = parseInt(pagePort) > 10000 ? String(parseInt(pagePort) + 5101) : null;
+    const wsPort = urlWsPort || process.env.NEXT_PUBLIC_WS_PORT || tunnelWsPort || "8101";
     const wsUrl = `ws://${window.location.hostname}:${wsPort}/ws/realtime`;
     const ws = new WebSocket(wsUrl);
     ws.binaryType = "arraybuffer";
