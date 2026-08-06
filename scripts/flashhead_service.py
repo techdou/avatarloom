@@ -171,12 +171,11 @@ class AvatarEngine:
                 with self._cond:
                     is_idle = False
                     while not self._closed and len(self._pending) < CHUNK_SAMPLES:
-                        # 无音频：非 speech_active 且 idle 节流到期 → 产 idle 帧
-                        if (
-                            not self._speech_active
-                            and not self._pending_image
-                            and not self._reset_motion
-                        ):
+                        # 无音频：非 speech_active 且 idle 节流到期 → 产 idle 帧。
+                        # _reset_motion/_pending_image 不挡 idle——它们会在下方
+                        # 公共路径被消费（reset 归位/换肖像），否则 reset 后无音频
+                        # 时 idle 分支被永久挡住导致停帧。
+                        if not self._speech_active:
                             now = _time.monotonic()
                             wait = last_idle_at + chunk_seconds - now
                             # 进入 idle 评估即刷新基准：被音频唤醒后不会因旧基准立即重产
