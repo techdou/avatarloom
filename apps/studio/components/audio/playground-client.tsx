@@ -87,7 +87,15 @@ export function PlaygroundClient() {
     setError(null);
 
     playerRef.current = new PcmPlayer({ sampleRate: 16000, audioDelayMs: 600 });
-    avmuxRef.current = new AVMux({ audioDelayMs: 600 }, handleFrame);
+    // 音频主时钟驱动视频（对齐 VoxEMW）：AVMux 从 PcmPlayer 读播放位置
+    avmuxRef.current = new AVMux(
+      {
+        audioDelayMs: 600,
+        fps: 25,
+        getAudioTime: () => playerRef.current?.currentTime ?? 0,
+      },
+      handleFrame
+    );
     void playerRef.current.resume();
 
     const wsUrl = `ws://${window.location.hostname}:8101/ws/realtime`;

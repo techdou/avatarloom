@@ -423,10 +423,15 @@ class Orchestrator:
             )
 
         # Avatar 订阅 tts.audio.*（双写：TTS 同时给浏览器和 Avatar）
+        # 以及 speech.*（VAD 事件推导 idle_mode，对齐 VoxEMW avatar_state_transition）
         if CATEGORY_AVATAR in self.blocks:
             avatar = self.blocks[CATEGORY_AVATAR]
             await self.event_bus.subscribe(
                 "tts.audio.*",
+                self._make_block_handler(avatar),
+            )
+            await self.event_bus.subscribe(
+                "speech.*",
                 self._make_block_handler(avatar),
             )
 

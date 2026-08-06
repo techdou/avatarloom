@@ -23,6 +23,8 @@ logger = logging.getLogger("avatar.flashhead")
 from avatarloom_protocol import (
     AVATAR_IDLE_FRAME,
     AVATAR_SPEECH_FRAME,
+    SPEECH_DETECTED,
+    SPEECH_ENDED,
     TTS_AUDIO_COMPLETED,
     TTS_AUDIO_DELTA,
     Event,
@@ -44,6 +46,7 @@ class FlashHeadAvatarBlock(Block):
     _ws: Any = None
     _reader_task: asyncio.Task[None] | None = None
     _frame_index: int = 0
+    _speech_active_sent: bool = False
     _portrait_bytes: bytes = b""
     _portrait_path: str = ""
     _fps: int = 25
@@ -56,7 +59,7 @@ class FlashHeadAvatarBlock(Block):
             category="avatar",
             runtime_type="python_inproc",
             capabilities=Capability(streaming=True),
-            inputs=[TTS_AUDIO_DELTA, TTS_AUDIO_COMPLETED],
+            inputs=[TTS_AUDIO_DELTA, TTS_AUDIO_COMPLETED, SPEECH_DETECTED, SPEECH_ENDED],
             outputs=[AVATAR_SPEECH_FRAME, AVATAR_IDLE_FRAME],
             resources=ResourceRequirements(
                 accelerator=["cuda"],
@@ -199,6 +202,12 @@ class FlashHeadAvatarBlock(Block):
             pcm_b64 = event.payload.get("pcm_b64", "")
             if pcm_b64 and self._ws is not None:
                 try:
+                    # 首个音频块到来：标记说话中，禁 idle 生成
+                    if not self._speech_active_sent:
+                        await self._ws.send(
+                            json.dumps({"type": "speech_active", "on": True})
+                        )
+                        self._speech_active_sent = True
                     await self._ws.send(
                         json.dumps({"type": "audio", "pcm": pcm_b64})
                     )
@@ -207,32 +216,50 @@ class FlashHeadAvatarBlock(Block):
         elif event.type == TTS_AUDIO_COMPLETED:
             if self._ws is not None:
                 try:
+                    await self._ws.send(json.dumps({"type": "speech_active", "on": False}))
                     await self._ws.send(json.dumps({"type": "reset"}))
                 except Exception as e:
                     await ctx.logger.aerror("flashhead reset failed", error=str(e))
+            self._speech_active_sent = False
             await self._emit_idle(ctx)
+        elif event.type in (SPEECH_DETECTED, SPEECH_ENDED):
+            # VAD 事件推导 idle_mode（listening/thinking/calm）并下发 service。
+            # speech_active 门控已在 TTS 事件里处理，这里只更新待机模式。
+            mode = "listening" if event.type == SPEECH_DETECTED else "thinking"
+            if self._ws is not None:
+                try:
+                    await self._ws.send(json.dumps({"type": "idle_mode", "mode": mode}))
+                except Exception as e:
+                    await ctx.logger.aerror(
+                        "flashhead idle_mode send failed", error=str(e)
+                    )
 
     async def _frame_reader(self, ctx: BlockContext) -> None:
         try:
             async for message in self._ws:
                 if isinstance(message, (bytes, bytearray)):
+                    data = bytes(message)
+                    # service 下行协议：首字节 tag（0x00=idle / 0x01=speech）+ JPEG
+                    tag = data[0] if data else 0x01
+                    jpeg = data[1:]
+                    if not jpeg:
+                        continue
+                    is_speech = tag == 0x01
                     idx = self._frame_index
                     self._frame_index += 1
                     await ctx.emit(
                         Event(
-                            type=AVATAR_SPEECH_FRAME,
+                            type=AVATAR_SPEECH_FRAME if is_speech else AVATAR_IDLE_FRAME,
                             session_id=ctx.session_id,
                             source="avatar.flashhead",
                             run_id=ctx.run_id,
                             payload={
-                                "frame_b64": base64.b64encode(bytes(message)).decode(
-                                    "ascii"
-                                ),
+                                "frame_b64": base64.b64encode(jpeg).decode("ascii"),
                                 "width": 512,
                                 "height": 512,
                                 "format": "jpeg",
                                 "frame_index": idx,
-                                "is_speech": True,
+                                "is_speech": is_speech,
                             },
                         )
                     )

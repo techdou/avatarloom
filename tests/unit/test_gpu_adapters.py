@@ -156,15 +156,21 @@ class TestResampling:
 
     def test_voxcpm2_resample_48k_to_16k(self) -> None:
         arr = np.linspace(-0.5, 0.5, 48, dtype=np.float32)
-        raw = arr.tobytes()
-        out = _resample_48k_to_16k(raw)
-        out_arr = np.frombuffer(out, dtype=np.int16)
+        out = _resample_48k_to_16k(arr)
         # 48k -> 16k = 每 3 取 1，48/3=16
-        assert len(out_arr) == 16
+        assert len(out) == 16
+
+    def test_voxcpm2_resample_rate_compensation(self) -> None:
+        # rate<1 降速（语速补偿）：输出样本数 = 输入 / rate
+        arr = np.linspace(-0.5, 0.5, 480, dtype=np.float32)
+        out = _resample_48k_to_16k(arr, rate=0.886)
+        # 16k 后 160 样本，rate 0.886 → 约 180 样本
+        assert 165 <= len(out) <= 195
 
     def test_resample_empty_input(self) -> None:
         assert qwen_resample(b"", 24000, 16000) == b""
-        assert _resample_48k_to_16k(b"") == b""
+        out = _resample_48k_to_16k(np.empty(0, dtype=np.float32))
+        assert len(out) == 0
 
     def test_resample_clips_overflow(self) -> None:
         # float32 超过 1.0 应被裁剪——用足够多样本让降采样后保留

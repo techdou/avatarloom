@@ -24,6 +24,18 @@ export class PcmPlayer {
   private nextStartTime = 0;
   /** 已调度的 source 节点（用于打断时停止） */
   private scheduledSources: AudioBufferSourceNode[] = [];
+  /** 本回复首个 chunk 的起始播放时间（AudioContext 时钟），用于计算 currentTime */
+  private responseAudioBase = 0;
+
+  /**
+   * 当前音频播放位置（秒，相对本回复起点）。
+   * 负值 = 首个 chunk 还没到播放时间（调度中）。
+   * 用于驱动视频帧消费（对齐 VoxEMW assistant.js 的音频主时钟模型）。
+   */
+  get currentTime() {
+    if (!this.ctx) return 0;
+    return this.ctx.currentTime - this.responseAudioBase;
+  }
 
   constructor(opts: PlayerOptions = {}) {
     this.sampleRate = opts.sampleRate ?? 16000;
@@ -59,6 +71,10 @@ export class PcmPlayer {
     if (this.nextStartTime < now + this.audioDelayMs / 1000) {
       this.nextStartTime = now + this.audioDelayMs / 1000;
     }
+    // 首个 chunk：锚定本回复的音频时间轴起点（VoxEMW responseAudioBase）
+    if (this.scheduledSources.length === 0) {
+      this.responseAudioBase = this.nextStartTime;
+    }
 
     const buf = ctx.createBuffer(1, pcm.length, this.sampleRate);
     const channel = buf.getChannelData(0);
@@ -92,6 +108,7 @@ export class PcmPlayer {
     this.scheduledSources = [];
     if (this.ctx) {
       this.nextStartTime = this.ctx.currentTime + this.audioDelayMs / 1000;
+      this.responseAudioBase = this.nextStartTime;
     }
   }
 

@@ -54,6 +54,10 @@ MOTION_FRAMES_NUM = 9  # (2-1)*8+1（Lite VAE 时间 stride 8）
 CHUNK_SAMPLES = (FRAME_NUM - MOTION_FRAMES_NUM) * SAMPLE_RATE // TGT_FPS  # 15360 = 0.96s
 WARMUP_CHUNKS = 2
 
+# 帧 tag（下行二进制首字节，对齐 VoxEMW service.py）
+FRAME_TAG_IDLE = 0x00
+FRAME_TAG_SPEECH = 0x01
+
 
 class AvatarEngine:
     """FlashHead 推理引擎：所有 pipeline 调用都序列化在 inference 线程里。"""
@@ -95,6 +99,10 @@ class AvatarEngine:
         self._reset_motion = False
         self._pending_image = None
         self._inference_error: str | None = None
+        # 门控状态（对齐 VoxEMW service.py）：说话期间禁 idle 生成，
+        # 句间停顿 pending 排空时插入 idle 帧会被前端直画卡画面
+        self._speech_active = False
+        self._idle_mode = "calm"  # listening|thinking|calm（决定待机驱动）
         self.on_frames = None  # 单客户端设计：ws 连接建立时接管帧流
 
     def _new_audio_dq(self):
@@ -126,6 +134,18 @@ class AvatarEngine:
             self._pending_image = image_path
             self._cond.notify()
 
+    def set_speech_active(self, active: bool) -> None:
+        """助手说话期间置 True：禁止 idle 生成（防句间停顿插 idle 帧卡画面）。"""
+        with self._cond:
+            self._speech_active = bool(active)
+            self._cond.notify()
+
+    def set_idle_mode(self, mode: str) -> None:
+        """待机驱动模式：listening|thinking|calm。FlashHead 无 murmur，均用静音。"""
+        with self._cond:
+            self._idle_mode = mode if mode in ("listening", "thinking", "calm") else "calm"
+            self._cond.notify()
+
     def close(self) -> None:
         with self._cond:
             self._closed = True
@@ -141,21 +161,44 @@ class AvatarEngine:
         warmup 与 ws 收发循环据此把状态暴露给 orchestrator，而不是无限等待。
         """
         import numpy as np
+        import time as _time
         from flash_head.inference import get_audio_embedding, run_pipeline
 
+        chunk_seconds = CHUNK_SAMPLES / SAMPLE_RATE  # 0.96s
+        last_idle_at = 0.0
         while True:
             try:
                 with self._cond:
+                    is_idle = False
                     while not self._closed and len(self._pending) < CHUNK_SAMPLES:
+                        # 无音频：非 speech_active 且 idle 节流到期 → 产 idle 帧
+                        if (
+                            not self._speech_active
+                            and not self._pending_image
+                            and not self._reset_motion
+                        ):
+                            now = _time.monotonic()
+                            wait = last_idle_at + chunk_seconds - now
+                            if wait <= 0:
+                                is_idle = True
+                                last_idle_at = now
+                                break
+                            self._cond.wait(timeout=wait)
+                            continue
                         notified = self._cond.wait(timeout=0.5)
                         if not notified and len(self._pending) > 0:
                             break  # 静默超时：句尾尾牙零填充生成
                     if self._closed:
                         return
-                    chunk = self._pending[:CHUNK_SAMPLES]
-                    self._pending = self._pending[CHUNK_SAMPLES:]
-                    if len(chunk) < CHUNK_SAMPLES:
-                        chunk = np.pad(chunk, (0, CHUNK_SAMPLES - len(chunk)))
+                    if is_idle:
+                        # idle 帧：静音驱动（不抄 murmur——已弃用），
+                        # 保持运动上下文，不做 reset 归位
+                        chunk = np.zeros(CHUNK_SAMPLES, dtype=np.float32)
+                    else:
+                        chunk = self._pending[:CHUNK_SAMPLES]
+                        self._pending = self._pending[CHUNK_SAMPLES:]
+                        if len(chunk) < CHUNK_SAMPLES:
+                            chunk = np.pad(chunk, (0, CHUNK_SAMPLES - len(chunk)))
                     if self._reset_motion:
                         self._new_audio_dq()
                         self.pipeline.reset_person_name()
@@ -181,7 +224,7 @@ class AvatarEngine:
                 )
                 video = run_pipeline(self.pipeline, emb)
                 frames = video[MOTION_FRAMES_NUM:].cpu().numpy().astype("uint8")
-                on_frames(frames)
+                on_frames(frames, is_idle)
             except Exception as e:
                 logger.exception("flashhead inference loop crashed")
                 with self._cond:
@@ -243,22 +286,24 @@ async def _serve(ws, engine: AvatarEngine, jpeg_quality: int) -> None:
     out_queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=TGT_FPS * 4)
     raw_queue: _queue.Queue = _queue.Queue(maxsize=TGT_FPS * 2)
 
-    def on_frames(frames) -> None:
+    def on_frames(frames, is_idle: bool = False) -> None:
         # 推理线程只入队原始帧（满则丢最旧）；JPEG 编码在专用线程，
-        # 避免每 chunk 24 帧的编码耗时（q85 约 0.2-0.3s）阻塞下一个 chunk 生成
+        # 避免每 chunk 24 帧的编码耗时（q85 约 0.2-0.3s）阻塞下一个 chunk 生成。
+        # 每帧带 tag：0x00=idle（待机微动，前端直画）、0x01=speech（进口型队列）
+        tag = FRAME_TAG_IDLE if is_idle else FRAME_TAG_SPEECH
         for frame in frames:
             if raw_queue.full():
                 try:
                     raw_queue.get_nowait()
                 except _queue.Empty:
                     pass
-            raw_queue.put_nowait(frame)
+            raw_queue.put_nowait((tag, frame))
 
     def _encoder() -> None:
         while True:
-            frame = raw_queue.get()
+            tag, frame = raw_queue.get()
             data = _encode_jpeg(frame, jpeg_quality)
-            loop.call_soon_threadsafe(_offer, data)
+            loop.call_soon_threadsafe(_offer, bytes([tag]) + data)
 
     def _offer(data: bytes) -> None:
         if out_queue.full():
@@ -294,6 +339,10 @@ async def _serve(ws, engine: AvatarEngine, jpeg_quality: int) -> None:
                 engine.reset()
             elif etype == "set_image":
                 engine.set_image(event["path"])
+            elif etype == "speech_active":
+                engine.set_speech_active(bool(event.get("on", False)))
+            elif etype == "idle_mode":
+                engine.set_idle_mode(str(event.get("mode", "calm")))
     finally:
         send_task.cancel()
         engine.on_frames = None

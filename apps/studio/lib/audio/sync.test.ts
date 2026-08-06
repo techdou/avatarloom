@@ -2,14 +2,29 @@ import { describe, it, expect } from "vitest";
 import { AVMux, type AvatarFrame } from "./sync";
 
 describe("AVMux", () => {
-  it("idle frame is displayed immediately without queueing", () => {
+  it("idle frame without playing audio is queued for throttled draw, not speech queue", () => {
     const frames: AvatarFrame[] = [];
     const mux = new AVMux({}, (f) => frames.push(f));
     const idle: AvatarFrame = { blob: new Blob(), tag: "idle" };
     mux.pushFrame(idle);
-    expect(frames).toHaveLength(1);
-    expect(frames[0].tag).toBe("idle");
+    // idle 帧不占 speech 队列（queueLength 只统计 speech 帧）
     expect(mux.queueLength).toBe(0);
+    // 同步断言时 onFrame 未被调用（rAF 异步消费）
+    expect(frames).toHaveLength(0);
+  });
+
+  it("idle frame while audio playing joins speech queue along clock", () => {
+    const frames: AvatarFrame[] = [];
+    const mux = new AVMux(
+      { getAudioTime: () => 1.0 },
+      (f) => frames.push(f)
+    );
+    // 先塞一个 speech 帧（音频在播）
+    mux.pushFrame({ blob: new Blob(), tag: "speech" });
+    const idle: AvatarFrame = { blob: new Blob(), tag: "idle" };
+    mux.pushFrame(idle);
+    // idle 帧在音频播时进 speech 队列
+    expect(mux.queueLength).toBe(2);
   });
 
   it("speech frame is queued", () => {

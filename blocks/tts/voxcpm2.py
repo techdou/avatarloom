@@ -11,6 +11,8 @@ from __future__ import annotations
 import base64
 from typing import Any
 
+import numpy as np
+
 from avatarloom_protocol import (
     LLM_TEXT_DELTA,
     LLM_TEXT_DONE,
@@ -27,6 +29,9 @@ from avatarloom_sdk import (
     ResourceRequirements,
 )
 
+# 流式切块粒度：512 采样 = 32ms @16kHz（对齐 VoxEMW blocksize）
+BLOCK_SIZE = 512
+
 
 class VoxCpm2TtsBlock(Block):
     """VoxCPM2——流式语音克隆。
@@ -40,6 +45,11 @@ class VoxCpm2TtsBlock(Block):
     _model: Any = None
     _device: str = "cuda"
     _rate: float = 0.886  # 语速补偿
+    _streaming: bool = True
+    _cfg_value: float = 2.0
+    _inference_timesteps: int = 10
+    _normalize: bool = False
+    _denoise: bool = False
     _voice_caches: dict[str, Any] = {}
     _sentence_buffers: dict[int, str] = {}
     _total_samples: int = 0
@@ -75,9 +85,16 @@ class VoxCpm2TtsBlock(Block):
         cfg = ctx.config
         self._device = str(cfg.get("device", "cuda"))
         self._rate = float(cfg.get("rate", 0.886))
+        self._streaming = bool(cfg.get("streaming", True))
+        self._cfg_value = float(cfg.get("cfgValue", 2.0))
+        self._inference_timesteps = int(cfg.get("inferenceTimesteps", 10))
+        self._normalize = bool(cfg.get("normalize", False))
+        self._denoise = bool(cfg.get("denoise", False))
         self._default_voice_ref = self._resolve_path(cfg.get("voiceRef"), ctx)
         try:
-            self._model = self._load_model(str(cfg.get("model", "openbmb/VoxCPM2")), self._device)
+            self._model = self._load_model(
+                str(cfg.get("model", "openbmb/VoxCPM2")), self._device
+            )
         except ImportError as e:
             raise BlockSetupError(
                 "tts.voxcpm2",
@@ -87,7 +104,12 @@ class VoxCpm2TtsBlock(Block):
             raise BlockSetupError("tts.voxcpm2", f"加载失败: {e}") from e
 
         self._mark_ready()
-        await ctx.logger.ainfo("tts.voxcpm2 ready", device=self._device, rate=self._rate)
+        await ctx.logger.ainfo(
+            "tts.voxcpm2 ready",
+            device=self._device,
+            rate=self._rate,
+            streaming=self._streaming,
+        )
 
     async def process(self, ctx: BlockContext, event: Event) -> None:
         if event.type == LLM_TEXT_DELTA:
@@ -118,30 +140,63 @@ class VoxCpm2TtsBlock(Block):
         # persona voice_ref 优先，fallback 到 profile config 的 voiceRef
         effective_ref = voice_ref or self._default_voice_ref
         try:
-            pcm48k = self._infer(text, effective_ref)
+            gen = self._infer_stream(text, effective_ref)
         except Exception as e:
             await ctx.logger.aerror("voxcpm2 synth error", error=str(e))
             return
 
-        pcm16 = _resample_48k_to_16k(pcm48k)
-        chunk_size = 1600
-        for i in range(0, len(pcm16), chunk_size * 2):
-            chunk = pcm16[i : i + chunk_size * 2]
-            self._total_samples += len(chunk) // 2
-            await ctx.emit(
-                Event(
-                    type=TTS_AUDIO_DELTA,
-                    session_id=ctx.session_id,
-                    source="tts.voxcpm2",
-                    run_id=ctx.run_id,
-                    payload={
-                        "pcm_b64": base64.b64encode(chunk).decode("ascii"),
-                        "sample_rate": 16000,
-                        "samples": len(chunk) // 2,
-                        "text": text,
-                    },
+        # 流式：边收 48k chunk 边重采样 16k，攒够 BLOCK_SIZE 就 emit。
+        # 首 chunk 一到即发出，不必等整句合成完（对齐 VoxEMW blocksize=512）。
+        import numpy as np
+
+        buf16 = np.empty(0, dtype=np.int16)
+        block = BLOCK_SIZE  # 512 采样 = 32ms @16k
+        try:
+            for wav48 in gen:
+                # 48k float32 -> 16k int16（线性插值，带 rate 语速补偿）
+                pcm16 = _resample_48k_to_16k(wav48, rate=self._rate)
+                buf16 = np.concatenate([buf16, pcm16])
+                while len(buf16) >= block:
+                    chunk = buf16[:block]
+                    buf16 = buf16[block:]
+                    self._total_samples += len(chunk)
+                    await ctx.emit(
+                        Event(
+                            type=TTS_AUDIO_DELTA,
+                            session_id=ctx.session_id,
+                            source="tts.voxcpm2",
+                            run_id=ctx.run_id,
+                            payload={
+                                "pcm_b64": base64.b64encode(chunk.tobytes()).decode(
+                                    "ascii"
+                                ),
+                                "sample_rate": 16000,
+                                "samples": len(chunk),
+                                "text": text,
+                            },
+                        )
+                    )
+            # 尾巴不足一块也发出（句尾）
+            if len(buf16) > 0:
+                self._total_samples += len(buf16)
+                await ctx.emit(
+                    Event(
+                        type=TTS_AUDIO_DELTA,
+                        session_id=ctx.session_id,
+                        source="tts.voxcpm2",
+                        run_id=ctx.run_id,
+                        payload={
+                            "pcm_b64": base64.b64encode(buf16.tobytes()).decode(
+                                "ascii"
+                            ),
+                            "sample_rate": 16000,
+                            "samples": len(buf16),
+                            "text": text,
+                        },
+                    )
                 )
-            )
+        except Exception as e:
+            await ctx.logger.aerror("voxcpm2 stream error", error=str(e))
 
     async def reset(self, session_id: str) -> None:
         self._total_samples = 0
@@ -164,29 +219,56 @@ class VoxCpm2TtsBlock(Block):
     def _load_model(self, model_name: str, device: str) -> Any:
         from voxcpm import VoxCPM  # type: ignore
 
+        # 本地目录（如 AutoDL 数据盘的 modelscope-voxcpm）直接加载，不走 HF 下载
+        import os
+
+        local_path = str(model_name)
+        if os.path.isdir(local_path):
+            return VoxCPM.from_pretrained(
+                local_path, local_files_only=True, device=device
+            )
         return VoxCPM.from_pretrained(model_name).to(device)
 
-    def _infer(self, text: str, voice_ref: str | None) -> bytes:
-        """合成。voice_ref 是 ref.wav 路径。返回 48kHz float32 PCM。"""
-        # VoxCPM2 API: generate(text, prompt_wav_path=..., reference_wav_path=...)
-        # 语速补偿通过 ffmpeg atempo（参考 VoxEMW tts_voxcpm.py）
-        kwargs: dict[str, Any] = {}
+    def _infer_stream(self, text: str, voice_ref: str | None):
+        """流式合成，yield 48kHz float32 numpy chunk。
+
+        VoxCPM2 API: generate_streaming(text, prompt_wav_path=...)
+        返回 generator，每个 chunk 是 1D float32 波形。
+        """
+        kwargs: dict[str, Any] = {
+            "cfg_value": self._cfg_value,
+            "inference_timesteps": self._inference_timesteps,
+            "normalize": self._normalize,
+            "denoise": self._denoise,
+        }
         if voice_ref:
             kwargs["prompt_wav_path"] = voice_ref
-        return self._model.generate(text, **kwargs)
+        yield from self._model.generate_streaming(text, **kwargs)
 
 
-def _resample_48k_to_16k(raw: bytes) -> bytes:
-    """48kHz float32 -> 16kHz int16。"""
+def _resample_48k_to_16k(wav48: np.ndarray, rate: float = 1.0) -> np.ndarray:
+    """48kHz float32 -> 16kHz int16，带语速补偿。
+
+    rate<1 降速（如 0.886 = 克隆固有提速 ~12% 的补偿），保持音调。
+    用 np.interp 线性插值，避免裸抽点的混叠（对齐 VoxEMW atempo 语义，
+    但纯 numpy 无 ffmpeg 进程依赖）。
+    """
     import numpy as np
 
-    if not raw:
-        return b""
+    if wav48 is None or len(wav48) == 0:
+        return np.empty(0, dtype=np.int16)
     try:
-        arr = np.frombuffer(raw, dtype=np.float32)
-        # 48k -> 16k = 每 3 个取 1 个
-        arr = arr[::3]
-        arr = np.clip(arr, -1.0, 1.0)
-        return (arr * 32767).astype(np.int16).tobytes()
+        arr = np.asarray(wav48, dtype=np.float32).reshape(-1)
+        # 48k -> 16k 降采样 1/3
+        idx_16k = np.arange(0, len(arr), 3, dtype=np.int64)
+        arr16 = arr[idx_16k]
+        # rate 语速补偿：rate<1 拉长（插值出更多点），rate>1 压缩
+        if rate != 1.0 and len(arr16) > 1:
+            n_out = max(1, int(round(len(arr16) / rate)))
+            x_old = np.linspace(0.0, 1.0, len(arr16))
+            x_new = np.linspace(0.0, 1.0, n_out)
+            arr16 = np.interp(x_new, x_old, arr16).astype(np.float32)
+        arr16 = np.clip(arr16, -1.0, 1.0)
+        return (arr16 * 32767).astype(np.int16)
     except Exception:
-        return b""
+        return np.empty(0, dtype=np.int16)

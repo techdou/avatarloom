@@ -37,8 +37,10 @@ blocks:
     deployment: local
     config:
       device: cuda
+      model: /root/autodl-tmp/modelscope-voxcpm
       rate: 0.886
       streaming: true
+      blocksize: 512
       cfgValue: 2.0
       inferenceTimesteps: 5
       normalize: true
