@@ -83,8 +83,19 @@ async def main() -> int:
         send_task = asyncio.create_task(sender())
         frames = 0
         t0 = asyncio.get_event_loop().time()
+        last_frame_at = t0
         try:
-            async for message in ws:
+            while True:
+                try:
+                    message = await asyncio.wait_for(ws.recv(), timeout=3.0)
+                except asyncio.TimeoutError:
+                    # 空闲超时：音频播完且 idle 帧节流（0.96s）下无新帧——
+                    # 已有足够帧就收工（probe 不是长跑服务）
+                    print(
+                        f"    idle timeout after {frames} frames",
+                        flush=True,
+                    )
+                    break
                 if isinstance(message, (bytes, bytearray)):
                     data = bytes(message)
                     # 服务下行协议：首字节 tag（0x00=idle / 0x01=speech）+ JPEG
@@ -94,6 +105,7 @@ async def main() -> int:
                         continue
                     (frame_dir / f"{frames:05d}.jpg").write_bytes(data)
                     frames += 1
+                    last_frame_at = asyncio.get_event_loop().time()
                     if frames % 25 == 0:
                         print(f"    frames={frames}", flush=True)
                     if frames >= args.max_frames:
