@@ -19,7 +19,7 @@ blocks:
     id: stt.sensevoice
     deployment: local
     config:
-      model: iic/SenseVoiceSmall
+      model: /root/autodl-tmp/modelscope/models/iic--SenseVoiceSmall/snapshots/master
       device: cuda
       language: zh
   llm:

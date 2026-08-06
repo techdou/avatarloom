@@ -168,8 +168,14 @@ async def main() -> int:
         now = time.perf_counter()
         if now - last_heartbeat >= 30:
             last_heartbeat = now
+            # 事件类型分布（诊断用：定位链路卡在哪）
+            from collections import Counter
+
+            type_counts = Counter(e.type for _, e in events)
+            top = ", ".join(f"{t}:{c}" for t, c in type_counts.most_common(6))
             print(
                 f"    [heartbeat] t={now - t_start:.0f}s events={len(events)} "
+                f"types=[{top}] "
                 f"got={ {k: v for k, v in got.items()} }",
                 flush=True,
             )
