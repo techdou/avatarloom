@@ -220,6 +220,21 @@ PlaygroundClient          orchestration only（状态接线，无视觉细节）
 
 - 暗色 token 全 CSS 变量化（一处改色全局生效）
 - Persona 装配详情页（personas/[id]，依赖 control-api 绑定关系 API）
-- 麦克风音量波形、断线自动重连、空格切麦
 - Blocks Explorer（可视化模块浏览；拖拽编排明确不做）
 - i18n（当前全中文 UI）
+
+---
+
+## 10. 实施记录（2026-08-06）
+
+| 批次 | 内容 | 提交 |
+|---|---|---|
+| 0 | 本文档 | `8a514d0` |
+| 1 | 令牌收尾（info/border.strong/fontSize.micro/duration）+ 11 处 dark hex token 化 + 32 处任意字号统一 + EmptyState/ErrorBanner/MessageBubble + 卸载 react-query + page-header 统一 | `92880cf` |
+| 2 | lib/events.ts 归约（11 单测）+ hook 状态分组 + 补接 run.started 等 4 个下行事件（commit 含并行协议修复：0x00 PCM tag / wss / vision.frame_error） | `b988668` |
+| 3 | playground-client 迁移拆分（4 个纯展示组件）+ DebugDrawer v2（阶段进度点 + 实时事件流 + 里程碑） | `87aad07` |
+| 4 | settings 当前活动卡、YAML 迁移、personas/avatars/profiles/dashboard 视觉、runs/[id] MessageBubble 复用 | `cf9777f` |
+| 5 | /show 断线自动重试 + ContextBar 复制演示链接（clipboard 降级） | `e304b33` |
+| 6 | recorder.getLevel() + 音量波形条 + WS 非主动断线自动重连 + 空格切麦 | `c76bde3` |
+
+每批次门禁均通过：`tsc --noEmit`、`vitest --run`（21 项）、`next build`。
