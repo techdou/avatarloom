@@ -1,8 +1,10 @@
 "use client";
 
+import { useCallback } from "react";
 import { clsx } from "clsx";
-import { Camera, Power } from "lucide-react";
+import { Camera, Link2, Power } from "lucide-react";
 import { ThemeToggle } from "@/components/layout/theme-toggle";
+import { useToast } from "@/components/ui/toast";
 import type { Persona, RuntimeProfile } from "@/lib/api";
 
 type ConnState = "disconnected" | "connecting" | "connected" | "error";
@@ -42,6 +44,19 @@ export function ContextBar({
   showDebug,
   onToggleDebug,
 }: ContextBarProps) {
+  const toast = useToast();
+
+  /** 复制 /show 演示页链接（当前 persona + profile）——手机扫码/粘贴即开演示。 */
+  const copyShowLink = useCallback(() => {
+    const url = `${window.location.origin}/show?persona=${encodeURIComponent(personaId)}&profile=${encodeURIComponent(profileId)}`;
+    void copyText(url).then((ok) => {
+      if (ok) {
+        toast.success("演示链接已复制——发送到手机即可打开演示页");
+      } else {
+        toast.info(`复制失败，请手动复制：${url}`);
+      }
+    });
+  }, [personaId, profileId, toast]);
 
   const connDot = {
     connected: "bg-ok",
@@ -138,8 +153,17 @@ export function ContextBar({
         </label>
       </div>
 
-      {/* 右：调试 + 主题 */}
+      {/* 右：演示链接 + 调试 + 主题 */}
       <div className="ml-auto flex items-center gap-3">
+        <button
+          type="button"
+          onClick={copyShowLink}
+          className="btn btn-sm btn-ghost inline-flex items-center gap-1"
+          title="复制 /show 演示页链接（当前人设 + 配置），手机打开即演示"
+        >
+          <Link2 className="w-3.5 h-3.5" />
+          <span className="hidden md:inline">演示链接</span>
+        </button>
         <label className="flex items-center gap-1.5 text-xs text-fg-muted cursor-pointer select-none">
           <input
             type="checkbox"
@@ -153,4 +177,26 @@ export function ContextBar({
       </div>
     </div>
   );
+}
+
+/** 复制文本——clipboard API 优先；非安全上下文（局域网 http 演示场景）降级 execCommand。 */
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+      return true;
+    } catch {
+      return false;
+    }
+  }
 }
