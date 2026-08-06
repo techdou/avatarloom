@@ -233,7 +233,13 @@ export function useRealtimeSession({
     );
     void playerRef.current.resume();
 
-    const wsUrl = `ws://${window.location.hostname}:8101/ws/realtime`;
+    // WS 端口推导：
+    // 1. URL 参数 ?wsPort=xxxxx（隧道场景显式指定）
+    // 2. NEXT_PUBLIC_WS_PORT 环境变量（build 时注入）
+    // 3. 默认 8101（与 gateway 直连）
+    const urlWsPort = new URLSearchParams(window.location.search).get("wsPort");
+    const wsPort = urlWsPort || process.env.NEXT_PUBLIC_WS_PORT || "8101";
+    const wsUrl = `ws://${window.location.hostname}:${wsPort}/ws/realtime`;
     const ws = new WebSocket(wsUrl);
     ws.binaryType = "arraybuffer";
     wsRef.current = ws;
