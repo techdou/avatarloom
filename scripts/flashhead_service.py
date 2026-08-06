@@ -179,9 +179,10 @@ class AvatarEngine:
                         ):
                             now = _time.monotonic()
                             wait = last_idle_at + chunk_seconds - now
+                            # 进入 idle 评估即刷新基准：被音频唤醒后不会因旧基准立即重产
+                            last_idle_at = now
                             if wait <= 0:
                                 is_idle = True
-                                last_idle_at = now
                                 break
                             self._cond.wait(timeout=wait)
                             continue
@@ -369,10 +370,10 @@ def main() -> None:
     import websockets
 
     async def _main() -> None:
-        def on_frames(frames) -> None:
+        def on_frames(frames, is_idle: bool = False) -> None:
             cb = engine.on_frames
             if cb:
-                cb(frames)
+                cb(frames, is_idle)
 
         thread = threading.Thread(
             target=engine.run_inference_loop,

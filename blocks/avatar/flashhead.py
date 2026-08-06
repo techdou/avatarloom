@@ -37,6 +37,7 @@ from avatarloom_sdk import (
     Capability,
     ResourceRequirements,
 )
+from runtime.orchestrator.avatar_state import AvatarState, transition_avatar_state
 
 
 class FlashHeadAvatarBlock(Block):
@@ -46,7 +47,7 @@ class FlashHeadAvatarBlock(Block):
     _ws: Any = None
     _reader_task: asyncio.Task[None] | None = None
     _frame_index: int = 0
-    _speech_active_sent: bool = False
+    _avatar_state: Any = None  # AvatarState 实例（transition_avatar_state 推导）
     _portrait_bytes: bytes = b""
     _portrait_path: str = ""
     _fps: int = 25
@@ -189,6 +190,7 @@ class FlashHeadAvatarBlock(Block):
             ) from e
         log_file.close()
 
+        self._avatar_state = AvatarState()
         self._reader_task = asyncio.create_task(self._frame_reader(ctx))
         self._mark_ready()
         await ctx.logger.ainfo(
@@ -198,41 +200,51 @@ class FlashHeadAvatarBlock(Block):
         )
 
     async def process(self, ctx: BlockContext, event: Event) -> None:
-        if event.type == TTS_AUDIO_DELTA:
+        # 统一状态机：所有事件走 transition_avatar_state 推导 speech_active/idle_mode
+        # （对齐 VoxEMW avatar_state_transition，避免两套状态机漂移）
+        ev_type = event.type
+        has_audio = ev_type == TTS_AUDIO_DELTA and bool(event.payload.get("pcm_b64"))
+        new_state = transition_avatar_state(
+            self._avatar_state, ev_type, has_audio=has_audio
+        )
+        changed = (
+            new_state.speech_active != self._avatar_state.speech_active
+            or new_state.idle_mode != self._avatar_state.idle_mode
+        )
+        if changed and self._ws is not None:
+            try:
+                if new_state.speech_active != self._avatar_state.speech_active:
+                    await self._ws.send(
+                        json.dumps(
+                            {"type": "speech_active", "on": new_state.speech_active}
+                        )
+                    )
+                if new_state.idle_mode != self._avatar_state.idle_mode:
+                    await self._ws.send(
+                        json.dumps(
+                            {"type": "idle_mode", "mode": new_state.idle_mode}
+                        )
+                    )
+            except Exception as e:
+                await ctx.logger.aerror("flashhead state send failed", error=str(e))
+        self._avatar_state = new_state
+
+        if ev_type == TTS_AUDIO_DELTA:
             pcm_b64 = event.payload.get("pcm_b64", "")
             if pcm_b64 and self._ws is not None:
                 try:
-                    # 首个音频块到来：标记说话中，禁 idle 生成
-                    if not self._speech_active_sent:
-                        await self._ws.send(
-                            json.dumps({"type": "speech_active", "on": True})
-                        )
-                        self._speech_active_sent = True
                     await self._ws.send(
                         json.dumps({"type": "audio", "pcm": pcm_b64})
                     )
                 except Exception as e:
                     await ctx.logger.aerror("flashhead send audio failed", error=str(e))
-        elif event.type == TTS_AUDIO_COMPLETED:
+        elif ev_type == TTS_AUDIO_COMPLETED:
             if self._ws is not None:
                 try:
-                    await self._ws.send(json.dumps({"type": "speech_active", "on": False}))
                     await self._ws.send(json.dumps({"type": "reset"}))
                 except Exception as e:
                     await ctx.logger.aerror("flashhead reset failed", error=str(e))
-            self._speech_active_sent = False
             await self._emit_idle(ctx)
-        elif event.type in (SPEECH_DETECTED, SPEECH_ENDED):
-            # VAD 事件推导 idle_mode（listening/thinking/calm）并下发 service。
-            # speech_active 门控已在 TTS 事件里处理，这里只更新待机模式。
-            mode = "listening" if event.type == SPEECH_DETECTED else "thinking"
-            if self._ws is not None:
-                try:
-                    await self._ws.send(json.dumps({"type": "idle_mode", "mode": mode}))
-                except Exception as e:
-                    await ctx.logger.aerror(
-                        "flashhead idle_mode send failed", error=str(e)
-                    )
 
     async def _frame_reader(self, ctx: BlockContext) -> None:
         try:

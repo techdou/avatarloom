@@ -90,6 +90,8 @@ class VoxCpm2TtsBlock(Block):
         self._inference_timesteps = int(cfg.get("inferenceTimesteps", 10))
         self._normalize = bool(cfg.get("normalize", False))
         self._denoise = bool(cfg.get("denoise", False))
+        # 流式切块粒度（32ms @16k = 512），profile 可覆盖
+        self._block_size = int(cfg.get("blocksize", BLOCK_SIZE))
         self._default_voice_ref = self._resolve_path(cfg.get("voiceRef"), ctx)
         try:
             self._model = self._load_model(
@@ -150,11 +152,12 @@ class VoxCpm2TtsBlock(Block):
         import numpy as np
 
         buf16 = np.empty(0, dtype=np.int16)
-        block = BLOCK_SIZE  # 512 采样 = 32ms @16k
+        block = self._block_size  # 512 采样 = 32ms @16k（profile 可配）
+        phase = 0  # 跨 chunk 降采样相位（防边界爆音）
         try:
             for wav48 in gen:
-                # 48k float32 -> 16k int16（线性插值，带 rate 语速补偿）
-                pcm16 = _resample_48k_to_16k(wav48, rate=self._rate)
+                # 48k float32 -> 16k int16（线性插值，带 rate 语速补偿 + 相位连续）
+                pcm16, phase = _resample_48k_to_16k(wav48, rate=self._rate, phase=phase)
                 buf16 = np.concatenate([buf16, pcm16])
                 while len(buf16) >= block:
                     chunk = buf16[:block]
@@ -246,22 +249,41 @@ class VoxCpm2TtsBlock(Block):
         yield from self._model.generate_streaming(text, **kwargs)
 
 
-def _resample_48k_to_16k(wav48: np.ndarray, rate: float = 1.0) -> np.ndarray:
-    """48kHz float32 -> 16kHz int16，带语速补偿。
+def _resample_48k_to_16k(
+    wav48: np.ndarray,
+    rate: float = 1.0,
+    phase: int = 0,
+) -> tuple[np.ndarray, int]:
+    """48kHz float32 -> 16kHz int16，带语速补偿与跨 chunk 相位连续。
 
     rate<1 降速（如 0.886 = 克隆固有提速 ~12% 的补偿），保持音调。
     用 np.interp 线性插值，避免裸抽点的混叠（对齐 VoxEMW atempo 语义，
     但纯 numpy 无 ffmpeg 进程依赖）。
+
+    Args:
+        wav48: 单个 48k chunk（float32 1D）。
+        rate: 语速补偿系数。
+        phase: 降采样相位（已消费 48k 样本数 mod 3）。流式时必须跨 chunk
+            传递，否则每 chunk 独立从 0 取样，边界处相位跳变产生爆音
+            （chunk 长度几乎必然不是 3 的倍数）。
+
+    Returns:
+        (pcm16, new_phase)：16k int16 数组 + 更新后的相位。
     """
     import numpy as np
 
     if wav48 is None or len(wav48) == 0:
-        return np.empty(0, dtype=np.int16)
+        return np.empty(0, dtype=np.int16), phase
     try:
         arr = np.asarray(wav48, dtype=np.float32).reshape(-1)
-        # 48k -> 16k 降采样 1/3
-        idx_16k = np.arange(0, len(arr), 3, dtype=np.int64)
+        n48 = len(arr)
+        # 48k -> 16k：从补足相位的偏移开始每 3 取 1，保证跨 chunk 连续。
+        # phase = 已消费 48k 样本数 mod 3；本 chunk 需跳过 (3-phase)%3 个样本
+        # 使取样网格对齐绝对时间轴（整段与分块等价）。
+        skip = (3 - phase) % 3
+        idx_16k = np.arange(skip, n48, 3, dtype=np.int64)
         arr16 = arr[idx_16k]
+        new_phase = (phase + n48) % 3
         # rate 语速补偿：rate<1 拉长（插值出更多点），rate>1 压缩
         if rate != 1.0 and len(arr16) > 1:
             n_out = max(1, int(round(len(arr16) / rate)))
@@ -269,6 +291,6 @@ def _resample_48k_to_16k(wav48: np.ndarray, rate: float = 1.0) -> np.ndarray:
             x_new = np.linspace(0.0, 1.0, n_out)
             arr16 = np.interp(x_new, x_old, arr16).astype(np.float32)
         arr16 = np.clip(arr16, -1.0, 1.0)
-        return (arr16 * 32767).astype(np.int16)
+        return (arr16 * 32767).astype(np.int16), new_phase
     except Exception:
-        return np.empty(0, dtype=np.int16)
+        return np.empty(0, dtype=np.int16), phase

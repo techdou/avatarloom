@@ -39,25 +39,39 @@ export function PlaygroundClient() {
     }
   }, []);
 
-  const handleProfileChange = useCallback((id: string) => {
-    setProfileId(id);
-    try {
-      localStorage.setItem("al.profile", id);
-    } catch {
-      /* ignore */
-    }
-  }, []);
-
-  const handlePersonaChange = useCallback((id: string) => {
-    setPersonaId(id);
-    try {
-      localStorage.setItem("al.persona", id);
-    } catch {
-      /* ignore */
-    }
-  }, []);
-
   const session = useRealtimeSession({ profileId, personaId });
+
+  const restartSession = useCallback(() => {
+    // 已连接时切换 profile/persona：重启会话让新配置生效
+    session.disconnect();
+    setTimeout(() => session.connect(), 100);
+  }, [session]);
+
+  const handleProfileChange = useCallback(
+    (id: string) => {
+      setProfileId(id);
+      try {
+        localStorage.setItem("al.profile", id);
+      } catch {
+        /* ignore */
+      }
+      if (session.conn === "connected") restartSession();
+    },
+    [restartSession, session.conn]
+  );
+
+  const handlePersonaChange = useCallback(
+    (id: string) => {
+      setPersonaId(id);
+      try {
+        localStorage.setItem("al.persona", id);
+      } catch {
+        /* ignore */
+      }
+      if (session.conn === "connected") restartSession();
+    },
+    [restartSession, session.conn]
+  );
 
   const chatRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {

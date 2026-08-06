@@ -156,21 +156,41 @@ class TestResampling:
 
     def test_voxcpm2_resample_48k_to_16k(self) -> None:
         arr = np.linspace(-0.5, 0.5, 48, dtype=np.float32)
-        out = _resample_48k_to_16k(arr)
+        out, phase = _resample_48k_to_16k(arr)
         # 48k -> 16k = 每 3 取 1，48/3=16
         assert len(out) == 16
+        assert phase == 0  # 48 % 3 == 0
 
     def test_voxcpm2_resample_rate_compensation(self) -> None:
         # rate<1 降速（语速补偿）：输出样本数 = 输入 / rate
         arr = np.linspace(-0.5, 0.5, 480, dtype=np.float32)
-        out = _resample_48k_to_16k(arr, rate=0.886)
+        out, _ = _resample_48k_to_16k(arr, rate=0.886)
         # 16k 后 160 样本，rate 0.886 → 约 180 样本
         assert 165 <= len(out) <= 195
 
+    def test_voxcpm2_resample_phase_continuity(self) -> None:
+        """跨 chunk 相位连续：chunk 长度非 3 倍数时，边界不得跳变。
+
+        用斜坡信号分两 chunk 处理，相位传递后应与整段处理等价
+        （首个输出样本索引对齐，无相位跳变）。
+        """
+        arr = np.linspace(-0.5, 0.5, 1000, dtype=np.float32)  # 1000 % 3 != 0
+        # 整段处理
+        full, _ = _resample_48k_to_16k(arr)
+        # 分两 chunk 处理（512 + 488，模拟流式）
+        c1, phase = _resample_48k_to_16k(arr[:512])
+        c2, _ = _resample_48k_to_16k(arr[512:], phase=phase)
+        parts = np.concatenate([c1, c2])
+        # 两路输出的样本数应一致
+        assert len(parts) == len(full)
+        # 斜坡信号上，分块处理与整段处理逐样本一致（相位连续）
+        assert np.array_equal(parts, full)
+
     def test_resample_empty_input(self) -> None:
         assert qwen_resample(b"", 24000, 16000) == b""
-        out = _resample_48k_to_16k(np.empty(0, dtype=np.float32))
+        out, phase = _resample_48k_to_16k(np.empty(0, dtype=np.float32))
         assert len(out) == 0
+        assert phase == 0
 
     def test_resample_clips_overflow(self) -> None:
         # float32 超过 1.0 应被裁剪——用足够多样本让降采样后保留

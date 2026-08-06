@@ -276,12 +276,21 @@ export function useRealtimeSession({
     recorderRef.current?.stop();
     recorderRef.current = null;
     setMicActive(false);
-    wsRef.current?.send(JSON.stringify({ type: "session.stop" }));
-    wsRef.current?.close();
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(JSON.stringify({ type: "session.stop" }));
+      } catch {
+        // 关闭中/连接已断——忽略
+      }
+    }
+    ws?.close();
     wsRef.current = null;
     setConn("disconnected");
     playerRef.current?.close();
     playerRef.current = null;
+    avmuxRef.current?.interrupt();
+    avmuxRef.current = null;
   }, []);
 
   const toggleMic = useCallback(async () => {
