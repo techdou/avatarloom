@@ -31,7 +31,7 @@ class OllamaLlmBlock(Block):
             category="llm",
             runtime_type="http_remote",
             capabilities=Capability(streaming=True, interruption=True),
-            inputs=[LLM_REQUEST, TRANSCRIPT_COMPLETED],
+            inputs=[LLM_REQUEST],
             outputs=[LLM_TEXT_DELTA, LLM_TEXT_DONE],
             resources=ResourceRequirements(),
             config_schema={

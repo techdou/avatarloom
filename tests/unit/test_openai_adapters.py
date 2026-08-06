@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 from avatarloom_protocol import (
     AUDIO_APPENDED,
+    LLM_REQUEST,
     LLM_TEXT_DELTA,
     LLM_TEXT_DONE,
     SPEECH_ENDED,
@@ -83,7 +84,7 @@ class TestOpenAILlm:
         await _setup_block(block, ctx)
 
         event = Event(
-            type=TRANSCRIPT_COMPLETED, session_id="s1", source="stt", payload={"text": "你好"}
+            type=LLM_REQUEST, session_id="s1", source="orchestrator", payload={"text": "你好"}
         )
         out = await _capture_emits(block, ctx, event)
 
@@ -109,7 +110,7 @@ class TestOpenAILlm:
         await _setup_block(block, ctx)
 
         event = Event(
-            type=TRANSCRIPT_COMPLETED, session_id="s1", source="stt", payload={"text": "hi"}
+            type=LLM_REQUEST, session_id="s1", source="orchestrator", payload={"text": "hi"}
         )
         with pytest.raises(RuntimeError, match=r"HTTP error 401"):
             await _capture_emits(block, ctx, event)
@@ -130,7 +131,7 @@ class TestOpenAILlm:
         await _setup_block(block, ctx)
 
         event = Event(
-            type=TRANSCRIPT_COMPLETED, session_id="s1", source="stt", payload={"text": ""}
+            type=LLM_REQUEST, session_id="s1", source="orchestrator", payload={"text": ""}
         )
         out = await _capture_emits(block, ctx, event)
         assert out == []

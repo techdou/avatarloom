@@ -55,7 +55,7 @@ class OpenAILlmBlock(Block):
             category="llm",
             runtime_type="http_remote",
             capabilities=Capability(streaming=True, interruption=True),
-            inputs=[LLM_REQUEST, TRANSCRIPT_COMPLETED],
+            inputs=[LLM_REQUEST],
             outputs=[LLM_TEXT_DELTA, LLM_TEXT_DONE],
             resources=ResourceRequirements_stub(),
             config_schema={
@@ -114,9 +114,9 @@ class OpenAILlmBlock(Block):
                 pass
 
     async def process(self, ctx: BlockContext, event: Event) -> None:
-        # 主链路消费 llm.request（Orchestrator 完成 Vision 同轮编排后发出）；
-        # 兼容 transcript.completed——便于脱离 Orchestrator 的单测/直连调用。
-        if event.type not in (LLM_REQUEST, TRANSCRIPT_COMPLETED):
+        # 只消费 llm.request（Orchestrator 完成 Vision 同轮编排后发出）。
+        # 不再兼容 transcript.completed——AL-P1-002 后 transcript 由 Orchestrator 决策。
+        if event.type != LLM_REQUEST:
             return
 
         user_text = event.payload.get("text", "")

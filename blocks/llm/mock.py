@@ -59,7 +59,7 @@ class MockLlmBlock(Block):
             category="llm",
             runtime_type="mock",
             capabilities=Capability(streaming=True, interruption=True),
-            inputs=[LLM_REQUEST, TRANSCRIPT_COMPLETED],
+            inputs=[LLM_REQUEST],
             outputs=[LLM_TEXT_DELTA, LLM_TEXT_DONE],
             config_schema={
                 "type": "object",
@@ -79,8 +79,8 @@ class MockLlmBlock(Block):
         await ctx.logger.ainfo("llm.mock ready", delay_ms=self._chunk_delay_ms)
 
     async def process(self, ctx: BlockContext, event: Event) -> None:
-        # 主链路消费 llm.request；兼容 transcript.completed（单测/直连）
-        if event.type not in (LLM_REQUEST, TRANSCRIPT_COMPLETED):
+        # 只消费 llm.request——AL-P1-002 后 transcript 由 Orchestrator 决策。
+        if event.type != LLM_REQUEST:
             return
 
         user_text: str = event.payload.get("text", "")

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { MicrophoneRecorder } from "@/lib/audio/recorder";
 import { PcmPlayer } from "@/lib/audio/player";
 import { AVMux, type AvatarFrame } from "@/lib/audio/sync";
+import { buildPcmUplinkFrame, buildCameraUplinkFrame } from "@/lib/frames";
 import {
   sessionRuntimeReducer,
   summarizeEvent,
@@ -29,6 +30,8 @@ export interface TranscriptItem {
   role: "user" | "assistant";
   text: string;
   ts: number;
+  /** vision = 视觉工具结果（独立样式，AL-P2-009）；缺省为普通对话。 */
+  kind?: "message" | "vision";
 }
 
 /** 关键里程碑时间戳（相对本轮 t0 = transcript.completed）。类型沿用旧名以兼容渲染层。 */
@@ -173,10 +176,9 @@ export function useRealtimeSession({
       const jpegB64 = canvas.toDataURL("image/jpeg", 0.8).split(",")[1] ?? "";
       if (!jpegB64) return;
       const jpeg = Uint8Array.from(atob(jpegB64), (c) => c.charCodeAt(0));
-      const frame = new Uint8Array(1 + jpeg.length);
-      frame[0] = 0x02; // TAG_CAMERA_FRAME
-      frame.set(jpeg, 1);
-      ws.send(frame.buffer);
+      const frame = buildCameraUplinkFrame(jpeg);
+      if (!frame) return;
+      ws.send(frame);
       setDebugInfo((d) => ({ ...d, framesSent: d.framesSent + 1 }));
     } catch (e) {
       setError(`摄像头不可用：${(e as Error).message}`);
@@ -279,9 +281,10 @@ export function useRealtimeSession({
             ts,
           });
           if (desc) {
+            // 视觉工具结果：kind=vision 独立样式，不伪装成 persona 正式回复（AL-P2-009）
             setTranscript((prev) => [
               ...prev,
-              { role: "assistant", text: `【视觉】${desc}`, ts },
+              { role: "assistant", text: desc, ts, kind: "vision" },
             ]);
           }
           break;
@@ -446,11 +449,8 @@ export function useRealtimeSession({
           const ws = wsRef.current;
           if (ws?.readyState === WebSocket.OPEN) {
             // 上行二进制协议：0x00 + PCM16（显式 tag，与摄像头 0x02 区分）
-            const bytes = new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength);
-            const frame = new Uint8Array(1 + bytes.length);
-            frame[0] = 0x00; // TAG_PCM_UPLINK
-            frame.set(bytes, 1);
-            ws.send(frame.buffer);
+            const frame = buildPcmUplinkFrame(pcm);
+            if (frame) ws.send(frame);
           }
         },
         onError: (e) => setError(`麦克风错误：${e.message}`),

@@ -59,6 +59,8 @@ _VISION_TRIGGER_RE = re.compile(r"看看|评价|describe|looks?\s+like", re.IGNO
 
 # 视觉上下文有效期（秒）：超过后不再注入 LLM
 _VISION_CONTEXT_TTL_S = 30.0
+# Vision 手动帧最小调用间隔（AL-P1-011 节流）——无同轮等待的帧限频
+_VISION_MIN_INTERVAL_S = 2.0
 
 
 # Block category 标准名（和 Profile yaml 的 key 对齐）
@@ -142,6 +144,10 @@ class Orchestrator:
         # 同轮 Vision 等待：session_id -> (request_id, Future)。
         # 触发词命中后挂起，ingest_vision_frame/超时/打断时 resolve。
         self._vision_pending: dict[str, tuple[str, asyncio.Future[None]]] = {}
+        # Vision 调用并发锁与节流（AL-P1-011）：同 session 同时仅 1 个多模态调用；
+        # 无同轮等待的手动帧受最小间隔限制——任意频率帧都会触发远程 API（费用风险）
+        self._vision_locks: dict[str, asyncio.Lock] = {}
+        self._vision_last_call: dict[str, float] = {}
         # 内部任务（订阅消费者等）
         self._tasks: list[asyncio.Task[None]] = []
         self._setup_done = False
@@ -249,6 +255,8 @@ class Orchestrator:
             pending[1].cancel()
         self._persona_contexts.pop(session.session_id, None)
         self._vision_contexts.pop(session.session_id, None)
+        self._vision_locks.pop(session.session_id, None)
+        self._vision_last_call.pop(session.session_id, None)
         await session.close(reason)
         self.sessions.remove(session.session_id)
 
@@ -350,6 +358,29 @@ class Orchestrator:
             self._resolve_vision_pending(session.session_id)
             return
         pending = self._vision_pending.get(session.session_id)
+        # AL-P1-011 并发锁：同 session 已有 vision 调用进行中 → 丢弃重复帧。
+        # 进行中的调用会 resolve pending（若有），新帧无需再调远程 API。
+        lock = self._vision_locks.setdefault(session.session_id, asyncio.Lock())
+        if lock.locked():
+            logger.info(
+                "vision 调用进行中，丢弃重复帧 (session %s)",
+                session.session_id[:12],
+            )
+            return
+        # AL-P1-011 节流：无同轮等待的手动帧受最小间隔限制（费用控制）。
+        # 有 pending（触发词同轮）的帧必须服务——它是本轮回答的前提。
+        if pending is None:
+            last = self._vision_last_call.get(session.session_id, 0.0)
+            gap = time.monotonic() - last
+            if gap < _VISION_MIN_INTERVAL_S:
+                logger.info(
+                    "vision 帧节流丢弃（距上次 %.1fs < %.1fs, session %s）",
+                    gap,
+                    _VISION_MIN_INTERVAL_S,
+                    session.session_id[:12],
+                )
+                return
+        self._vision_last_call[session.session_id] = time.monotonic()
         request_id = pending[0] if pending else None
         ctx = BlockContext(
             session_id=session.session_id,
@@ -358,34 +389,35 @@ class Orchestrator:
             config=self._block_configs.get(CATEGORY_VISION, {}),
             _emit_fn=self._on_event,
         )
-        try:
-            result = await vision.describe_frame(
-                ctx,
-                jpeg_b64,
-                prompt=(
-                    "描述这张图片里的内容，包括人物外貌特征、穿着、表情、"
-                    "以及周围环境。用中文，2-3 句话。"
-                ),
-                request_id=request_id,
-            )
-            description = result.payload.get("description", "")
-            if description and "视觉感知失败" not in description:
-                self._vision_contexts[session.session_id] = {
-                    "description": description,
-                    "request_id": request_id,
-                    "ts": time.monotonic(),
-                }
-                logger.info(
-                    "vision 分析完成 (session %s, req %s): %.60s",
-                    session.session_id[:12],
-                    (request_id or "-")[:12],
-                    description,
+        async with lock:
+            try:
+                result = await vision.describe_frame(
+                    ctx,
+                    jpeg_b64,
+                    prompt=(
+                        "描述这张图片里的内容，包括人物外貌特征、穿着、表情、"
+                        "以及周围环境。用中文，2-3 句话。"
+                    ),
+                    request_id=request_id,
                 )
-        except Exception as e:
-            logger.warning("vision describe_frame 失败: %s", e)
-        finally:
-            # 成功/失败都唤醒同轮等待——失败走降级回答，不让 LLM 干等超时
-            self._resolve_vision_pending(session.session_id)
+                description = result.payload.get("description", "")
+                if description and "视觉感知失败" not in description:
+                    self._vision_contexts[session.session_id] = {
+                        "description": description,
+                        "request_id": request_id,
+                        "ts": time.monotonic(),
+                    }
+                    logger.info(
+                        "vision 分析完成 (session %s, req %s): %.60s",
+                        session.session_id[:12],
+                        (request_id or "-")[:12],
+                        description,
+                    )
+            except Exception as e:
+                logger.warning("vision describe_frame 失败: %s", e)
+            finally:
+                # 成功/失败都唤醒同轮等待——失败走降级回答，不让 LLM 干等超时
+                self._resolve_vision_pending(session.session_id)
 
     async def handle_vision_frame_error(self, session: Session, reason: str) -> None:
         """浏览器截帧失败（摄像头拒绝/不可用）——立即降级，不等超时。"""

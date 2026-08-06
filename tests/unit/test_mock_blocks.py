@@ -6,6 +6,7 @@ import base64
 
 import numpy as np
 from avatarloom_protocol import (
+    LLM_REQUEST,
     AUDIO_APPENDED,
     LLM_TEXT_DELTA,
     SPEECH_DETECTED,
@@ -174,9 +175,9 @@ class TestMockLlm:
         ctx.config = {"chunk_delay_ms": 0}  # 测试不等
         await _setup_block(block, ctx)
         event = Event(
-            type=TRANSCRIPT_COMPLETED,
+            type=LLM_REQUEST,
             session_id="s1",
-            source="stt",
+            source="orchestrator",
             payload={"text": "你好"},
         )
         out = await _capture_emits(block, ctx, event)
@@ -195,9 +196,9 @@ class TestMockLlm:
         await _setup_block(block, ctx)
         # "数字人" 关键词
         event = Event(
-            type=TRANSCRIPT_COMPLETED,
+            type=LLM_REQUEST,
             session_id="s1",
-            source="stt",
+            source="orchestrator",
             payload={"text": "请介绍数字人"},
         )
         out = await _capture_emits(block, ctx, event)

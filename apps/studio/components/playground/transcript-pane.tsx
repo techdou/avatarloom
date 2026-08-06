@@ -112,7 +112,8 @@ export function TranscriptPane({
             key={i}
             role={item.role}
             text={item.text}
-            label={item.role === "user" ? "你" : assistantLabel}
+            label={item.kind === "vision" ? "视觉感知" : item.role === "user" ? "你" : assistantLabel}
+            variant={item.kind === "vision" ? "tool" : "default"}
           />
         ))}
         {llmDelta && (
