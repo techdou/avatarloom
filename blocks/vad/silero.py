@@ -183,10 +183,14 @@ class SileroVadBlock(Block):
         return model, utils
 
     def _infer(self, chunk: np.ndarray, h: Any) -> tuple[float, Any]:
-        """单次推理。返回 (prob, new_hidden_state)。"""
+        """单次推理。返回 (prob, new_hidden_state)。
+
+        Silero VAD 的 forward 签名是 (x, sr, h)——新版模型 sr 必须显式传，
+        否则 torch 2.8+ 报 "Expected value of type 'int' for argument 'sr'"。
+        """
         import torch
 
         t = torch.from_numpy(chunk).unsqueeze(0)
         with torch.no_grad():
-            out, h = self._model(t, h)
+            out, h = self._model(t, _SAMPLE_RATE, h)
         return float(out.item()), h
