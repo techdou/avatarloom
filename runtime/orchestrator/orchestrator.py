@@ -22,7 +22,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
 from avatarloom_protocol import (
@@ -32,6 +34,7 @@ from avatarloom_protocol import (
     SPEECH_ENDED,
     TRANSCRIPT_COMPLETED,
     TTS_AUDIO_COMPLETED,
+    VISION_REQUEST,
     Event,
     State,
 )
@@ -47,6 +50,9 @@ from runtime.orchestrator.config import OrchestratorConfig
 from runtime.session import Session, SessionManager
 
 logger = logging.getLogger(__name__)
+
+# 视觉触发词：用户说出这些词 → 下行 vision.request 让浏览器截帧分析
+_VISION_TRIGGER_RE = re.compile(r"看看|评价|describe|looks?\s+like", re.IGNORECASE)
 
 
 # Block category 标准名（和 Profile yaml 的 key 对齐）
@@ -122,6 +128,9 @@ class Orchestrator:
         self.degraded_blocks: dict[str, str] = {}  # category -> fallback block_id
         # Persona 上下文（session_id -> dict），切换 Persona 时更新
         self._persona_contexts: dict[str, dict[str, Any]] = {}
+        # 视觉感知上下文（session_id -> 最近一次 describe_frame 的描述），
+        # 供 LLM 下一轮回复注入（"用户让你看的画面"）
+        self._vision_contexts: dict[str, str] = {}
         # 内部任务（订阅消费者等）
         self._tasks: list[asyncio.Task[None]] = []
         self._setup_done = False
@@ -192,7 +201,13 @@ class Orchestrator:
         persona_id: str | None = None,
         workspace_root: str = ".",
     ) -> Session:
-        """开始一个新会话。"""
+        """开始一个新会话。
+
+        传 persona_id 时自动加载 persona 并填充 _persona_contexts——
+        否则 LLM 拿不到 persona_instructions（强约束失效）、TTS 拿不到
+        voice_ref（音色克隆失效）。修复：gateway session.start 只调本方法
+        不调 switch_persona 导致上下文恒空的 bug。
+        """
         session = self.sessions.create_session(
             profile_id=self.config.profile_id,
             persona_id=persona_id,
@@ -200,6 +215,19 @@ class Orchestrator:
         )
         session.set_emit_fn(self._on_event)
         await session.start()
+
+        if persona_id:
+            try:
+                from blocks.persona.loader import load_persona
+
+                persona = load_persona(
+                    Path(workspace_root) / "personas" / persona_id,
+                    workspace_root=workspace_root,
+                )
+                await self._apply_persona_context(session, persona)
+            except Exception as e:
+                logger.warning("persona %s 加载失败（继续用 profile 默认）: %s", persona_id, e)
+
         return session
 
     async def end_session(self, session: Session, reason: str = "normal") -> None:
@@ -230,20 +258,7 @@ class Orchestrator:
         old_persona_id = session.persona_id
         session.persona_id = persona.id
 
-        # 更新各 Block 的运行时上下文（v0.1 通过 persona 上下文传递）
-        # LLM：instructions
-        # TTS：voice ref
-        # Avatar：portrait
-        # Memory：namespace
-        # 这些通过 BlockContext 传给 process()——orchestrator._make_block_handler 重建 ctx 时会读取
-        # 这里记录到 session 级别供后续 process() 用
-        self._persona_contexts[session.session_id] = {
-            "persona_id": persona.id,
-            "instructions": persona.prompt,
-            "voice_ref": getattr(persona, "voice_ref_audio", None),
-            "avatar_ref": getattr(persona, "avatar_portrait", None),
-            "memory_namespace": getattr(persona, "memory_namespace", None),
-        }
+        await self._apply_persona_context(session, persona)
 
         await session._emit_event(  # type: ignore[attr-defined]
             Event(
@@ -266,6 +281,20 @@ class Orchestrator:
             persona.id,
             session.session_id[:12],
         )
+
+    async def _apply_persona_context(self, session: Session, persona: Any) -> None:
+        """把 persona 上下文写入 _persona_contexts（LLM instructions / TTS voice / Avatar asset）。
+
+        start_session 和 switch_persona 共用——缺此注入时 LLM 拿不到
+        persona_instructions（强约束失效）、TTS 拿不到 voice_ref（克隆失效）。
+        """
+        self._persona_contexts[session.session_id] = {
+            "persona_id": persona.id,
+            "instructions": persona.prompt,
+            "voice_ref": getattr(persona, "voice_ref_audio", None),
+            "avatar_ref": getattr(persona, "avatar_portrait", None),
+            "memory_namespace": getattr(persona, "memory_namespace", None),
+        }
 
     # ------------------------------------------------------------------
     # 音频入口（浏览器上行）
@@ -290,6 +319,42 @@ class Orchestrator:
             },
         )
         await self._on_event(event)
+
+    async def ingest_vision_frame(self, session: Session, jpeg_b64: str) -> None:
+        """接收浏览器摄像头截帧（0x02 上行），调用 vision block 多模态分析。
+
+        结果存到 _vision_contexts（供 LLM 下一轮注入），VISION_RESULT 事件
+        由 describe_frame emit。vision block 缺席时静默跳过（不阻断主链路）。
+        """
+        vision = self.blocks.get(CATEGORY_VISION)
+        if vision is None:
+            logger.info("vision block 未装配，跳过摄像头帧分析")
+            return
+        ctx = BlockContext(
+            session_id=session.session_id,
+            run_id=session.current_run_id,
+            workspace_root=".",
+            _emit_fn=self._on_event,
+        )
+        try:
+            result = await vision.describe_frame(
+                ctx,
+                jpeg_b64,
+                prompt=(
+                    "描述这张图片里的内容，包括人物外貌特征、穿着、表情、"
+                    "以及周围环境。用中文，2-3 句话。"
+                ),
+            )
+            description = result.payload.get("description", "")
+            if description and "视觉感知失败" not in description:
+                self._vision_contexts[session.session_id] = description
+                logger.info(
+                    "vision 分析完成 (session %s): %.60s",
+                    session.session_id[:12],
+                    description,
+                )
+        except Exception as e:
+            logger.warning("vision describe_frame 失败: %s", e)
 
     async def handle_user_speech_started(self, session: Session) -> None:
         """VAD 检测到用户开始说话——可能触发打断。
@@ -482,6 +547,7 @@ class Orchestrator:
                 persona_instructions=persona_ctx.get("instructions"),
                 persona_voice_ref=persona_ctx.get("voice_ref"),
                 persona_avatar_ref=persona_ctx.get("avatar_ref"),
+                vision_description=self._vision_contexts.get(event.session_id),
             )
             try:
                 await block.process(ctx, event)
@@ -543,6 +609,18 @@ class Orchestrator:
         if not text.strip():
             await session.try_trigger("transcript_empty")
             return
+        # 触发词检测：命中 → 下行 vision.request 让浏览器截帧上行
+        m = _VISION_TRIGGER_RE.search(text)
+        if m:
+            await self._on_event(
+                Event(
+                    type=VISION_REQUEST,
+                    session_id=session.session_id,
+                    source="orchestrator.trigger",
+                    run_id=session.current_run_id,
+                    payload={"keyword": m.group(0)},
+                )
+            )
         # 开始新一轮 Run
         await session.start_new_run()
         await session.trigger("transcript_ready")

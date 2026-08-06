@@ -40,6 +40,7 @@ export interface DebugInfo {
   framesShown: number;
   audioChunks: number;
   queueLen: number;
+  framesSent: number; // 摄像头截帧上行次数（vision）
 }
 
 export interface UseRealtimeSessionArgs {
@@ -65,6 +66,7 @@ export interface RealtimeSession {
   disconnect: () => void;
   toggleMic: () => Promise<void>;
   interrupt: () => void;
+  captureAndSendFrame: () => Promise<void>;
 }
 
 /**
@@ -96,6 +98,7 @@ export function useRealtimeSession({
     framesShown: 0,
     audioChunks: 0,
     queueLen: 0,
+    framesSent: 0,
   });
   const [timing, setTiming] = useState<SessionTiming>({
     transcriptTs: null,
@@ -130,6 +133,48 @@ export function useRealtimeSession({
     });
     setDebugInfo((d) => ({ ...d, framesShown: d.framesShown + 1 }));
     setTiming((t) => (t.firstFrameTs == null ? { ...t, firstFrameTs: Date.now() } : t));
+  }, []);
+
+  /**
+   * 摄像头截帧上行（0x02 + JPEG）。一次性取流：截完即停，不常驻摄像头。
+   * 供"看看我"按钮与下行 vision.request 触发。
+   */
+  const captureAndSendFrame = useCallback(async () => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    let track: MediaStreamTrack | null = null;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: 640, height: 480 },
+        audio: false,
+      });
+      track = stream.getVideoTracks()[0];
+      const video = document.createElement("video");
+      video.srcObject = stream;
+      // 等首帧就绪（超时兜底 1.5s）
+      await new Promise<void>((resolve) => {
+        video.onloadedmetadata = () => resolve();
+        setTimeout(resolve, 1500);
+      });
+      await video.play();
+      await new Promise((r) => setTimeout(r, 100));
+      const canvas = document.createElement("canvas");
+      canvas.width = video.videoWidth || 640;
+      canvas.height = video.videoHeight || 480;
+      canvas.getContext("2d")?.drawImage(video, 0, 0);
+      const jpegB64 = canvas.toDataURL("image/jpeg", 0.8).split(",")[1] ?? "";
+      if (!jpegB64) return;
+      const jpeg = Uint8Array.from(atob(jpegB64), (c) => c.charCodeAt(0));
+      const frame = new Uint8Array(1 + jpeg.length);
+      frame[0] = 0x02; // TAG_CAMERA_FRAME
+      frame.set(jpeg, 1);
+      ws.send(frame.buffer);
+      setDebugInfo((d) => ({ ...d, framesSent: d.framesSent + 1 }));
+    } catch (e) {
+      setError(`摄像头不可用：${(e as Error).message}`);
+    } finally {
+      track?.stop();
+    }
   }, []);
 
   const handleMessage = useCallback(
@@ -187,12 +232,26 @@ export function useRealtimeSession({
         case "response.done":
           setPlaying(false);
           break;
+        case "vision.request":
+          // 后端触发词命中 → 自动截帧上行
+          void captureAndSendFrame();
+          break;
+        case "vision.result": {
+          const desc = (msg.payload?.description as string) || "";
+          if (desc) {
+            setTranscript((prev) => [
+              ...prev,
+              { role: "assistant", text: `【视觉】${desc}`, ts: Date.now() },
+            ]);
+          }
+          break;
+        }
         case "error":
           setError((msg.payload?.message as string) || "unknown error");
           break;
       }
     },
-    []
+    [captureAndSendFrame]
   );
 
   const handleBinary = useCallback((data: ArrayBuffer) => {
@@ -380,5 +439,6 @@ export function useRealtimeSession({
     disconnect,
     toggleMic,
     interrupt,
+    captureAndSendFrame,
   };
 }

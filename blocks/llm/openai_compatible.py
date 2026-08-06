@@ -102,6 +102,12 @@ class OpenAILlmBlock(Block):
             return
 
         system_prompt = ctx.persona_instructions or str(ctx.config.get("systemPrompt") or "")
+        # 视觉感知注入：最近一次摄像头帧描述（若有）
+        if ctx.vision_description:
+            system_prompt += (
+                "\n\n【视觉感知】用户刚刚让你看的画面："
+                f"{ctx.vision_description}。请自然地基于此回应。"
+            )
         messages = _build_messages(system_prompt, user_text)
 
         full_text = ""

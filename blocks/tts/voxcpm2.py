@@ -50,6 +50,7 @@ class VoxCpm2TtsBlock(Block):
     _inference_timesteps: int = 10
     _normalize: bool = False
     _denoise: bool = False
+    _prompt_text: str = ""  # 参考音频对应的文本（与 voiceRef 成对，音色克隆锚点）
     _voice_caches: dict[str, Any] = {}
     _sentence_buffers: dict[int, str] = {}
     _total_samples: int = 0
@@ -93,6 +94,8 @@ class VoxCpm2TtsBlock(Block):
         # 流式切块粒度（32ms @16k = 512），profile 可覆盖
         self._block_size = int(cfg.get("blocksize", BLOCK_SIZE))
         self._default_voice_ref = self._resolve_path(cfg.get("voiceRef"), ctx)
+        # 参考音频对应的文本（VoxCPM2 要求 prompt_wav_path+prompt_text 成对）
+        self._prompt_text = str(cfg.get("promptText") or cfg.get("stylePrefix") or "")
         try:
             self._model = self._load_model(
                 str(cfg.get("model", "openbmb/VoxCPM2")), self._device
@@ -256,7 +259,9 @@ class VoxCpm2TtsBlock(Block):
             "denoise": self._denoise,
         }
         if voice_ref:
+            # VoxCPM2 要求 prompt_wav_path 与 prompt_text 成对（音色克隆语义锚点）
             kwargs["prompt_wav_path"] = voice_ref
+            kwargs["prompt_text"] = self._prompt_text
         yield from self._model.generate_streaming(text, **kwargs)
 
 

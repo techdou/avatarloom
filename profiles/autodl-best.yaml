@@ -47,6 +47,7 @@ blocks:
       normalize: true
       denoise: false
       stylePrefix: "温柔女声，自然亲切"
+      promptText: "你好，很高兴认识你。今天过得怎么样？"
       voiceRef: personas/demo-assistant/voice/ref.wav
     fallback: tts.mock
   avatar:
@@ -69,6 +70,7 @@ blocks:
     id: vision.openai-compatible
     deployment: remote
     optional: true
+    # baseUrl/model 缺省时从环境变量 VISION_BASE_URL / VISION_MODEL 读取
 sync:
   audio_delay_ms: 800
   video_lag_frames: 0

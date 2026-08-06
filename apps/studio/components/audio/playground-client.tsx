@@ -95,6 +95,7 @@ export function PlaygroundClient() {
         onPersonaChange={handlePersonaChange}
         onConnect={session.connect}
         onDisconnect={session.disconnect}
+        onCaptureFrame={session.captureAndSendFrame}
         showDebug={showDebug}
         onToggleDebug={setShowDebug}
       />

@@ -42,13 +42,15 @@ class OpenAIVisionBlock(Block):
         )
 
     async def setup(self, ctx: BlockContext) -> None:
-        cfg = ctx.config
-        self._base_url = str(cfg.get("baseUrl") or "https://api.openai.com/v1")
         import os
 
+        cfg = ctx.config
+        self._base_url = str(
+            cfg.get("baseUrl") or os.environ.get("VISION_BASE_URL") or "https://api.openai.com/v1"
+        )
         api_key_env = str(cfg.get("apiKeyEnv") or "VISION_API_KEY")
         self._api_key = str(cfg.get("apiKey") or os.environ.get(api_key_env, ""))
-        self._model = str(cfg.get("model") or "gpt-4o")
+        self._model = str(cfg.get("model") or os.environ.get("VISION_MODEL") or "gpt-4o")
         self._mark_ready()
         await ctx.logger.ainfo("vision.openai-compatible ready", model=self._model)
 

@@ -51,6 +51,7 @@ from avatarloom_protocol.envelope import (
     TTS_AUDIO_DELTA,
     TTS_ERROR,
     # vision.*
+    VISION_REQUEST,
     VISION_RESULT,
     Event,
     EventEnvelope,
@@ -124,6 +125,7 @@ __all__ = [
     "AVATAR_RESET",
     "AVATAR_DEGRADED",
     "AVATAR_VIDEO_READY",
+    "VISION_REQUEST",
     "VISION_RESULT",
     "PERSONA_CHANGED",
     "RESPONSE_STARTED",

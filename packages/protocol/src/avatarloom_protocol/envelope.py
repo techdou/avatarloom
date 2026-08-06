@@ -75,6 +75,7 @@ AVATAR_DEGRADED = EventType("avatar.degraded")  # 降级到 StaticAvatar
 AVATAR_VIDEO_READY = EventType("avatar.video.ready")  # 真实口型视频渲染完成（含 mp4 路径）
 
 # vision.*
+VISION_REQUEST = EventType("vision.request")  # 触发词命中 → 请求浏览器截帧上行
 VISION_RESULT = EventType("vision.result")
 
 # persona.*

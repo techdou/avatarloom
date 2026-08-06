@@ -28,6 +28,8 @@ from avatarloom_protocol import (
     TRANSCRIPT_COMPLETED,
     TTS_AUDIO_COMPLETED,
     TTS_AUDIO_DELTA,
+    VISION_REQUEST,
+    VISION_RESULT,
     Event,
 )
 from fastapi import WebSocket, WebSocketDisconnect
@@ -36,6 +38,7 @@ from starlette.websockets import WebSocketState
 from avatarloom_runtime_gateway.config import Settings
 from avatarloom_runtime_gateway.protocol import (
     TAG_AVATAR_JPEG,
+    TAG_CAMERA_FRAME,
     TAG_TTS_PCM_DOWNLINK,
     ClientMessage,
 )
@@ -130,10 +133,17 @@ class WebSocketSession:
             await self._enqueue_json({"type": "pong"})
 
     async def _handle_bytes(self, data: bytes) -> None:
-        """处理上行二进制：默认当作 PCM16。"""
+        """处理上行二进制：0x02=摄像头截帧（vision），其余当作 PCM16。"""
         if not self.session or not self.orchestrator:
             return
-        # 16-bit samples
+        # 0x02 + JPEG：摄像头截帧 → vision 多模态分析
+        if data and data[0] == TAG_CAMERA_FRAME:
+            jpeg = data[1:]
+            if jpeg:
+                jpeg_b64 = base64.b64encode(jpeg).decode("ascii")
+                await self.orchestrator.ingest_vision_frame(self.session, jpeg_b64)
+            return
+        # 16-bit samples（无 tag / 0x00 = 上行 PCM）
         samples = len(data) // 2
         pcm_b64 = base64.b64encode(data).decode("ascii")
         await self.orchestrator.ingest_audio(self.session, pcm_b64, samples)
@@ -284,6 +294,12 @@ class WebSocketSession:
             # 结束 Run 记录
             if self.recorder and event.run_id and self.recorder.is_active(event.run_id):
                 await self.recorder.finalize_run(event.run_id)
+
+        # Vision：触发词命中 → 请求浏览器截帧；分析结果 → 下行描述
+        elif event.type == VISION_REQUEST:
+            await self._enqueue_json({"type": "vision.request", "payload": event.payload})
+        elif event.type == VISION_RESULT:
+            await self._enqueue_json({"type": "vision.result", "payload": event.payload})
 
         # TTS 音频：二进制下行 + JSON 元数据
         elif event.type == TTS_AUDIO_DELTA:

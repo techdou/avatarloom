@@ -185,6 +185,8 @@ class BlockContext:
     persona_instructions: str | None = None
     persona_voice_ref: str | None = None
     persona_avatar_ref: str | None = None
+    # 视觉感知（最近一次摄像头帧描述，供 LLM 等注入）
+    vision_description: str | None = None
     # 事件发射器：Runtime 注入
     _emit_fn: Callable[[Event], Awaitable[None]] | None = field(default=None, repr=False)
     # 结构化日志

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { clsx } from "clsx";
-import { Power } from "lucide-react";
+import { Camera, Power } from "lucide-react";
 import { ThemeToggle } from "@/components/layout/theme-toggle";
 import type { Persona, RuntimeProfile } from "@/lib/api";
 
@@ -16,6 +16,7 @@ interface ContextBarProps {
   onPersonaChange: (id: string) => void;
   onConnect: () => void;
   onDisconnect: () => void;
+  onCaptureFrame?: () => void;
   showDebug: boolean;
   onToggleDebug: (v: boolean) => void;
 }
@@ -33,6 +34,7 @@ export function ContextBar({
   onPersonaChange,
   onConnect,
   onDisconnect,
+  onCaptureFrame,
   showDebug,
   onToggleDebug,
 }: ContextBarProps) {
@@ -92,9 +94,21 @@ export function ContextBar({
         <span className="text-sm font-medium truncate">{connLabel}</span>
       </div>
       {conn === "connected" ? (
-        <button onClick={onDisconnect} className="btn btn-sm btn-danger">
-          断开
-        </button>
+        <>
+          {onCaptureFrame && (
+            <button
+              onClick={onCaptureFrame}
+              className="btn btn-sm btn-ghost inline-flex items-center gap-1"
+              title="截一帧摄像头画面上行分析（或对数字人说「看看我」）"
+            >
+              <Camera className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">看看我</span>
+            </button>
+          )}
+          <button onClick={onDisconnect} className="btn btn-sm btn-danger">
+            断开
+          </button>
+        </>
       ) : (
         <button
           onClick={onConnect}
