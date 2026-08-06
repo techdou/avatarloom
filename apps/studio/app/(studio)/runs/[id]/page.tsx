@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { clsx } from "clsx";
 import { apiFetch, type Run, type RunMetrics, type Artifact } from "@/lib/api";
 import { PipelineTimeline } from "@/components/playground/pipeline-timeline";
+import { MessageBubble } from "@/components/ui/message-bubble";
 
 interface PageProps {
   params: { id: string };
@@ -101,10 +102,10 @@ export default async function RunDetailPage({ params }: PageProps) {
               <h2 className="mb-3">对话内容</h2>
               <div className="space-y-3">
                 {run.user_text && (
-                  <TranscriptBubble role="user" text={run.user_text} />
+                  <MessageBubble role="user" text={run.user_text} />
                 )}
                 {run.assistant_text && (
-                  <TranscriptBubble role="assistant" text={run.assistant_text} />
+                  <MessageBubble role="assistant" text={run.assistant_text} />
                 )}
               </div>
             </section>
@@ -221,25 +222,6 @@ function MetricBar({
   );
 }
 
-function TranscriptBubble({ role, text }: { role: "user" | "assistant"; text: string }) {
-  const isUser = role === "user";
-  return (
-    <div className={clsx("flex", isUser ? "justify-end" : "justify-start")}>
-      <div
-        className={clsx(
-          "max-w-[88%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed",
-          isUser
-            ? "bg-accent-soft text-fg rounded-br-md dark:bg-accent/15"
-            : "bg-bg-subtle border border-border rounded-bl-md dark:bg-border/20 dark:border-border"
-        )}
-      >
-        <div className="text-micro text-fg-subtle mb-1">{isUser ? "你" : "小灵"}</div>
-        <div className="whitespace-pre-wrap break-words">{text}</div>
-      </div>
-    </div>
-  );
-}
-
 function Stat({
   label,
   value,
@@ -263,8 +245,6 @@ function Stat({
 }
 
 function ArtifactRow({ artifact }: { artifact: Artifact }) {
-  const isVideo = artifact.mime_type?.startsWith("video/");
-  const isAudio = artifact.mime_type?.startsWith("audio/");
   return (
     <div className="border border-border rounded-md p-2.5 dark:border-border">
       <div className="flex items-center justify-between gap-2 mb-1">
@@ -277,13 +257,6 @@ function ArtifactRow({ artifact }: { artifact: Artifact }) {
           <span>· {formatBytes(artifact.size_bytes)}</span>
         )}
       </div>
-      {/* 注：暂无 artifact 文件流端点；当 kind 为媒体且后端提供时此处预留回放位。
-          run_dir 是服务端工作区路径，前端不可直接访问。 */}
-      {(isVideo || isAudio) && (
-        <div className="mt-2 text-micro text-fg-subtle italic">
-          {isVideo ? "视频" : "音频"}回放需通过产物文件端点访问（暂未开放）。
-        </div>
-      )}
     </div>
   );
 }

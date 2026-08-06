@@ -42,7 +42,7 @@ export default async function ProfilesPage() {
             const blockCategories = Object.keys(p.blocks || {});
             const isBest = p.id === "autodl-best";
             return (
-              <div key={p.id} className={isBest ? "card card-hover border-accent/40 ring-1 ring-accent/10" : "card card-hover"}>
+              <div key={p.id} className={isBest ? "card card-hover ring-1 ring-accent/30" : "card card-hover"}>
                 <div className="flex items-start justify-between gap-3 mb-2">
                   <div className="flex items-center gap-2">
                     <div className="font-medium">{p.name}</div>
@@ -72,18 +72,6 @@ export default async function ProfilesPage() {
           })}
         </div>
       )}
-
-      <div className="mt-6">
-        <div className="section-label mb-2">内置 Profile（YAML 文件）</div>
-        <div className="card text-sm">
-          <ul className="text-fg-muted space-y-1.5">
-            <li><code className="text-xs">profiles/mock.yaml</code> — 纯 Mock，不依赖任何外部资源</li>
-            <li><code className="text-xs">profiles/lite-12gb.yaml</code> — 12GB GPU 单机</li>
-            <li><code className="text-xs">profiles/distributed.yaml</code> — 分布式混合</li>
-            <li><code className="text-xs">profiles/full-24gb.yaml</code> — 24GB+ GPU 全量</li>
-          </ul>
-        </div>
-      </div>
     </div>
   );
 }

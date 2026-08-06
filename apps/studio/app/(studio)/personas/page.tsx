@@ -37,12 +37,12 @@ export default async function PersonasPage() {
           action={{ label: "创建第一个 Persona", href: "/personas/new" }}
         />
       ) : (
-        <div className="space-y-2.5">
+        <div className="space-y-2">
           {personas.map((p) => (
             <Link key={p.id} href={`/personas/${p.id}`} className="card card-hover block">
               <div className="flex items-start justify-between gap-3">
                 <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-lg bg-accent-soft text-accent flex items-center justify-center text-sm font-semibold">
+                  <div className="w-8 h-8 rounded-lg bg-bg-subtle text-fg-muted flex items-center justify-center text-sm font-semibold dark:bg-border/30">
                     {p.name.slice(0, 1)}
                   </div>
                   <div>
@@ -56,7 +56,7 @@ export default async function PersonasPage() {
                 <div className="text-xs text-fg-subtle font-mono">{p.id}</div>
               </div>
               {p.prompt && (
-                <div className="text-sm text-fg-muted mt-2.5 line-clamp-2">{p.prompt}</div>
+                <div className="text-sm text-fg-muted mt-2 line-clamp-2 whitespace-pre-wrap">{p.prompt}</div>
               )}
             </Link>
           ))}

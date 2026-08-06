@@ -17,9 +17,9 @@ export default async function DashboardPage() {
   const { personas, blocks, profiles } = await getStats();
 
   const stats = [
-    { label: "Personas", value: personas.length, href: "/personas", hint: "人设" },
-    { label: "Block Definitions", value: blocks.length, href: "/blocks", hint: "模块" },
-    { label: "Runtime Profiles", value: profiles.length, href: "/profiles", hint: "运行时配置" },
+    { label: "Personas", value: personas.length, href: "/personas" },
+    { label: "Block Definitions", value: blocks.length, href: "/blocks" },
+    { label: "Runtime Profiles", value: profiles.length, href: "/profiles" },
   ];
 
   return (
@@ -27,7 +27,7 @@ export default async function DashboardPage() {
       <div className="page-header">
         <div>
           <h1 className="page-title">总览</h1>
-          <p className="page-desc">AvatarLoom 灵构——模块化实时数字人运行平台 · AutoDL RTX 5090</p>
+          <p className="page-desc">模块化实时数字人运行平台</p>
         </div>
         <Link href="/playground" className="btn btn-primary">进入实时对话</Link>
       </div>
@@ -35,11 +35,8 @@ export default async function DashboardPage() {
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
         {stats.map((s) => (
           <Link key={s.label} href={s.href} className="card card-hover group">
-            <div className="flex items-center justify-between">
-              <div className="text-sm text-fg-muted">{s.label}</div>
-              <span className="badge badge-accent">{s.hint}</span>
-            </div>
-            <div className="text-3xl font-semibold mt-2 group-hover:text-accent transition-colors">
+            <div className="text-sm text-fg-muted">{s.label}</div>
+            <div className="text-3xl font-semibold mt-2 tabular-nums group-hover:text-accent transition-colors">
               {s.value}
             </div>
           </Link>
@@ -55,9 +52,9 @@ export default async function DashboardPage() {
             ["开始语音对话", "/playground", "连接 Gateway，打开麦克风"],
             ["回看运行记录", "/runs", "每轮对话的录制与指标"],
           ].map(([label, href, desc], i) => (
-            <li key={href} className="flex items-start gap-3">
-              <span className="w-5 h-5 rounded-full bg-accent-soft text-accent text-micro font-semibold flex items-center justify-center shrink-0 mt-0.5">
-                {i + 1}
+            <li key={href} className="flex items-start gap-3 border-l border-border pl-3">
+              <span className="text-fg-subtle font-mono text-xs shrink-0 mt-0.5 w-4">
+                {i + 1}.
               </span>
               <div>
                 <Link href={href} className="font-medium text-fg underline-offset-2 hover:underline">

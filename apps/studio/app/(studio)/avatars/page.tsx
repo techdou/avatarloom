@@ -40,14 +40,14 @@ export default async function AvatarsPage() {
           action={{ label: "创建第一个 Avatar", href: "/avatars/new" }}
         />
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
           {avatars.map((av) => (
             <Link
               key={av.id}
               href={`/avatars/${av.id}`}
               className="card card-hover overflow-hidden p-0 group"
             >
-              <div className="aspect-[4/3] bg-bg-subtle flex items-center justify-center overflow-hidden">
+              <div className="aspect-[5/4] bg-bg-subtle flex items-center justify-center overflow-hidden dark:bg-bg-subtle-dark">
                 {av.portrait_path ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
@@ -56,7 +56,10 @@ export default async function AvatarsPage() {
                     className="w-full h-full object-cover transition-transform group-hover:scale-[1.03]"
                   />
                 ) : (
-                  <div className="text-fg-subtle text-xs">无肖像</div>
+                  <div className="flex flex-col items-center gap-1 text-fg-subtle">
+                    <ImageOff className="w-5 h-5" />
+                    <span className="text-xs">无肖像</span>
+                  </div>
                 )}
               </div>
               <div className="p-3.5">

@@ -1,3 +1,5 @@
+import { ActiveContextCard } from "@/components/settings/active-context-card";
+
 export default function SettingsPage() {
   const services = [
     { label: "Control API", value: "http://127.0.0.1:8100", desc: "配置与资产管理" },
@@ -10,11 +12,13 @@ export default function SettingsPage() {
       <div className="page-header">
         <div>
           <h1 className="page-title">设置</h1>
-          <p className="page-desc">服务地址与环境变量说明。</p>
+          <p className="page-desc">当前运行时上下文、服务地址与环境说明。</p>
         </div>
       </div>
 
       <div className="max-w-2xl space-y-4">
+        <ActiveContextCard />
+
         <div className="card">
           <h2 className="mb-4">服务地址</h2>
           <div className="space-y-1">
@@ -30,6 +34,16 @@ export default function SettingsPage() {
               </div>
             ))}
           </div>
+        </div>
+
+        <div className="card">
+          <h2 className="mb-3">内置 Profile（YAML 文件）</h2>
+          <ul className="text-sm text-fg-muted space-y-1.5">
+            <li><code className="text-xs">profiles/mock.yaml</code> — 纯 Mock，不依赖任何外部资源</li>
+            <li><code className="text-xs">profiles/lite-12gb.yaml</code> — 12GB GPU 单机</li>
+            <li><code className="text-xs">profiles/distributed.yaml</code> — 分布式混合</li>
+            <li><code className="text-xs">profiles/full-24gb.yaml</code> — 24GB+ GPU 全量</li>
+          </ul>
         </div>
 
         <div className="card">
