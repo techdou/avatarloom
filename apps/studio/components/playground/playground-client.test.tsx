@@ -3,8 +3,7 @@ import { render, screen } from "@testing-library/react";
 import { PlaygroundClient } from "./playground-client";
 
 /**
- * Playground 视觉层断言——匹配当前 UI（重写自旧版本，旧版断言的文案已不存在）。
- * 只验证未连接初始态的不变量，不验证 WS/音频数据流。
+ * Playground 视觉层断言——只验证未连接初始态的不变量，不验证 WS/音频数据流。
  *
  * 注意：组件依赖浏览器 API（WebSocket、AudioContext、navigator.mediaDevices），
  * jsdom 环境下 connect() 调用会失败，因此只测试初始 disconnected 态。
@@ -21,8 +20,8 @@ describe("PlaygroundClient (初始未连接态)", () => {
     render(<PlaygroundClient />);
     // WelcomePane 渲染的醒目 CTA
     expect(screen.getByRole("button", { name: /连接并开始/ })).toBeDefined();
-    // 角色名
-    expect(screen.getByText("实时数字人 · 小灵")).toBeDefined();
+    // 角色名（默认 personaId 兜底为 demo-assistant）
+    expect(screen.getByText(/实时数字人 ·/)).toBeDefined();
   });
 
   it("显示未连接状态文案", () => {

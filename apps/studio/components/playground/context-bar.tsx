@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { clsx } from "clsx";
 import { Camera, Power } from "lucide-react";
 import { ThemeToggle } from "@/components/layout/theme-toggle";
@@ -12,6 +11,9 @@ interface ContextBarProps {
   conn: ConnState;
   profileId: string;
   personaId: string;
+  /** 下拉选项——由 PlaygroundClient（orchestration 层）统一拉取后传入。 */
+  profiles: RuntimeProfile[];
+  personas: Persona[];
   onProfileChange: (id: string) => void;
   onPersonaChange: (id: string) => void;
   onConnect: () => void;
@@ -23,13 +25,15 @@ interface ContextBarProps {
 
 /**
  * Playground 顶部上下文条：连接状态 + profile/persona 选择 + 调试开关 + 主题切换。
- * 替换原 PlaygroundClient 内嵌的连接条，把"配置上下文"集中到一层，对话区专注内容。
+ * 纯渲染组件——profiles/personas 选项由调用方拉取传入。
  * 下拉用原生 <select>（不引入 UI 库），样式套 .input。
  */
 export function ContextBar({
   conn,
   profileId,
   personaId,
+  profiles,
+  personas,
   onProfileChange,
   onPersonaChange,
   onConnect,
@@ -38,34 +42,6 @@ export function ContextBar({
   showDebug,
   onToggleDebug,
 }: ContextBarProps) {
-  const [profiles, setProfiles] = useState<RuntimeProfile[]>([]);
-  const [personas, setPersonas] = useState<Persona[]>([]);
-
-  useEffect(() => {
-    let alive = true;
-    fetch("/api/control/profiles")
-      .then((r) => (r.ok ? r.json() : []))
-      .then((list: RuntimeProfile[]) => {
-        if (alive && Array.isArray(list)) setProfiles(list);
-      })
-      .catch(() => {});
-    return () => {
-      alive = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    let alive = true;
-    fetch("/api/control/personas")
-      .then((r) => (r.ok ? r.json() : []))
-      .then((list: Persona[]) => {
-        if (alive && Array.isArray(list)) setPersonas(list);
-      })
-      .catch(() => {});
-    return () => {
-      alive = false;
-    };
-  }, []);
 
   const connDot = {
     connected: "bg-ok",

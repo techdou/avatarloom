@@ -1,4 +1,4 @@
-import { PlaygroundClient } from "@/components/audio/playground-client";
+import { PlaygroundClient } from "@/components/playground/playground-client";
 
 export default function PlaygroundPage() {
   return <PlaygroundClient />;
