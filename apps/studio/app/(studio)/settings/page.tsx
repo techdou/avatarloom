@@ -1,4 +1,5 @@
 import { ActiveContextCard } from "@/components/settings/active-context-card";
+import { MemoryCard } from "@/components/settings/memory-card";
 
 export default function SettingsPage() {
   const services = [
@@ -18,6 +19,8 @@ export default function SettingsPage() {
 
       <div className="max-w-2xl space-y-4">
         <ActiveContextCard />
+
+        <MemoryCard />
 
         <div className="card">
           <h2 className="mb-4">服务地址</h2>
