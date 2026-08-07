@@ -51,3 +51,7 @@ class OrchestratorConfig(BaseModel):
         gt=0,
         description="触发词命中后等待 vision.result 的最长秒数，超时降级为无视觉回答",
     )
+    filler_enabled: bool = Field(
+        default=True,
+        description="垫音（filler）：转写完成后播放 persona 预渲染口头禅，盖 LLM 首句空白",
+    )

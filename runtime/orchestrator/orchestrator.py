@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import re
 import time
@@ -37,6 +38,7 @@ from avatarloom_protocol import (
     SPEECH_ENDED,
     TRANSCRIPT_COMPLETED,
     TTS_AUDIO_COMPLETED,
+    TTS_AUDIO_DELTA,
     VISION_REQUEST,
     Event,
     State,
@@ -61,6 +63,21 @@ _VISION_TRIGGER_RE = re.compile(r"看看|评价|describe|looks?\s+like", re.IGNO
 _VISION_CONTEXT_TTL_S = 30.0
 # Vision 手动帧最小调用间隔（AL-P1-011 节流）——无同轮等待的帧限频
 _VISION_MIN_INTERVAL_S = 2.0
+
+
+def _read_wav_16k_mono_s16(path: Path) -> bytes | None:
+    """读取 16kHz 单声道 s16 wav，返回裸 PCM；格式不符返回 None（VoxEMW 同款严格校验）。"""
+    try:
+        import wave
+
+        with wave.open(str(path), "rb") as w:
+            if w.getframerate() != 16000 or w.getnchannels() != 1 or w.getsampwidth() != 2:
+                logger.warning("垫音格式不符（需 16k mono s16），跳过: %s", path)
+                return None
+            return w.readframes(w.getnframes())
+    except Exception as e:
+        logger.warning("垫音读取失败 %s: %s", path, e)
+        return None
 
 
 # Block category 标准名（和 Profile yaml 的 key 对齐）
@@ -148,6 +165,11 @@ class Orchestrator:
         # 无同轮等待的手动帧受最小间隔限制——任意频率帧都会触发远程 API（费用风险）
         self._vision_locks: dict[str, asyncio.Lock] = {}
         self._vision_last_call: dict[str, float] = {}
+        # Filler 垫音（VoxEMW 移植）：persona_id -> [(pcm_bytes, label)]；
+        # session_id -> 播放 task。转写完成即播，盖 LLM 首句空白
+        self._filler_cache: dict[str, list[tuple[bytes, str]]] = {}
+        self._filler_tasks: dict[str, asyncio.Task[None]] = {}
+        self._filler_last_idx: dict[str, int] = {}
         # 内部任务（订阅消费者等）
         self._tasks: list[asyncio.Task[None]] = []
         self._setup_done = False
@@ -253,6 +275,7 @@ class Orchestrator:
         pending = self._vision_pending.pop(session.session_id, None)
         if pending is not None and not pending[1].done():
             pending[1].cancel()
+        self._cancel_filler(session.session_id)
         self._persona_contexts.pop(session.session_id, None)
         self._vision_contexts.pop(session.session_id, None)
         self._vision_locks.pop(session.session_id, None)
@@ -630,6 +653,11 @@ class Orchestrator:
             TTS_AUDIO_COMPLETED,
             self._on_tts_completed,
         )
+        # 真 TTS 首块到达 → 停发垫音余量（filler 机制，VoxEMW 移植）
+        await self.event_bus.subscribe(
+            TTS_AUDIO_DELTA,
+            self._on_tts_delta_preempt,
+        )
 
     def _make_block_handler(
         self, block: Block, category: str
@@ -782,6 +810,10 @@ class Orchestrator:
         elif m:
             logger.info("命中视觉触发词但 vision block 未装配，直接回答")
 
+        # Filler 垫音（VoxEMW 移植）：盖 LLM 首句空白——放在 vision 判定后、
+        # llm.request 前，让视觉等待期也有垫音；真 TTS 首块到达自动停发余量
+        await self._start_filler(session)
+
         await self._on_event(
             Event(
                 type=LLM_REQUEST,
@@ -866,18 +898,115 @@ class Orchestrator:
         await session.try_trigger("response_done")
 
     # ------------------------------------------------------------------
+    # Filler 垫音（移植自 VoxEMW voxemw/avatar/orchestrator.py）
+    # 转写完成即播 persona 预渲染口头禅，盖 LLM 首句空白；
+    # 伪造为普通 tts.audio.delta 事件——前端播放、Avatar 张嘴、AVMux 同步全部复用。
+    # 与上游一致：单发不循环；真 TTS 抢先即停余量；打断即取消。
+    # ------------------------------------------------------------------
+
+    async def _start_filler(self, session: Session) -> None:
+        """转写完成后启动垫音（盖 LLM 首句空白，含 Vision 等待期）。"""
+        if not self.config.filler_enabled:
+            return
+        clips = self._load_filler_clips(session)
+        if not clips:
+            return
+        # 防御：同 session 旧垫音先取消
+        self._cancel_filler(session.session_id)
+        # 随机选一条，避免与上次重复（VoxEMW 同款策略）
+        import random
+
+        persona_key = session.persona_id or ""
+        last = self._filler_last_idx.get(persona_key, -1)
+        idx = random.randrange(len(clips))
+        if len(clips) > 1 and idx == last:
+            idx = (idx + 1) % len(clips)
+        self._filler_last_idx[persona_key] = idx
+        pcm, _label = clips[idx]
+        self._filler_tasks[session.session_id] = asyncio.create_task(
+            self._play_filler(session, pcm)
+        )
+
+    async def _play_filler(self, session: Session, pcm: bytes) -> None:
+        """按实时节奏分块 emit 垫音（0.4s/块），伪 TTS 通道。"""
+        try:
+            chunk_bytes = 6400 * 2  # 0.4s @16k int16
+            for offset in range(0, len(pcm), chunk_bytes):
+                chunk = pcm[offset : offset + chunk_bytes]
+                if not chunk:
+                    break
+                await self._on_event(
+                    Event(
+                        type=TTS_AUDIO_DELTA,
+                        session_id=session.session_id,
+                        source="orchestrator.filler",
+                        run_id=session.current_run_id,
+                        payload={
+                            "pcm_b64": base64.b64encode(chunk).decode("ascii"),
+                            "sample_rate": 16000,
+                            "samples": len(chunk) // 2,
+                            "text": "",
+                            "filler": True,
+                        },
+                    )
+                )
+                await asyncio.sleep(0.4)
+        except asyncio.CancelledError:
+            raise
+        finally:
+            self._filler_tasks.pop(session.session_id, None)
+
+    def _cancel_filler(self, session_id: str) -> None:
+        """取消垫音（打断 / 真 TTS 抢先 / 会话结束）。"""
+        task = self._filler_tasks.pop(session_id, None)
+        if task is not None and not task.done():
+            task.cancel()
+
+    async def _on_tts_delta_preempt(self, event: Event) -> None:
+        """真 TTS 首块到达 → 停发垫音余量（VoxEMW：真音频抢先，尾帧不错切 idle）。"""
+        if event.payload.get("filler"):
+            return
+        self._cancel_filler(event.session_id)
+
+    def _load_filler_clips(self, session: Session) -> list[tuple[bytes, str]]:
+        """加载 persona 垫音（16k mono s16 校验，按 persona 缓存）。"""
+        persona_id = session.persona_id or ""
+        if persona_id in self._filler_cache:
+            return self._filler_cache[persona_id]
+        clips: list[tuple[bytes, str]] = []
+        try:
+            root = (
+                Path(getattr(session, "workspace_root", ".") or ".")
+                / "personas"
+                / persona_id
+                / "fillers"
+            )
+            for wav_path in sorted(root.rglob("*.wav")):
+                pcm = _read_wav_16k_mono_s16(wav_path)
+                if pcm is not None:
+                    clips.append((pcm, wav_path.stem))
+            if clips:
+                logger.info("filler 加载 %d 条 (persona %s)", len(clips), persona_id)
+        except Exception as e:
+            logger.info("filler 无可用垫音 (persona %s): %s", persona_id, e)
+        self._filler_cache[persona_id] = clips
+        return clips
+
+    # ------------------------------------------------------------------
     # 打断处理
     # ------------------------------------------------------------------
 
     async def _do_interrupt(self, session: Session) -> None:
         """执行打断：
         1. 取消挂起的同轮 Vision 等待（跳过本轮 LLM）
-        2. 重置所有 Block（清缓冲）
-        3. 等用户是否继续说话决定转 LISTENING 或 IDLE
+        2. 取消垫音（filler 余量不再发）
+        3. 重置所有 Block（清缓冲 + 协作式取消标记，AL-P1-006）
+        4. 等用户是否继续说话决定转 LISTENING 或 IDLE
         """
         pending = self._vision_pending.pop(session.session_id, None)
         if pending is not None and not pending[1].done():
             pending[1].cancel()
+        self._cancel_filler(session.session_id)
         for block in self.blocks.values():
             try:
                 await block.reset(session.session_id)

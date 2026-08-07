@@ -193,7 +193,10 @@ class MuseTalkAvatarBlock(Block):
         sid = ctx.session_id
         if event.type == TTS_AUDIO_DELTA:
             pcm_b64 = event.payload.get("pcm_b64", "")
-            if pcm_b64:
+            # 垫音（filler）：不混入 reply 渲染缓冲——否则 TTS_AUDIO_COMPLETED
+            # 触发 _render_reply 时会把 filler+真回复的混合音频拿去渲染（错乱）。
+            # 但活动帧照产（张嘴沉吟，VoxEMW 同款效果）。
+            if pcm_b64 and not event.payload.get("filler"):
                 try:
                     self._bufs.setdefault(sid, bytearray()).extend(
                         base64.b64decode(pcm_b64)
