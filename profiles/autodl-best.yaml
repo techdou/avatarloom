@@ -75,6 +75,14 @@ blocks:
       baseUrl: ${VISION_BASE_URL}
       apiKeyEnv: VISION_API_KEY
       model: ${VISION_MODEL}
+  memory:
+    id: memory.mem0-local
+    deployment: local
+    optional: true
+    config:
+      enabled: false
+      apiKeyEnv: DEEPSEEK_API_KEY
+
 sync:
   audio_delay_ms: 800
   video_lag_frames: 0

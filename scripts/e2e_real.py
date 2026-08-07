@@ -212,11 +212,13 @@ async def main() -> int:
                 print(f"    [event] first llm delta @{dt:.2f}s: {e.payload.get('text', '')!r}")
             elif e.type == LLM_TEXT_DONE:
                 llm_full = e.payload.get("full_text", llm_full)
-            elif e.type == TTS_AUDIO_DELTA and not got["tts_delta"]:
+            elif e.type == TTS_AUDIO_DELTA and not got["tts_delta"] and not e.payload.get("filler"):
                 got["tts_delta"] = True
                 first_event_ts["first_tts_delta"] = dt
                 print(f"    [event] first tts delta @{dt:.2f}s")
-            if e.type == TTS_AUDIO_DELTA:
+            # 垫音（filler）不计入验收音频——它是盖等待空白的口头禅，
+            # 混入会让 TTS 时长/音频产物失真（payload.filler 由 orchestrator 标记）
+            if e.type == TTS_AUDIO_DELTA and not e.payload.get("filler"):
                 tts_pcm += base64.b64decode(e.payload.get("pcm_b64", ""))
             elif e.type == TTS_AUDIO_COMPLETED:
                 got["tts_done"] = True

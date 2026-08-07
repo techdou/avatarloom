@@ -38,6 +38,14 @@ blocks:
     id: vision.mock
     deployment: mock
     optional: true
+  memory:
+    id: memory.mem0-local
+    deployment: local
+    optional: true
+    config:
+      enabled: false
+      apiKeyEnv: DEEPSEEK_API_KEY
+
 sync:
   audio_delay_ms: 600
   video_lag_frames: 0

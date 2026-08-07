@@ -34,6 +34,7 @@ from avatarloom_protocol import (
     AUDIO_APPENDED,
     LLM_REQUEST,
     LLM_TEXT_DELTA,
+    LLM_TEXT_DONE,
     SPEECH_DETECTED,
     SPEECH_ENDED,
     TRANSCRIPT_COMPLETED,
@@ -111,6 +112,7 @@ BLOCK_REGISTRY: dict[str, str] = {
     "avatar.musetalk": "blocks.avatar.musetalk:MuseTalkAvatarBlock",
     "avatar.flashhead": "blocks.avatar.flashhead:FlashHeadAvatarBlock",
     "vision.openai-compatible": "blocks.vision.openai_compatible:OpenAIVisionBlock",
+    "memory.mem0-local": "blocks.memory.mem0_local:Mem0MemoryBlock",
 }
 
 
@@ -170,6 +172,8 @@ class Orchestrator:
         self._filler_cache: dict[str, list[tuple[bytes, str]]] = {}
         self._filler_tasks: dict[str, asyncio.Task[None]] = {}
         self._filler_last_idx: dict[str, int] = {}
+        # Memory 记忆（Mem0 移植）：session_id -> 本轮用户文本（llm.done 时凑对写入）
+        self._memory_pending_users: dict[str, str] = {}
         # 内部任务（订阅消费者等）
         self._tasks: list[asyncio.Task[None]] = []
         self._setup_done = False
@@ -267,6 +271,15 @@ class Orchestrator:
             except Exception as e:
                 logger.warning("persona %s 加载失败（继续用 profile 默认）: %s", persona_id, e)
 
+        # 记忆召回（Mem0 移植）：一次性追加到 persona instructions，不进语音回合。
+        # store 未启用时 recall 返回 ""——零开销静默跳过。
+        memory_block = await self._recall_memory(session)
+        if memory_block:
+            persona_ctx = self._persona_contexts.setdefault(session.session_id, {})
+            persona_ctx["instructions"] = (persona_ctx.get("instructions") or "") + (
+                "\n\n" + memory_block
+            )
+
         return session
 
     async def end_session(self, session: Session, reason: str = "normal") -> None:
@@ -277,6 +290,7 @@ class Orchestrator:
             pending[1].cancel()
         self._cancel_filler(session.session_id)
         self._persona_contexts.pop(session.session_id, None)
+        self._memory_pending_users.pop(session.session_id, None)
         self._vision_contexts.pop(session.session_id, None)
         self._vision_locks.pop(session.session_id, None)
         self._vision_last_call.pop(session.session_id, None)
@@ -658,6 +672,11 @@ class Orchestrator:
             TTS_AUDIO_DELTA,
             self._on_tts_delta_preempt,
         )
+        # 记忆写入（Mem0 移植）：response.done 后异步抽取，不占语音延迟
+        await self.event_bus.subscribe(
+            LLM_TEXT_DONE,
+            self._on_llm_done_memory,
+        )
 
     def _make_block_handler(
         self, block: Block, category: str
@@ -771,6 +790,8 @@ class Orchestrator:
 
         # 新一轮 Run——必须在发下游事件之前
         await session.start_new_run()
+        # 记忆凑对：存本轮用户文本（llm.done 时与 full_text 一起写入 Mem0）
+        self._memory_pending_users[session.session_id] = text
         # AL-P1-005：STT 发出的原始 transcript.completed 携带旧 run_id（或 None），
         # 到达 Recorder 时新 run 尚未建立而被丢弃——用新 run_id 重发一份，
         # 让 Recorder 落录本轮用户文本、前端事件流正确归属新 run。
@@ -967,6 +988,44 @@ class Orchestrator:
         if event.payload.get("filler"):
             return
         self._cancel_filler(event.session_id)
+
+    async def _on_llm_done_memory(self, event: Event) -> None:
+        """记忆写入（Mem0 移植）：一轮 user/assistant 凑对，response.done 后异步抽取。
+
+        打断的回复（finish_reason=interrupted）不完整，写入会污染记忆——跳过。
+        to_thread 异步，不占语音延迟；block 未启用时内部 no-op。
+        """
+        if event.payload.get("finish_reason") == "interrupted":
+            self._memory_pending_users.pop(event.session_id, None)
+            return
+        user_text = self._memory_pending_users.pop(event.session_id, "")
+        assistant_text = str(event.payload.get("full_text") or "")
+        if not user_text and not assistant_text:
+            return
+        session = self.sessions.get(event.session_id)
+        agent_id = (session.persona_id if session else None) or "default"
+        await self._memorize_turn(user_text, assistant_text, agent_id)
+
+    async def _recall_memory(self, session: Session) -> str:
+        """召回该 persona 的记忆块（未启用/无 block 返回 ""）。"""
+        memory = self.blocks.get("memory")
+        if memory is None or not getattr(memory, "active", False):
+            return ""
+        try:
+            return await memory.recall(session.persona_id or "default")  # type: ignore[attr-defined]
+        except Exception as e:
+            logger.warning("memory recall 异常（按无记忆继续）: %s", e)
+            return ""
+
+    async def _memorize_turn(self, user_text: str, assistant_text: str, agent_id: str) -> None:
+        """写入一轮对话（未启用/无 block no-op）。"""
+        memory = self.blocks.get("memory")
+        if memory is None or not getattr(memory, "active", False):
+            return
+        try:
+            await memory.memorize(user_text, assistant_text, agent_id)  # type: ignore[attr-defined]
+        except Exception as e:
+            logger.warning("memory memorize 异常（静默跳过）: %s", e)
 
     def _load_filler_clips(self, session: Session) -> list[tuple[bytes, str]]:
         """加载 persona 垫音（16k mono s16 校验，按 persona 缓存）。"""
