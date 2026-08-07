@@ -26,6 +26,8 @@ export class PcmPlayer {
   private scheduledSources: AudioBufferSourceNode[] = [];
   /** 本回复首个 chunk 的起始播放时间（AudioContext 时钟），用于计算 currentTime */
   private responseAudioBase = 0;
+  /** beginResponse() 置位：下一个 enqueue 的 chunk 起点锚为新基准 */
+  private _anchorNext = false;
 
   /**
    * 当前音频播放位置（秒，相对本回复起点）。
@@ -37,6 +39,30 @@ export class PcmPlayer {
     return this.ctx.currentTime - this.responseAudioBase;
   }
 
+  /** AudioContext 绝对时钟（秒）。连播判定用（VoxEMW prevEnd - currentTime）。 */
+  get absoluteNow() {
+    return this.ctx?.currentTime ?? 0;
+  }
+
+  /** 已排程音频链尾（秒，绝对时钟）——即上一段回复的播放结束点。 */
+  get scheduledEnd() {
+    return this.nextStartTime;
+  }
+
+  /**
+   * 锚定本回复的视频对齐基准（VoxEMW needVideoBase 语义）。
+   * 只在"上段已播完"的常规分支由调用方显式执行；
+   * 连播（filler→正式回复）场景绝不可调用——会丢弃上段帧冻结画面。
+   */
+  beginResponse() {
+    this._anchorNext = true;
+  }
+
+  /** 本回复的对齐基准（秒，绝对时钟）。连播裁尾帧时用。 */
+  get responseBase() {
+    return this.responseAudioBase;
+  }
+
   constructor(opts: PlayerOptions = {}) {
     this.sampleRate = opts.sampleRate ?? 16000;
     this.audioDelayMs = opts.audioDelayMs ?? 0;
@@ -46,6 +72,9 @@ export class PcmPlayer {
     if (!this.ctx) {
       this.ctx = new AudioContext({ sampleRate: this.sampleRate });
       this.nextStartTime = this.ctx.currentTime + this.audioDelayMs / 1000;
+      // 初始基准 = 首个排程点（连播判定对首轮也成立：
+      // base 不为 0，首块 PCM 走连播分支时基准依然正确）
+      this.responseAudioBase = this.nextStartTime;
     }
     return this.ctx;
   }
@@ -63,7 +92,9 @@ export class PcmPlayer {
     return ctx;
   }
 
-  /** 喂入一个 PCM16 chunk。立即调度播放。 */
+  /** 喂入一个 PCM16 chunk。立即调度播放。
+   * 注意：不在此自动锚定 responseAudioBase——锚定时机由 hook 按
+   * needVideoBase 语义显式控制（见 anchorResponse 注释）。 */
   enqueue(pcm: Int16Array) {
     const ctx = this.ensureCtx();
     // 如果上次调度的结束时间已过，从当前时间 + delay 开始（避免追赶堆积）
@@ -71,12 +102,14 @@ export class PcmPlayer {
     if (this.nextStartTime < now + this.audioDelayMs / 1000) {
       this.nextStartTime = now + this.audioDelayMs / 1000;
     }
-    // 首个 chunk：锚定本回复的音频时间轴起点（VoxEMW responseAudioBase）
-    if (this.scheduledSources.length === 0) {
-      this.responseAudioBase = this.nextStartTime;
-    }
 
     const buf = ctx.createBuffer(1, pcm.length, this.sampleRate);
+    // 常规重锚（beginResponse 置位）：校正后的 nextStartTime 即本 chunk 播放起点，
+    // 与 VoxEMW 的 start = max(now+delay, prevEnd) 语义一致
+    if (this._anchorNext) {
+      this.responseAudioBase = this.nextStartTime;
+      this._anchorNext = false;
+    }
     const channel = buf.getChannelData(0);
     for (let i = 0; i < pcm.length; i++) {
       channel[i] = pcm[i] / 32768;

@@ -123,6 +123,9 @@ export function useRealtimeSession({
   const connectRef = useRef<(() => Promise<void>) | null>(null);
   // 心跳定时器（AL-P2-007）
   const pingTimerRef = useRef(0);
+  // needVideoBase（VoxEMW 语义）：下一个音频 delta 是新 response 起点。
+  // 初始 true（首回复必锚）；response.done / 打断后置位，首块 PCM 判定后清除。
+  const needVideoBaseRef = useRef(true);
 
   // 最新 profile/persona，避免 connect 闭包陈旧
   const profileRef = useRef(profileId);
@@ -218,6 +221,9 @@ export function useRealtimeSession({
           const to = (msg.payload?.to as string) || "idle";
           dispatch({ kind: "stateChanged", to, ts });
           if (to === "interrupting") {
+            // 打断（VoxEMW needVideoBase 置位）：下一音频 delta 走锚定判定；
+            // PcmPlayer.interrupt 已把基准预重置到新时刻，连播分支会保持它
+            needVideoBaseRef.current = true;
             playerRef.current?.interrupt();
             avmuxRef.current?.interrupt();
           }
@@ -270,7 +276,12 @@ export function useRealtimeSession({
         case "vision.request": {
           const summary = summarizeEvent(msg.type, msg.payload) ?? "";
           dispatch({ kind: "event", type: msg.type, summary, ts });
-          if (msg.type === "response.done") setPlaying(false);
+          if (msg.type === "response.done") {
+            // response 结束（VoxEMW needVideoBase 置位）：
+            // 下一段 response 的首个 PCM 将走常规/连播锚定判定
+            needVideoBaseRef.current = true;
+            setPlaying(false);
+          }
           if (msg.type === "vision.request") void captureAndSendFrame();
           break;
         }
@@ -316,7 +327,23 @@ export function useRealtimeSession({
       const pcmBytes = data.slice(1);
       if (pcmBytes.byteLength % 2 !== 0) return;
       const pcm = new Int16Array(pcmBytes);
-      playerRef.current?.enqueue(pcm);
+      const player = playerRef.current;
+      const avmux = avmuxRef.current;
+      // needVideoBase 判定（VoxEMW assistant.js 移植语义）：
+      // 本 delta 开启新 response——上段已播完则重锚清帧队（常规）；
+      // 上段还在播（filler→正式回复连播）则绝不重锚，只裁上段尾帧。
+      if (player && avmux && needVideoBaseRef.current) {
+        needVideoBaseRef.current = false;
+        const prevEnd = player.scheduledEnd;
+        const now = player.absoluteNow;
+        if (prevEnd - now < 0.3) {
+          player.beginResponse();
+          avmux.resetFrames();
+        } else {
+          avmux.trimTailFrames(prevEnd, player.responseBase);
+        }
+      }
+      player?.enqueue(pcm);
       setPlaying(true);
       setDebugInfo((d) => ({ ...d, audioChunks: d.audioChunks + 1 }));
       dispatch({ kind: "milestone", key: "firstPcmTs", ts: Date.now() });

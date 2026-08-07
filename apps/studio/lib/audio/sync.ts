@@ -91,10 +91,31 @@ export class AVMux {
     this._scheduleConsume();
   }
 
-  /** 打断——清空队列。 */
+  /** 打断——清空队列并重置帧序号（此前只清队列不重置 idx：
+      新回复 target 从 0 起算而 idx 已累积，帧永不消费、画面卡死）。 */
   interrupt() {
     this.frameQueue = [];
     this.idleQueue = [];
+    this.videoFrameIdx = 0;
+  }
+
+  /** 新回复常规分支（VoxEMW needVideoBase 常规路径）：
+      上段已播完——清帧队（去掉上段"闭嘴尾帧"）+ 帧序号归零。 */
+  resetFrames() {
+    this.frameQueue = [];
+    this.videoFrameIdx = 0;
+  }
+
+  /** 连播分支（VoxEMW 注入式连续回复：垫场→正式）：
+      绝不重锚清队——只裁剪上段回复的尾部零填充帧，保留未播真帧。
+      prevEnd/responseAudioBase 为 PcmPlayer 绝对时钟（秒）。 */
+  trimTailFrames(prevEnd: number, responseAudioBase: number) {
+    const fps = this.config.fps ?? 25;
+    const oldTotalFrames = Math.floor((prevEnd - responseAudioBase) * fps);
+    const keep = Math.max(0, oldTotalFrames - this.videoFrameIdx);
+    if (this.frameQueue.length > keep) {
+      this.frameQueue.length = keep;
+    }
   }
 
   /** 当前队列长度。 */
