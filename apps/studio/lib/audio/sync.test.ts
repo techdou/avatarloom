@@ -47,15 +47,15 @@ describe("AVMux", () => {
   it("drop_oldest drops oldest when full", () => {
     const frames: AvatarFrame[] = [];
     const mux = new AVMux({ dropPolicy: "drop_oldest_video" }, (f) => frames.push(f));
-    // 填满队列（maxQueueSize=25）
-    for (let i = 0; i < 25; i++) {
+    // 填满队列（maxQueueSize=100，对齐 VoxEMW 积压窗口经验）
+    for (let i = 0; i < 100; i++) {
       mux.pushFrame({ blob: new Blob(), tag: "speech" });
     }
-    expect(mux.queueLength).toBe(25);
-    // 第 26 个应丢最旧
+    expect(mux.queueLength).toBe(100);
+    // 第 101 个应丢最旧
     mux.pushFrame({ blob: new Blob(), tag: "speech" });
-    // 队列仍是 25（丢一个加一个）
-    expect(mux.queueLength).toBeLessThanOrEqual(25);
+    // 队列仍是 100（丢一个加一个）
+    expect(mux.queueLength).toBeLessThanOrEqual(100);
   });
 
   it("updateConfig changes settings", () => {

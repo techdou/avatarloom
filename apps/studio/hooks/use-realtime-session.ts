@@ -336,12 +336,20 @@ export function useRealtimeSession({
     setError(null);
     reconnectRef.current.intentional = false;
 
-    playerRef.current = new PcmPlayer({ sampleRate: 16000, audioDelayMs: 600 });
+    // 同步参数 URL 可调（对齐 VoxEMW ?adelay=/?vlag= 现场调优做法）：
+    // /playground?adelay=450&vlag=-3 ——AutoDL 调音画同步不改代码直接试值
+    const syncParams = new URLSearchParams(window.location.search);
+    const adelayParam = parseInt(syncParams.get("adelay") ?? "", 10);
+    const vlagParam = parseInt(syncParams.get("vlag") ?? "", 10);
+    const audioDelayMs = Number.isFinite(adelayParam) ? adelayParam : 600;
+
+    playerRef.current = new PcmPlayer({ sampleRate: 16000, audioDelayMs });
     // 音频主时钟驱动视频（对齐 VoxEMW）：AVMux 从 PcmPlayer 读播放位置
     avmuxRef.current = new AVMux(
       {
-        audioDelayMs: 600,
+        audioDelayMs,
         fps: 25,
+        videoLagFrames: Number.isFinite(vlagParam) ? vlagParam : 0,
         getAudioTime: () => playerRef.current?.currentTime ?? 0,
       },
       handleFrame

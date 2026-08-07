@@ -36,7 +36,9 @@ export interface SyncConfig {
 export class AVMux {
   private frameQueue: AvatarFrame[] = [];
   private idleQueue: AvatarFrame[] = [];
-  private maxQueueSize = 25;
+  // 4s 窗口（对齐 VoxEMW 经验：VoxCPM2 合成 ~2x 实时，帧必然积压 3-4s；
+  // 25 帧=1s 的窗口在真实链路上会一路 drop_oldest，口型同步但画面顿挫）
+  private maxQueueSize = 100;
   private config: SyncConfig;
   private onFrame?: (frame: AvatarFrame) => void;
   private consuming = false;
