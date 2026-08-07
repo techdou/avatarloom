@@ -56,6 +56,19 @@ alembic_versions_local/
 .env.*.local
 *.key
 *.pem
+*.cred
+*cred.json
+
+# ---- 开发工具与代理配置目录（不上传）----
+.omx/
+.agents/
+.claude/
+.cursor/
+.aider*
+
+# ---- 内部交接文档（不纳入版本控制，避免内部状态泄漏）----
+docs/*handover*.md
+docs/*交接*.md
 
 # ---- 模型与素材（不入库）----
 models/
