@@ -308,3 +308,87 @@ async def test_vision_context_single_consume() -> None:
     await _say(orch, session)
     assert await _wait_for(lambda: llm.calls > 1)
     assert llm.vision_seen is None
+
+
+class _SlowVision:
+    """挂起的 Vision 替身——describe_frame 阻塞直到 release，用于并发锁测试。"""
+
+    def __init__(self) -> None:
+        self.started = 0
+        self.release = asyncio.Event()
+
+    def manifest(self) -> dict:
+        return {"block_id": "vision.slow", "category": "vision"}
+
+    async def describe_frame(
+        self,
+        ctx,
+        image_b64: str | None = None,
+        prompt: str = "描述",
+        request_id: str | None = None,
+    ) -> Event:
+        self.started += 1
+        await self.release.wait()
+        return Event(
+            type="vision.result",
+            session_id=ctx.session_id,
+            source="vision.slow",
+            run_id=ctx.run_id,
+            payload={"description": "慢描述", "request_id": request_id},
+        )
+
+
+@pytest.mark.asyncio
+async def test_vision_manual_frame_throttled() -> None:
+    """AL-P1-011：无同轮 pending 的手动帧受 2s 最小间隔节流。"""
+    orch, _, _, vision, _ = _build("今天天气怎么样")
+    await orch._wire_event_bus()
+    session = await orch.start_session(persona_id="demo-assistant", workspace_root=".")
+
+    # 第一帧正常分析
+    await orch.ingest_vision_frame(session, _FAKE_JPEG_B64)
+    assert vision.described == 1
+    # 间隔内第二帧（无 pending）被节流丢弃
+    await orch.ingest_vision_frame(session, _FAKE_JPEG_B64)
+    assert vision.described == 1
+
+
+@pytest.mark.asyncio
+async def test_vision_concurrent_frame_dropped_when_locked() -> None:
+    """AL-P1-011：同 session 已有调用进行中（锁占用）→ 重复帧丢弃，不再调远程 API。"""
+    stt = _SttSpy("你看看我")
+    llm = _LlmSpy()
+    slow = _SlowVision()
+    collector = _Collector()
+    config = OrchestratorConfig(
+        profile_id="test",
+        blocks={
+            "vad": BlockRef(id="vad.spy", deployment="local"),
+            "stt": BlockRef(id="stt.spy", deployment="local"),
+            "llm": BlockRef(id="llm.spy", deployment="local"),
+            "vision": BlockRef(id="vision.slow", deployment="local"),
+        },
+        vision_timeout_s=5.0,
+    )
+    orch = Orchestrator(config, event_sink=collector)
+    orch.blocks["vad"] = _VadSpy()
+    orch.blocks["stt"] = stt
+    orch.blocks["llm"] = llm
+    orch.blocks["vision"] = slow
+    await orch._wire_event_bus()
+    session = await orch.start_session(persona_id="demo-assistant", workspace_root=".")
+
+    # 制造 pending（有 pending 的帧跳过节流直达锁判定）
+    loop = asyncio.get_running_loop()
+    orch._vision_pending[session.session_id] = ("req1", loop.create_future())
+    first = asyncio.create_task(orch.ingest_vision_frame(session, _FAKE_JPEG_B64))
+    await asyncio.sleep(0.05)  # 第一帧占锁挂起
+    assert slow.started == 1
+
+    # 第二帧带 pending 进来——锁被占，直接丢弃（不排队不调 API）
+    orch._vision_pending[session.session_id] = ("req2", loop.create_future())
+    await orch.ingest_vision_frame(session, _FAKE_JPEG_B64)
+    assert slow.started == 1
+
+    slow.release.set()
+    await asyncio.wait_for(first, timeout=2)

@@ -364,3 +364,101 @@ def _has_pipeline_events(types: set[str]) -> bool:
         and ("llm.text.delta" in types or "llm.text.done" in types)
         and ("tts.audio.delta" in types or "tts.audio.binary" in types)
     )
+
+
+class TestDownlinkQueues:
+    """AL-P2-006：三队列丢弃策略单元级验证（经 ws_handler._put_drop_oldest）。"""
+
+    def test_put_drop_oldest_evicts_oldest_when_full(self) -> None:
+        from avatarloom_runtime_gateway.ws_handler import _put_drop_oldest
+
+        q: asyncio.Queue[bytes] = asyncio.Queue(maxsize=2)
+        _put_drop_oldest(q, b"a")
+        _put_drop_oldest(q, b"b")
+        _put_drop_oldest(q, b"c")  # 满 → 丢 a
+        assert q.get_nowait() == b"b"
+        assert q.get_nowait() == b"c"
+
+
+@pytest.fixture
+def gateway_server_persona(tmp_path) -> Iterator[tuple[str, int]]:
+    """带 personas 资产的 Gateway——persona.set 真切换验证。"""
+    import shutil
+
+    repo_persona = Path(__file__).resolve().parents[2] / "personas" / "demo-assistant"
+    dst = tmp_path / "personas" / "demo-assistant"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(repo_persona, dst)
+
+    port = _free_port()
+    settings = Settings(
+        host="127.0.0.1",
+        port=port,
+        workspace_root=str(tmp_path),
+        artifacts_root=str(tmp_path / "artifacts"),
+        runs_root=str(tmp_path / "runs"),
+        default_profile="mock",
+    )
+    app = create_app(settings)
+    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
+    server = uvicorn.Server(config)
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        if server.started:
+            break
+        time.sleep(0.1)
+    else:
+        raise RuntimeError("server failed to start")
+    yield ("127.0.0.1", port)
+    server.should_exit = True
+    thread.join(timeout=5)
+
+@pytest.mark.integration
+class TestPersonaSet:
+    """AL-P1-004：persona.set 真切换（加载 + switch_persona），失败回 error。"""
+
+    async def test_persona_set_real_switch(self, gateway_server_persona) -> None:
+        host, port = gateway_server_persona
+        async with websockets.connect(f"ws://{host}:{port}/ws/realtime") as ws:
+            await ws.send(json.dumps({"type": "session.start", "payload": {"profile_id": "mock"}}))
+            started = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
+            assert started["type"] == "session.started"
+
+            await ws.send(
+                json.dumps({"type": "persona.set", "payload": {"persona_id": "demo-assistant"}})
+            )
+            deadline = time.time() + 10
+            got_changed = False
+            while time.time() < deadline:
+                msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+                if msg["type"] == "persona.changed":
+                    assert msg["payload"]["persona_id"] == "demo-assistant"
+                    got_changed = True
+                    break
+                if msg["type"] == "error":
+                    pytest.fail(f"persona.set 返回 error: {msg['payload']}")
+            assert got_changed, "未收到 persona.changed"
+
+    async def test_persona_set_missing_persona_errors(self, gateway_server_persona) -> None:
+        host, port = gateway_server_persona
+        async with websockets.connect(f"ws://{host}:{port}/ws/realtime") as ws:
+            await ws.send(json.dumps({"type": "session.start", "payload": {"profile_id": "mock"}}))
+            started = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
+            assert started["type"] == "session.started"
+
+            await ws.send(
+                json.dumps({"type": "persona.set", "payload": {"persona_id": "no-such-persona"}})
+            )
+            deadline = time.time() + 10
+            got_error = False
+            while time.time() < deadline:
+                msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+                if msg["type"] == "error":
+                    assert "persona" in msg["payload"]["message"]
+                    got_error = True
+                    break
+                if msg["type"] == "persona.changed":
+                    pytest.fail("不存在的 persona 不应切换成功")
+            assert got_error, "未收到 error"
