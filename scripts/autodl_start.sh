@@ -22,6 +22,13 @@ cd "$PROJECT_ROOT"
 
 # 加载环境
 export PATH="$HOME/.local/bin:$PATH"
+# pnpm 常见安装位置（npm -g 或 corepack），start.sh 是非交互 shell 不读 .bashrc
+for _p in /usr/local/lib/node22/bin /usr/local/bin "$HOME/.local/share/pnpm" "$HOME/.npm-global/bin"; do
+    if [ -x "$_p/pnpm" ] || [ -x "$_p/pnpm.cmd" ]; then
+        export PATH="$_p:$PATH"
+        break
+    fi
+done
 export HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
 export HF_HUB_DISABLE_XET=1
 
