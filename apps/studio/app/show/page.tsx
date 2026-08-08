@@ -12,7 +12,8 @@ interface ShowPageProps {
 }
 
 export default function ShowPage({ searchParams }: ShowPageProps) {
-  const profileId = searchParams.profile || "mock";
+  // 默认 autodl-best（真实 GPU 链路）；mock 仅本地无 GPU 开发用，可 ?profile=mock 覆盖
+  const profileId = searchParams.profile || "autodl-best";
   const personaId = searchParams.persona || "demo-assistant";
   return <ShowcaseClient profileId={profileId} personaId={personaId} />;
 }

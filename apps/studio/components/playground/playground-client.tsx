@@ -21,8 +21,9 @@ import { DebugDrawer } from "@/components/playground/debug-drawer";
  * 音频是主时钟：PcmPlayer 用 AudioContext.currentTime 调度，AVMux 按节奏消费帧。
  */
 export function PlaygroundClient() {
-  // profile / persona：客户端持久化（默认 mock / demo-assistant——mock 无 GPU 也能跑）
-  const [profileId, setProfileId] = useState<string>("mock");
+  // profile / persona：客户端持久化（默认 autodl-best 真实 GPU 链路；
+  // 本地无 GPU 开发可手动切 mock）
+  const [profileId, setProfileId] = useState<string>("autodl-best");
   const [personaId, setPersonaId] = useState<string>("demo-assistant");
   const [showDebug, setShowDebug] = useState(false);
   const [runsOpen, setRunsOpen] = useState(false);
