@@ -170,16 +170,36 @@ class SileroVadBlock(Block):
     # ---- 重依赖方法（运行时 import torch）----
 
     def _load_model(self, device: str) -> tuple[Any, Any]:
-        """加载 silero 模型。运行时 import torch。"""
+        """加载 silero 模型。运行时 import torch。
+
+        优先本地 hub 缓存（source="local"，零网络校验）：AutoDL 到 GitHub 不稳定，
+        在线 torch.hub.load 会做版本校验而挂起（Remote end closed / timeout）。
+        缓存目录约定：$TORCH_HOME/hub/snakers4_silero-vad_master/（预置 repo + jit）。
+        """
+        import os
+
         import torch
 
-        # 离线模式（无网络时用本地缓存）
-        model, utils = torch.hub.load(
-            repo_or_dir="snakers4/silero-vad",
-            model="silero_vad",
-            trust_repo=True,
-            onnx=False,
+        torch_home = os.environ.get(
+            "TORCH_HOME", os.path.expanduser("~/.cache/torch")
         )
+        hub_cache = os.path.join(torch_home, "hub", "snakers4_silero-vad_master")
+        if os.path.isdir(hub_cache):
+            model, utils = torch.hub.load(
+                repo_or_dir=hub_cache,
+                model="silero_vad",
+                source="local",
+                trust_repo=True,
+                onnx=False,
+            )
+        else:
+            # 在线模式（本地无缓存时从 GitHub 下载）
+            model, utils = torch.hub.load(
+                repo_or_dir="snakers4/silero-vad",
+                model="silero_vad",
+                trust_repo=True,
+                onnx=False,
+            )
         model.to(device)
         # 试跑探测 forward 签名：JIT 模型 inspect 拿不到真实签名（返回含 self 的
         # 占位参数），只能用静音 chunk 试调用判断是 (x, sr) 还是 (x, sr, h)。
