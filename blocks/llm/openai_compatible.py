@@ -232,8 +232,9 @@ class OpenAILlmBlock(Block):
                             finally:
                                 self._active_resp = None
                         break  # 流式正常完成，跳出重试
-                    except (httpx.ConnectTimeout, httpx.ConnectError, httpx.ReadTimeout):
-                        # 连接阶段失败（未产出任何内容）——退避重试
+                    except (httpx.ConnectTimeout, httpx.ConnectError, httpx.ReadTimeout, httpx.ReadError, httpx.RemoteProtocolError):
+                        # 连接/传输层失败（ConnectTimeout/ConnectError/ReadTimeout/ReadError/
+                        # RemoteProtocolError——AutoDL 出网抖动的全家族），未产出内容才可重试
                         if _attempt < 2 and not full_text:
                             await asyncio.sleep(0.5 * (_attempt + 1))
                             continue
