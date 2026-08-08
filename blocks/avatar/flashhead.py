@@ -15,10 +15,9 @@ import asyncio
 import base64
 import json
 import logging
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
-
-logger = logging.getLogger("avatar.flashhead")
 
 from avatarloom_protocol import (
     AVATAR_IDLE_FRAME,
@@ -39,6 +38,8 @@ from avatarloom_sdk import (
 )
 
 from runtime.orchestrator.avatar_state import AvatarState, transition_avatar_state
+
+logger = logging.getLogger("avatar.flashhead")
 
 
 class FlashHeadAvatarBlock(Block):
@@ -85,7 +86,7 @@ class FlashHeadAvatarBlock(Block):
 
     async def setup(self, ctx: BlockContext) -> None:
         cfg = ctx.config
-        workspace = Path(ctx.workspace_root).resolve()
+        workspace = Path(ctx.workspace_root).resolve()  # noqa: ASYNC240 -- setup 一次性路径解析（非热路径），引入 anyio.Path 反增依赖
         self._fps = int(cfg.get("fps", 25))
 
         portrait_cfg = str(cfg.get("portrait", "")).strip()
@@ -113,7 +114,7 @@ class FlashHeadAvatarBlock(Block):
         )
         if not Path(service_script).is_absolute():
             service_script = str(workspace / service_script)
-        if not Path(service_script).exists():
+        if not Path(service_script).exists():  # noqa: ASYNC240 -- spawn 前一次性预检，缺失即报错
             raise BlockSetupError(
                 "avatar.flashhead", f"service script not found: {service_script}"
             )
@@ -128,21 +129,23 @@ class FlashHeadAvatarBlock(Block):
         jpeg_quality = int(cfg.get("jpegQuality", 85))
 
         # 路径预检：缺失时明确报错（而不是 spawn 失败难定位）
-        if not Path(service_python).exists():
+        if not Path(service_python).exists():  # noqa: ASYNC240 -- spawn 前一次性预检，缺失即报错
             raise BlockSetupError(
                 "avatar.flashhead", f"service python not found: {service_python}"
             )
-        if not Path(model_dir).is_dir():
+        if not Path(model_dir).is_dir():  # noqa: ASYNC240 -- spawn 前一次性预检，缺失即报错
             raise BlockSetupError(
                 "avatar.flashhead", f"FlashHead 模型目录不存在: {model_dir}"
             )
-        if not Path(wav2vec_dir).is_dir():
+        if not Path(wav2vec_dir).is_dir():  # noqa: ASYNC240 -- spawn 前一次性预检，缺失即报错
             raise BlockSetupError(
                 "avatar.flashhead", f"wav2vec 目录不存在: {wav2vec_dir}"
             )
 
         log_path = "/tmp/flashhead_service.log"
-        log_file = open(log_path, "ab")
+        # 子进程 stdout 重定向 fd：需在 spawn 失败后仍可读日志，生命周期跨 setup 多个
+        # 提前返回分支，with 包裹会迫使整个 setup 缩进重排——各分支显式 close 已覆盖。
+        log_file = open(log_path, "ab")  # noqa: ASYNC230, SIM115
         try:
             self._proc = await asyncio.create_subprocess_exec(
                 service_python,
@@ -339,10 +342,8 @@ class FlashHeadAvatarBlock(Block):
     async def reset(self, session_id: str) -> None:
         self._frame_index = 0
         if self._ws is not None:
-            try:
+            with suppress(Exception):
                 await self._ws.send(json.dumps({"type": "reset"}))
-            except Exception:
-                pass
 
     async def shutdown(self) -> None:
         self._shutdown = True  # 先置位——reader 退出后不 emit（ctx 可能已 unwire）
@@ -354,23 +355,24 @@ class FlashHeadAvatarBlock(Block):
             try:
                 await self._reader_task
             except asyncio.CancelledError:
-                raise  # 取消语义透传（Python 3.8+）
+                # reader 是我们自己 cancel 的——自取消属正常退出路径，吞掉；
+                # 只有当前任务自身也被取消（loop teardown/外部打断）才透传，
+                # 否则吞掉外部取消会让 asyncio.run 的 gather 永远等本任务
+                current = asyncio.current_task()
+                if current is not None and current.cancelling() > 0:
+                    raise
             except Exception:
                 pass
             self._reader_task = None
         if self._ws is not None:
-            try:
+            with suppress(Exception):
                 await self._ws.close()
-            except Exception:
-                pass
             self._ws = None
         if self._proc and self._proc.returncode is None:
             try:
                 self._proc.terminate()
                 await asyncio.wait_for(self._proc.wait(), timeout=5)
             except Exception:
-                try:
+                with suppress(Exception):
                     self._proc.kill()
-                except Exception:
-                    pass
         self._proc = None

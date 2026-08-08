@@ -97,7 +97,8 @@ avatarloom/
 │   └── runtime-gateway/     # FastAPI WebSocket（:8101）
 ├── packages/
 │   ├── protocol/            # 事件 schema（Pydantic 单一来源）
-│   └── sdk-python/          # Block SDK
+│   ├── sdk-python/          # Block SDK
+│   └── sdk-typescript/      # TS SDK（gen_protocol.py 生成的事件/状态机类型）
 ├── runtime/
 │   ├── orchestrator/        # 编排核心（Run/打断/Vision 同轮/Filler 垫音）
 │   ├── session/             # 显式状态机
@@ -122,6 +123,7 @@ pnpm --dir apps/studio test -- --run
 
 ## 文档
 
+- [部署与启动（本地 dev / Docker Compose / AutoDL）](docs/deployment.md)
 - [完整设计文档](docs/00-AvatarLoom-完整设计文档.md)
 - [架构与模块规范](docs/01-架构与模块规范.md)
 - [事件协议、状态机与音画同步（含浏览器↔Gateway 通道协议）](docs/02-事件协议状态机与音画同步.md)

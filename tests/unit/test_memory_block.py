@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 from avatarloom_sdk import BlockContext
 
 
@@ -74,7 +73,6 @@ class TestOrchestratorMemoryHooks:
         await orch._memorize_turn("u", "a", "agent")  # 不抛
 
     async def test_recall_appends_to_instructions(self) -> None:
-        from avatarloom_sdk import BlockContext
         from runtime.orchestrator import Orchestrator
         from runtime.orchestrator.config import OrchestratorConfig
 
@@ -108,7 +106,8 @@ class TestOrchestratorMemoryHooks:
         assert spy.last == ("你好", "你好呀", "demo-assistant")  # type: ignore[attr-defined]
 
     async def test_interrupted_run_not_memorized(self) -> None:
-        from avatarloom_protocol import Event, LLM_TEXT_DONE
+        from avatarloom_protocol import LLM_TEXT_DONE, Event
+
         from runtime.orchestrator import Orchestrator
         from runtime.orchestrator.config import OrchestratorConfig
 

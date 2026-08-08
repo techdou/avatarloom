@@ -14,14 +14,15 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import struct
 import time
 from collections import deque
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-
 from avatarloom_protocol import (
     AVATAR_IDLE_FRAME,
     AVATAR_SPEECH_FRAME,
@@ -43,23 +44,27 @@ from avatarloom_sdk import (
 class MuseTalkAvatarBlock(Block):
     """MuseTalk——参考图 + 音频驱动口型（真实 worker 渲染）。"""
 
-    _worker_proc: Any = None
-    _worker_stdin: Any = None
-    _worker_lock: asyncio.Lock | None = None
-    _worker_lines: deque[str] = deque()
-    _bufs: dict[str, bytearray] = {}
-    _last_activity: dict[str, float] = {}
-    _frame_indexes: dict[str, int] = {}
-    _tasks: list[asyncio.Task[None]] = []
-    # 按 session 的回复渲染 task（AL-P1-006：reset 时按 session 精确取消，
-    # 此前只进 _tasks 列表、打断后旧渲染继续跑并与新 run 交错下发）
-    _render_tasks: dict[str, asyncio.Task[None]] = {}
-    _portrait_bytes: bytes = b""
-    _portrait_jpeg: bytes = b""
-    _portrait_path: str = ""
-    _fps: int = 25
-    _activity_fps: float = 2.5
-    _render_timeout_s: float = 600.0
+    def __init__(self) -> None:
+        super().__init__()
+        # 全部运行期状态放实例级——此前 deque/dict/list 挂类属性，
+        # 多实例（fallback 重建、单测）共享 _tasks/_bufs 互相串扰
+        self._worker_proc: Any = None
+        self._worker_stdin: Any = None
+        self._worker_lock = asyncio.Lock()
+        self._worker_lines: deque[str] = deque()
+        self._bufs: dict[str, bytearray] = {}
+        self._last_activity: dict[str, float] = {}
+        self._frame_indexes: dict[str, int] = {}
+        self._tasks: list[asyncio.Task[None]] = []
+        # 按 session 的回复渲染 task（AL-P1-006：reset 时按 session 精确取消，
+        # 此前只进 _tasks 列表、打断后旧渲染继续跑并与新 run 交错下发）
+        self._render_tasks: dict[str, asyncio.Task[None]] = {}
+        self._portrait_bytes: bytes = b""
+        self._portrait_jpeg: bytes = b""
+        self._portrait_path: str = ""
+        self._fps: int = 25
+        self._activity_fps: float = 2.5
+        self._render_timeout_s: float = 600.0
 
     @classmethod
     def manifest(cls) -> BlockManifest:
@@ -101,7 +106,7 @@ class MuseTalkAvatarBlock(Block):
         self._fps = int(cfg.get("fps", 25))
         self._activity_fps = float(cfg.get("activityFps", 2.5))
         self._render_timeout_s = float(cfg.get("renderTimeoutS", 300))
-        workspace = Path(ctx.workspace_root).resolve()
+        workspace = Path(ctx.workspace_root).resolve()  # noqa: ASYNC240 -- setup 一次性路径解析（非热路径）
 
         portrait_cfg = str(cfg.get("portrait", ""))
         p = Path(portrait_cfg)
@@ -131,7 +136,7 @@ class MuseTalkAvatarBlock(Block):
         )
         if not Path(worker_script).is_absolute():
             worker_script = str(workspace / worker_script)
-        if not Path(worker_script).exists():
+        if not Path(worker_script).exists():  # noqa: ASYNC240 -- spawn 前一次性预检，缺失即报错
             raise BlockSetupError(
                 "avatar.musetalk", f"worker script not found: {worker_script}"
             )
@@ -197,12 +202,10 @@ class MuseTalkAvatarBlock(Block):
             # 触发 _render_reply 时会把 filler+真回复的混合音频拿去渲染（错乱）。
             # 但活动帧照产（张嘴沉吟，VoxEMW 同款效果）。
             if pcm_b64 and not event.payload.get("filler"):
-                try:
+                with suppress(Exception):
                     self._bufs.setdefault(sid, bytearray()).extend(
                         base64.b64decode(pcm_b64)
                     )
-                except Exception:
-                    pass
             await self._emit_activity(ctx, sid)
         elif event.type == TTS_AUDIO_COMPLETED:
             # 同 session 旧渲染还在跑先取消（连说两轮的场景）——以新回复为准
@@ -233,10 +236,20 @@ class MuseTalkAvatarBlock(Block):
             try:
                 await t
             except asyncio.CancelledError:
-                raise  # 取消语义透传（Python 3.8+）
+                # 这些 task 是我们自己 cancel 的——自取消吞掉；
+                # 仅当前任务自身被外部取消时透传（防 asyncio.run 挂起）
+                current = asyncio.current_task()
+                if current is not None and current.cancelling() > 0:
+                    raise
             except Exception:
                 pass
         self._tasks.clear()
+        # 会话态一并清理——GPU worker 已停，残留缓冲/索引无意义
+        self._render_tasks.clear()
+        self._bufs.clear()
+        self._last_activity.clear()
+        self._frame_indexes.clear()
+        self._worker_lines.clear()
 
     # ------------------------------------------------------------------
     # worker 通信
@@ -252,12 +265,8 @@ class MuseTalkAvatarBlock(Block):
                 text = line.decode("utf-8", errors="replace").strip()
                 if text:
                     self._worker_lines.append(text)
-        except Exception as e:
-            try:
-                with open("/tmp/avatar_block_drain.err", "a", encoding="utf-8") as f:
-                    f.write(f"[{time.strftime('%H:%M:%S')}] drain error: {e}\n")
-            except Exception:
-                pass
+        except Exception:
+            logging.getLogger(__name__).exception("MuseTalk worker stdout drain failed")
 
     async def _wait_line(self, timeout: float, expected: str | None = None) -> dict:
         deadline = time.monotonic() + timeout
@@ -295,10 +304,8 @@ class MuseTalkAvatarBlock(Block):
                 self._worker_proc.terminate()
                 await asyncio.wait_for(self._worker_proc.wait(), timeout=5)
             except Exception:
-                try:
+                with suppress(Exception):
                     self._worker_proc.kill()
-                except Exception:
-                    pass
         self._worker_proc = None
         self._worker_stdin = None
 
@@ -327,7 +334,7 @@ class MuseTalkAvatarBlock(Block):
                 await self._emit_idle(ctx)
                 return
             out_dir = (
-                Path(ctx.workspace_root).resolve()
+                Path(ctx.workspace_root).resolve()  # noqa: ASYNC240 -- 每回复一次的输出目录解析（非热路径）
                 / "runs"
                 / "avatar"
                 / sid
@@ -393,8 +400,8 @@ class MuseTalkAvatarBlock(Block):
         )
 
         frames_dir = Path(resp.get("frames_dir", ""))
-        if frames_dir.is_dir():
-            for frame_file in sorted(frames_dir.glob("*.jpg")):
+        if frames_dir.is_dir():  # noqa: ASYNC240 -- 渲染收尾一次性目录检查（每回复一次）
+            for frame_file in sorted(frames_dir.glob("*.jpg")):  # noqa: ASYNC240 -- 同上：收尾一次性枚举，async 化收益不抵复杂度
                 jpeg = frame_file.read_bytes()
                 if jpeg:
                     await self._emit_frame(

@@ -17,13 +17,19 @@ class ORMBase(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+# 资源 ID 统一格式：字母/数字开头，后续可含字母数字、`.` `_` `-`。
+# 禁止 `/` `\` `..` 空格等——id 会拼进文件路径与 URL，防路径穿越与注入。
+# （Block id 含点，如 "vad.mock"，故允许 `.`。）
+RESOURCE_ID_PATTERN = r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+
+
 # ---------------------------------------------------------------------------
 # Project
 # ---------------------------------------------------------------------------
 
 
 class ProjectCreate(BaseModel):
-    id: str = Field(min_length=1, max_length=64)
+    id: str = Field(min_length=1, max_length=64, pattern=RESOURCE_ID_PATTERN)
     name: str = Field(min_length=1, max_length=256)
     description: str | None = None
     settings: dict[str, Any] | None = None
@@ -50,7 +56,7 @@ class ProjectOut(ORMBase):
 
 
 class AvatarCreate(BaseModel):
-    id: str = Field(min_length=1, max_length=64)
+    id: str = Field(min_length=1, max_length=64, pattern=RESOURCE_ID_PATTERN)
     project_id: str
     name: str = Field(min_length=1, max_length=256)
     persona_id: str | None = None
@@ -111,7 +117,7 @@ class AssetOut(ORMBase):
 
 
 class PersonaCreate(BaseModel):
-    id: str = Field(min_length=1, max_length=64)
+    id: str = Field(min_length=1, max_length=64, pattern=RESOURCE_ID_PATTERN)
     name: str = Field(min_length=1, max_length=256)
     label: str | None = None
     prompt: str = ""
@@ -153,7 +159,7 @@ class PersonaOut(ORMBase):
 
 
 class BlockDefinitionCreate(BaseModel):
-    id: str = Field(min_length=1, max_length=128)
+    id: str = Field(min_length=1, max_length=128, pattern=RESOURCE_ID_PATTERN)
     name: str
     category: str
     version: str = "0.1.0"
@@ -189,7 +195,7 @@ class BlockDefinitionOut(ORMBase):
 
 
 class RuntimeProfileCreate(BaseModel):
-    id: str = Field(min_length=1, max_length=64)
+    id: str = Field(min_length=1, max_length=64, pattern=RESOURCE_ID_PATTERN)
     name: str
     blocks: dict[str, Any] = Field(default_factory=dict)
     sync: dict[str, Any] | None = None
@@ -259,7 +265,7 @@ class ArtifactOut(ORMBase):
 
 
 class SecretReferenceCreate(BaseModel):
-    id: str
+    id: str = Field(min_length=1, max_length=64, pattern=RESOURCE_ID_PATTERN)
     name: str
     env_var: str
     description: str | None = None

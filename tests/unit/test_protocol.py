@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 from avatarloom_protocol import (
@@ -188,3 +191,15 @@ class TestEventTypeConstants:
         assert TRANSCRIPT_COMPLETED == "transcript.completed"
         assert LLM_TEXT_DELTA == "llm.text.delta"
         assert TTS_AUDIO_DELTA == "tts.audio.delta"
+
+
+def test_generated_protocol_is_in_sync() -> None:
+    root = Path(__file__).resolve().parents[2]
+    result = subprocess.run(
+        [sys.executable, str(root / "scripts" / "gen_protocol.py"), "--check"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

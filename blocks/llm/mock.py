@@ -20,7 +20,6 @@ from avatarloom_protocol import (
     LLM_REQUEST,
     LLM_TEXT_DELTA,
     LLM_TEXT_DONE,
-    TRANSCRIPT_COMPLETED,
     Event,
 )
 from avatarloom_sdk import Block, BlockContext, BlockManifest, Capability

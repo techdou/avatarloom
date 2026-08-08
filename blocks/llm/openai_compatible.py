@@ -29,7 +29,13 @@ from avatarloom_protocol import (
     LLM_TEXT_DONE,
     Event,
 )
-from avatarloom_sdk import Block, BlockContext, BlockManifest, Capability
+from avatarloom_sdk import (
+    Block,
+    BlockContext,
+    BlockManifest,
+    Capability,
+    ResourceRequirements,
+)
 
 # 中文/英文句末标点
 _SENTENCE_END_RE = re.compile(r"[。！？!?\.…\n]")
@@ -57,7 +63,7 @@ class OpenAILlmBlock(Block):
             capabilities=Capability(streaming=True, interruption=True),
             inputs=[LLM_REQUEST],
             outputs=[LLM_TEXT_DELTA, LLM_TEXT_DONE],
-            resources=ResourceRequirements_stub(),
+            resources=ResourceRequirements(),
             config_schema={
                 "type": "object",
                 "properties": {
@@ -319,13 +325,6 @@ def _read_env(name: str) -> str:
     import os
 
     return os.environ.get(name, "")
-
-
-def ResourceRequirements_stub():  # type: ignore[no-redef]
-    """避免顶部 import 循环，惰性取 ResourceRequirements。"""
-    from avatarloom_sdk import ResourceRequirements
-
-    return ResourceRequirements()
 
 
 def _build_messages(system_prompt: str, user_text: str) -> list[dict[str, str]]:

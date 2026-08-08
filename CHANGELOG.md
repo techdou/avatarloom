@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased — 2026-08-09
+
+**部署与启动治理**（本轮）
+
+- 新增 `.dockerignore`：`.env`、node_modules、data、模型权重不进构建上下文。
+- Dockerfile 三个全修：control-api 补齐 uv workspace 成员（原缺 `apps/runtime-gateway`，`uv sync` 必挂）；`uv sync --frozen --no-dev` / `pnpm install --frozen-lockfile` 严格按锁文件，删除 `|| 兜底` 假容错；corepack 按 `packageManager` 固定 pnpm 版本；容器启动 `uv run --no-sync` 不再重复 sync。
+- compose：端口改用独立别名（`AVATARLOOM_CONTROL_API_PORT` 等）、宿主侧端口可 env 覆盖；`AVATARLOOM_API_TOKEN` 一处设置三处生效（control-api HTTP / gateway WS / gateway→control-api），healthcheck 自动带 token；Studio 服务端 rewrites 走容器服务名（原硬编码 127.0.0.1 容器内不通）。
+- `scripts/dev.py`：Windows 下 pnpm 经 `shutil.which` 解析 `.cmd`；端口变量与 `.env.example` 统一（原读无前缀变量、服务实际读带前缀，改了不生效）；端口检查与传入服务的端口同一来源；启动宽限检测 + 任一服务退出透传退出码（原永远 0 假绿）；Windows 停止杀整棵进程树。
+- `autodl_setup.sh`：`.bashrc` 追加带标记守卫（原每跑一遍重复一份）；模型下载失败记账、结尾非零退出（原假绿）。
+- `autodl_start.sh`：start 幂等（已运行跳过）；启动等端口就绪才算成功，失败自动回滚本次拉起的服务；stop 等优雅退出再 SIGKILL、清理 stale pidfile；status 有服务没起来退出码 1。
+- `setup_flashhead_fast.sh`：cd/venv/torch/pip 失败全部 fail-fast（原 pip 失败静默继续打"完成"）；权重已存在跳过（真幂等）；下载失败非零退出。
+- Makefile `stop`：pid 路径 `.data/` → `data/`（与 autodl_start.sh 实际写入一致），补 studio.pid。
+- 默认 Profile 全面改 `mock`：gateway `default_profile`、Studio playground/show/settings 默认值；`.env.autodl.example` 显式锁 `autodl-best` 保住 GPU 部署行为。
+- SDK workspace 假绿修复：`packages/sdk-typescript` 补上 package.json/tsconfig/index 入口与生成物完整性测试（原无 package.json，`pnpm --filter @avatarloom/sdk-typescript build` 匹配不到任何东西）；空目录 `packages/ui` 移出 workspace（原使 Dockerfile.studio 的 COPY 直接失败）。
+- 文档：新增 `docs/deployment.md`（本地 dev / Compose / AutoDL 三形态 + 鉴权 + 验证清单），README 挂链接；`.env.example` / `.env.autodl.example` 补 profile 与 token 段。
+
 ## v0.2.0 — 2026-08-07
 
 **Studio 前端架构与 UI/UX**（8 commits）

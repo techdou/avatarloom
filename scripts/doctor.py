@@ -98,7 +98,13 @@ def check_profiles() -> list[tuple[str, bool, str]]:
 
 def check_ports() -> list[tuple[str, bool, str]]:
     results = []
-    for name, port in [("Control API", 8100), ("Runtime Gateway", 8101), ("Studio", 3000)]:
+    # 端口与 .env.example / dev.py 同一来源：独立别名优先，默认 8100/8101/3000
+    ports = [
+        ("Control API", int(os.environ.get("AVATARLOOM_CONTROL_API_PORT", "8100"))),
+        ("Runtime Gateway", int(os.environ.get("AVATARLOOM_RUNTIME_GATEWAY_PORT", "8101"))),
+        ("Studio", int(os.environ.get("STUDIO_PORT", "3000"))),
+    ]
+    for name, port in ports:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             in_use = s.connect_ex(("127.0.0.1", port)) == 0
         # 端口被占用不一定是错（可能服务已起），这里只报状态

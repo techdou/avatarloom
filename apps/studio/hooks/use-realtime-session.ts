@@ -18,6 +18,9 @@ export type ConnState = "disconnected" | "connecting" | "connected" | "error";
 /** 隧道端口显式映射（README「端口约定」唯一权威）：页面端口 → gateway WS 端口。 */
 const TUNNEL_WS_PORT: Record<string, string> = { "13000": "18101" };
 
+/** 浏览器 WS 鉴权 token。只通过子协议握手传递，不放进 URL；未配置时保持 Mock 开发模式。 */
+const WS_AUTH_TOKEN = process.env.NEXT_PUBLIC_WS_TOKEN ?? "";
+
 /** 推导 WS 地址（纯函数，挂载即算）：
  * 1. URL 参数 ?wsPort=xxxxx；2. NEXT_PUBLIC_WS_PORT env；
  * 3. 隧道映射（TUNNEL_WS_PORT 表，兜底 页面端口+5101）；4. 默认 8101。
@@ -424,6 +427,9 @@ export function useRealtimeSession({
     ws.onopen = () => {
       setConn("connected");
       reconnectRef.current.attempts = 0;
+      if (WS_AUTH_TOKEN) {
+        ws.send(JSON.stringify({ type: "auth", token: WS_AUTH_TOKEN }));
+      }
       ws.send(
         JSON.stringify({
           type: "session.start",
@@ -543,8 +549,11 @@ export function useRealtimeSession({
 
   // 卸载清理
   useEffect(() => {
+    // reconnectRef 对象身份终身不变（只改属性），提升后 lint 不再误报；
+    // 其余 ref 必须在 cleanup 时读最新 .current（卸载当然要关"当前"那个资源）。
+    const reconnect = reconnectRef.current;
     return () => {
-      window.clearTimeout(reconnectRef.current.timer);
+      window.clearTimeout(reconnect.timer);
       window.clearInterval(pingTimerRef.current);
       recorderRef.current?.stop();
       playerRef.current?.close();

@@ -46,8 +46,13 @@ class Settings(BaseSettings):
 
     # CORS 白名单（与 allow_credentials=True 配合使用，禁用通配符）
     cors_origins: list[str] = Field(
-        default_factory=lambda: ["http://localhost:3000", "http://127.0.0.1:3000"],
-        description="Allowed CORS origins (Studio frontend defaults included).",
+        default_factory=lambda: [
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:13000",
+            "http://127.0.0.1:13000",
+        ],
+        description="Allowed CORS origins (Studio and tunnel defaults included).",
     )
 
     # 日志

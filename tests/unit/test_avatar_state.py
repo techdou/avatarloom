@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from runtime.orchestrator.avatar_state import AvatarState, transition_avatar_state
 
 

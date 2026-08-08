@@ -112,6 +112,13 @@ class TranscriptPartialPayload(_BasePayload):
 # ---------------------------------------------------------------------------
 
 
+class LlmRequestPayload(_BasePayload):
+    text: str
+    language: str = "zh"
+    transcript_event_id: str | None = None
+    vision_context: str | None = None
+
+
 class LlmTextDeltaPayload(_BasePayload):
     text: str
     # 句子切分信息：TTS 按句喂
@@ -179,9 +186,23 @@ class AvatarDegradedPayload(_BasePayload):
     reason: str
 
 
+class AvatarVideoReadyPayload(_BasePayload):
+    video_path: str
+    frames: int = Field(default=0, ge=0)
+    audio_s: float = Field(default=0.0, ge=0.0)
+    infer_s: float = Field(default=0.0, ge=0.0)
+    fps_actual: float = Field(default=0.0, ge=0.0)
+    fps: int = Field(default=25, gt=0)
+
+
 # ---------------------------------------------------------------------------
 # vision.*
 # ---------------------------------------------------------------------------
+
+
+class VisionRequestPayload(_BasePayload):
+    keyword: str
+    request_id: str
 
 
 class VisionResultPayload(_BasePayload):

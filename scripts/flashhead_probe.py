@@ -83,12 +83,11 @@ async def main() -> int:
         send_task = asyncio.create_task(sender())
         frames = 0
         t0 = asyncio.get_event_loop().time()
-        last_frame_at = t0
         try:
             while True:
                 try:
                     message = await asyncio.wait_for(ws.recv(), timeout=3.0)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     # 空闲超时：音频播完且 idle 帧节流（0.96s）下无新帧——
                     # 已有足够帧就收工（probe 不是长跑服务）
                     print(
@@ -105,7 +104,6 @@ async def main() -> int:
                         continue
                     (frame_dir / f"{frames:05d}.jpg").write_bytes(data)
                     frames += 1
-                    last_frame_at = asyncio.get_event_loop().time()
                     if frames % 25 == 0:
                         print(f"    frames={frames}", flush=True)
                     if frames >= args.max_frames:
@@ -123,7 +121,9 @@ async def main() -> int:
             "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p",
             str(out_path),
         ]
-        r = subprocess.run(cmd, capture_output=True, text=True)
+        r = await asyncio.to_thread(
+            subprocess.run, cmd, capture_output=True, text=True
+        )
         print("ffmpeg rc:", r.returncode, flush=True)
         if r.returncode != 0:
             print(r.stderr[-300:], flush=True)

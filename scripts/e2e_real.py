@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import os
 import struct
@@ -38,6 +39,7 @@ from avatarloom_protocol import (  # noqa: E402
     TTS_AUDIO_DELTA,
     Event,
 )
+
 from runtime.orchestrator import Orchestrator  # noqa: E402
 from runtime.orchestrator.profile_loader import load_profile  # noqa: E402
 
@@ -88,10 +90,8 @@ def _chunks16(pcm16: bytes, size: int = 512):
 
 
 async def main() -> int:
-    try:
+    with contextlib.suppress(Exception):
         sys.stdout.reconfigure(line_buffering=True)
-    except Exception:
-        pass
     t_start = time.perf_counter()
     ts = time.strftime("%Y%m%d-%H%M%S")
     out_dir = OUT_ROOT / ts
@@ -113,7 +113,10 @@ async def main() -> int:
 
     # 资产预检：缺文件直接报错（而不是深处 BlockSetupError 难定位）。
     # persona 三件套不在 git 仓库，需服务器预先生成（generate_asset_matrix.sh）。
-    missing_assets = [str(p) for p in (user_wav, PROJECT_ROOT / portrait, PROJECT_ROOT / voice_ref) if not Path(p).exists()]
+    asset_paths = (user_wav, PROJECT_ROOT / portrait, PROJECT_ROOT / voice_ref)
+    missing_assets = await asyncio.to_thread(
+        lambda: [str(path) for path in asset_paths if not path.exists()]
+    )
     if missing_assets:
         print(
             "[FATAL] 资产缺失（persona 三件套不在仓库，需先跑 "
@@ -208,7 +211,7 @@ async def main() -> int:
             print(
                 f"    [heartbeat] t={now - t_start:.0f}s events={len(events)} "
                 f"types=[{top}] "
-                f"got={ {k: v for k, v in got.items()} }",
+                f"got={ dict(got.items()) }",
                 flush=True,
             )
         await asyncio.sleep(0.2)
@@ -261,10 +264,8 @@ async def main() -> int:
         # flashhead 流式帧即视频，mock/static 无渲染概念——跳过等待，
         # 否则 mock 链路本地验证会在此处空等 720s。
         avatar_block_id = ""
-        try:
+        with contextlib.suppress(Exception):
             avatar_block_id = orch.blocks["avatar"].manifest().block_id if "avatar" in orch.blocks else ""
-        except Exception:
-            pass
         if is_flashhead or avatar_block_id in ("avatar.mock", "avatar.static"):
             print(f"[6.5] {avatar_block_id or 'flashhead'}: frames == video (no reply mp4)")
             got["video"] = True
@@ -327,10 +328,15 @@ async def main() -> int:
         "outputs": {"tts_wav": str(tts_wav)},
     }
 
-    if video_path and Path(video_path).exists():
+    rendered_video = Path(video_path) if video_path else None
+    video_exists = bool(
+        rendered_video and await asyncio.to_thread(rendered_video.exists)
+    )
+    if video_exists and rendered_video is not None:
         # 真实 MuseTalk 口型视频：直接复制为最终产物
         dst_mp4 = out_dir / "avatar_musetalk.mp4"
-        dst_mp4.write_bytes(Path(video_path).read_bytes())
+        video_bytes = await asyncio.to_thread(rendered_video.read_bytes)
+        await asyncio.to_thread(dst_mp4.write_bytes, video_bytes)
         manifest["outputs"]["avatar_mp4"] = str(dst_mp4)
         manifest["metrics"]["video_source"] = "musetalk"
     elif frames:
@@ -350,7 +356,9 @@ async def main() -> int:
             str(mp4),
         ]
         manifest["metrics"]["video_fps"] = fps
-        r = subprocess.run(cmd, capture_output=True, text=True)
+        r = await asyncio.to_thread(
+            subprocess.run, cmd, capture_output=True, text=True
+        )
         manifest["outputs"]["avatar_mp4"] = str(mp4)
         manifest["ffmpeg_rc"] = r.returncode
         manifest["metrics"]["video_source"] = "frame-mux"

@@ -16,6 +16,7 @@ face bbox and blend mask both come from mediapipe.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import subprocess
@@ -150,9 +151,9 @@ class MuseEngine:
     def _ensure_loaded(self) -> None:
         if self._models is not None:
             return
-        from musetalk.utils.utils import load_all_model, datagen  # noqa: F401
         from musetalk.utils.audio_processor import AudioProcessor
         from musetalk.utils.blending import get_image_prepare_material
+        from musetalk.utils.utils import datagen, load_all_model
         from transformers import WhisperModel
 
         t0 = time.perf_counter()
@@ -275,10 +276,8 @@ class MuseEngine:
                     )
                 except Exception:
                     combine = ori
-                    try:
+                    with contextlib.suppress(Exception):
                         combine[y1:y2, x1:x2] = res_frame
-                    except Exception:
-                        pass
                 cv2.imwrite(
                     str(frame_dir / f"{idx:06d}.jpg"),
                     combine,
@@ -310,12 +309,10 @@ class MuseEngine:
             "load_s": m["load_s"],
         }
         # 落盘兜底：即使 stdout 管道异常，块也能读到结果
-        try:
+        with contextlib.suppress(Exception):
             (out_path.parent / (out_path.stem + ".json")).write_text(
                 json.dumps(meta, ensure_ascii=False), encoding="utf-8"
             )
-        except Exception:
-            pass
         return meta
 
 

@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from avatarloom_control_api.deps import get_db
 from avatarloom_control_api.models import Asset, Avatar
-from avatarloom_control_api.routers.assets import save_upload
+from avatarloom_control_api.routers.assets import resolve_asset_path, save_upload
 from avatarloom_control_api.schemas import (
     AssetOut,
     AvatarCreate,
@@ -152,7 +152,7 @@ async def _serve_avatar_asset(
     if not rel_path:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"No {field} set")
     assets_root = Path(request.app.state.settings.artifacts_root) / "avatar_assets"
-    abs_path = assets_root / rel_path
+    abs_path = resolve_asset_path(assets_root, rel_path)
     if not abs_path.exists():
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="File missing on disk")
     import mimetypes

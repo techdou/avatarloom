@@ -5,26 +5,36 @@
 #   docker compose -f deploy/docker-compose.yml up          # 启动
 #   docker compose -f deploy/docker-compose.yml down        # 停止
 #
-# Mock Profile 默认可用（不依赖 GPU/API Key）。
-# 真实 GPU 模式取消注释 deploy.resources + runtime 注释。
+# 默认即是 Mock Profile（AVATARLOOM_DEFAULT_PROFILE=mock）——不依赖 GPU/API Key，
+# `docker compose up` 起来就能在 Studio 里对话。
+# 真实 GPU 模式：取消注释文末 deploy.resources，并把 AVATARLOOM_DEFAULT_PROFILE
+# 改成 profiles/ 里的真实档位（如 autodl-best），另需按 .env.example 配 LLM_API_KEY。
+#
+# 鉴权（可选）：在 compose 旁的 .env 或 shell 里设 AVATARLOOM_API_TOKEN=<随机串>，
+# control-api 全端点启用 Bearer 校验，gateway 自动带同一 token 调 control-api。
+# 留空 = 鉴权关闭（本机开发默认）。
 
 services:
   control-api:
     build:
-      context: ../..
+      context: ..
       dockerfile: deploy/docker/Dockerfile.control-api
     ports:
-      - "8100:8100"
+      # 宿主侧端口可覆盖：CONTROL_API_PORT=18100 docker compose up
+      - "${CONTROL_API_PORT:-8100}:8100"
     environment:
       - AVATARLOOM_HOST=0.0.0.0
-      - AVATARLOOM_PORT=8100
+      - AVATARLOOM_CONTROL_API_PORT=8100
       - AVATARLOOM_DB_URL=sqlite+aiosqlite:///./data/avatarloom.db
       - AVATARLOOM_RUNS_ROOT=/app/data/runs
       - AVATARLOOM_ARTIFACTS_ROOT=/app/data/artifacts
+      # Bearer token；留空 = 鉴权关闭。设置后 gateway 用同一值（见下）。
+      - AVATARLOOM_API_TOKEN=${AVATARLOOM_API_TOKEN:-}
     volumes:
       - avatarloom-data:/app/data
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8100/api/health"]
+      # token 为空时鉴权关闭，带空 Bearer 也放行；token 非空时带真实值才 200。
+      test: ["CMD-SHELL", "curl -fsS -H \"Authorization: Bearer $$AVATARLOOM_API_TOKEN\" http://localhost:8100/api/health"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -33,16 +43,21 @@ services:
 
   runtime-gateway:
     build:
-      context: ../..
+      context: ..
       dockerfile: deploy/docker/Dockerfile.runtime-gateway
     ports:
-      - "8101:8101"
+      - "${RUNTIME_GATEWAY_PORT:-8101}:8101"
     environment:
       - AVATARLOOM_HOST=0.0.0.0
-      - AVATARLOOM_PORT=8101
+      - AVATARLOOM_RUNTIME_GATEWAY_PORT=8101
       - AVATARLOOM_CONTROL_API_URL=http://control-api:8100
-      - AVATARLOOM_DEFAULT_PROFILE=mock
-      # 真实 Adapter 用——从 .env 读
+      # 与 control-api 的 AVATARLOOM_API_TOKEN 保持一致；control-api 关鉴权时留空。
+      - AVATARLOOM_CONTROL_API_TOKEN=${AVATARLOOM_API_TOKEN:-}
+      # WS 入口鉴权（gateway 自身校验 /ws/realtime 用的同一套 token，留空=关闭）。
+      - AVATARLOOM_API_TOKEN=${AVATARLOOM_API_TOKEN:-}
+      # 默认 Mock 链路——无 GPU 无 Key 也能跑通全链路。
+      - AVATARLOOM_DEFAULT_PROFILE=${AVATARLOOM_DEFAULT_PROFILE:-mock}
+      # 真实 Adapter 用——从 compose 旁的 .env 读
       - LLM_API_KEY=${LLM_API_KEY:-}
       - LLM_BASE_URL=${LLM_BASE_URL:-https://api.openai.com/v1}
       - LLM_MODEL=${LLM_MODEL:-gpt-4o-mini}
@@ -69,15 +84,25 @@ services:
 
   studio:
     build:
-      context: ../..
+      context: ..
       dockerfile: deploy/docker/Dockerfile.studio
+      args:
+        # NEXT_PUBLIC_* 在构建期内联到浏览器 bundle；仅适合单用户受控隧道。
+        NEXT_PUBLIC_WS_TOKEN: ${AVATARLOOM_API_TOKEN:-}
     ports:
-      - "3000:3000"
+      - "${STUDIO_PORT:-3000}:3000"
     environment:
       - NODE_ENV=production
+      - PORT=3000
+      # 服务端 rewrites 代理目标——容器内 127.0.0.1 不通，必须走服务名。
+      # （浏览器侧 WS 仍直连宿主 ${RUNTIME_GATEWAY_PORT:-8101}，不经此变量。）
+      - CONTROL_API_BASE=http://control-api:8100/api
+      - RUNTIME_GATEWAY_BASE=http://runtime-gateway:8101/api
     depends_on:
-      - control-api
-      - runtime-gateway
+      control-api:
+        condition: service_healthy
+      runtime-gateway:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:

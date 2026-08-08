@@ -13,7 +13,6 @@ import asyncio
 import json
 
 import httpx
-import pytest
 from avatarloom_protocol import (
     LLM_REQUEST,
     LLM_TEXT_DELTA,

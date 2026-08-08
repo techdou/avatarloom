@@ -266,6 +266,49 @@
     "title": "TranscriptPartialPayload",
     "type": "object"
   },
+  "llm.request": {
+    "additionalProperties": true,
+    "properties": {
+      "text": {
+        "title": "Text",
+        "type": "string"
+      },
+      "language": {
+        "default": "zh",
+        "title": "Language",
+        "type": "string"
+      },
+      "transcript_event_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Transcript Event Id"
+      },
+      "vision_context": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Vision Context"
+      }
+    },
+    "required": [
+      "text"
+    ],
+    "title": "LlmRequestPayload",
+    "type": "object"
+  },
   "llm.text.delta": {
     "additionalProperties": true,
     "properties": {
@@ -639,6 +682,69 @@
       "reason"
     ],
     "title": "AvatarDegradedPayload",
+    "type": "object"
+  },
+  "avatar.video.ready": {
+    "additionalProperties": true,
+    "properties": {
+      "video_path": {
+        "title": "Video Path",
+        "type": "string"
+      },
+      "frames": {
+        "default": 0,
+        "minimum": 0,
+        "title": "Frames",
+        "type": "integer"
+      },
+      "audio_s": {
+        "default": 0.0,
+        "minimum": 0.0,
+        "title": "Audio S",
+        "type": "number"
+      },
+      "infer_s": {
+        "default": 0.0,
+        "minimum": 0.0,
+        "title": "Infer S",
+        "type": "number"
+      },
+      "fps_actual": {
+        "default": 0.0,
+        "minimum": 0.0,
+        "title": "Fps Actual",
+        "type": "number"
+      },
+      "fps": {
+        "default": 25,
+        "exclusiveMinimum": 0,
+        "title": "Fps",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "video_path"
+    ],
+    "title": "AvatarVideoReadyPayload",
+    "type": "object"
+  },
+  "vision.request": {
+    "additionalProperties": true,
+    "properties": {
+      "keyword": {
+        "title": "Keyword",
+        "type": "string"
+      },
+      "request_id": {
+        "title": "Request Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "keyword",
+      "request_id"
+    ],
+    "title": "VisionRequestPayload",
     "type": "object"
   },
   "vision.result": {

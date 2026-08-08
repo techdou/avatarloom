@@ -9,11 +9,13 @@ export const AVATAR_DEGRADED = "avatar.degraded" as const;
 export const AVATAR_IDLE_FRAME = "avatar.idle_frame" as const;
 export const AVATAR_RESET = "avatar.reset" as const;
 export const AVATAR_SPEECH_FRAME = "avatar.speech_frame" as const;
+export const AVATAR_VIDEO_READY = "avatar.video.ready" as const;
 export const BLOCK_ERROR = "block.error" as const;
 export const BLOCK_HEALTH = "block.health" as const;
 export const BLOCK_READY = "block.ready" as const;
 export const BLOCK_SETUP = "block.setup" as const;
 export const LLM_ERROR = "llm.error" as const;
+export const LLM_REQUEST = "llm.request" as const;
 export const LLM_TEXT_DELTA = "llm.text.delta" as const;
 export const LLM_TEXT_DONE = "llm.text.done" as const;
 export const PERSONA_CHANGED = "persona.changed" as const;
@@ -34,6 +36,7 @@ export const TRANSCRIPT_PARTIAL = "transcript.partial" as const;
 export const TTS_AUDIO_COMPLETED = "tts.audio.completed" as const;
 export const TTS_AUDIO_DELTA = "tts.audio.delta" as const;
 export const TTS_ERROR = "tts.error" as const;
+export const VISION_REQUEST = "vision.request" as const;
 export const VISION_RESULT = "vision.result" as const;
 
 export interface EventEnvelope {
@@ -97,6 +100,16 @@ export interface AvatarResetPayload {
   [key: string]: unknown;
 }
 
+export interface AvatarVideoReadyPayload {
+  videoPath: string;
+  frames?: number;
+  audioS?: number;
+  inferS?: number;
+  fpsActual?: number;
+  fps?: number;
+  [key: string]: unknown;
+}
+
 export interface BlockErrorPayload {
   blockId: string;
   code: string;
@@ -123,6 +136,14 @@ export interface BlockReadyPayload {
 export interface BlockSetupPayload {
   blockId: string;
   blockType: string;
+  [key: string]: unknown;
+}
+
+export interface LlmRequestPayload {
+  text: string;
+  language?: string;
+  transcriptEventId?: string | null;
+  visionContext?: string | null;
   [key: string]: unknown;
 }
 
@@ -264,6 +285,12 @@ export interface TtsAudioDeltaPayload {
   sampleRate?: number;
   samples: number;
   text?: string | null;
+  [key: string]: unknown;
+}
+
+export interface VisionRequestPayload {
+  keyword: string;
+  requestId: string;
   [key: string]: unknown;
 }
 

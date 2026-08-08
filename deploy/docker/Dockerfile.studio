@@ -3,19 +3,26 @@ FROM node:20-slim AS base
 
 WORKDIR /app
 
-# 启用 pnpm
-RUN corepack enable && corepack prepare pnpm@latest --activate
+# 启用 pnpm——corepack 按根 package.json 的 packageManager 字段固定版本（pnpm@11.10.0），
+# 不 prepare @latest，保证构建可复现。
+RUN corepack enable
 
-# 拷贝 workspace 配置
-COPY package.json pnpm-workspace.yaml pnpm-lock.yaml* ./
+# 拷贝 workspace 配置与全部成员的 package.json（pnpm install 需要成员清单完整）。
+# packages/ui 为空目录、已不在 workspace 内，无需拷贝。
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY apps/studio/package.json ./apps/studio/
-COPY packages/sdk-typescript/package.json ./packages/sdk-typescript/package.json
-COPY packages/ui/package.json ./packages/ui/package.json
+COPY packages/sdk-typescript/package.json ./packages/sdk-typescript/
 
-RUN pnpm install --frozen-lockfile 2>/dev/null || pnpm install
+# 严格按 lockfile 安装——失败立即报错，不做静默降级安装（依赖漂移是构建事故）。
+RUN pnpm install --frozen-lockfile
 
 # 拷贝源码
 COPY . .
+
+# 浏览器直连 Gateway 时，token 会在构建期内联进客户端 bundle。
+# 这是共享密钥模型：仅适用于受控的单用户隧道；多用户部署应改用服务端会话 token。
+ARG NEXT_PUBLIC_WS_TOKEN=
+ENV NEXT_PUBLIC_WS_TOKEN=${NEXT_PUBLIC_WS_TOKEN}
 
 # 构建
 RUN pnpm --filter @avatarloom/studio build

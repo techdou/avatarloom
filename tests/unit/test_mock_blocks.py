@@ -6,8 +6,8 @@ import base64
 
 import numpy as np
 from avatarloom_protocol import (
-    LLM_REQUEST,
     AUDIO_APPENDED,
+    LLM_REQUEST,
     LLM_TEXT_DELTA,
     SPEECH_DETECTED,
     SPEECH_ENDED,

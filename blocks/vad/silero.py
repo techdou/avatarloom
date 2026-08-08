@@ -11,6 +11,7 @@ GPU 实机未验证——单测覆盖纯逻辑分支（chunk 边界、置信度�
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import numpy as np
@@ -28,6 +29,8 @@ from avatarloom_sdk import (
     Capability,
     ResourceRequirements,
 )
+
+from blocks import release_gpu_objects
 
 # Silero VAD 默认参数（来自官方 get_number_of_samples）
 _DEFAULT_THRESHOLD = 0.5
@@ -80,7 +83,8 @@ class SileroVadBlock(Block):
 
         device = str(cfg.get("device", "cpu"))
         try:
-            self._model, _utils = self._load_model(device)
+            # torch.hub 加载 + JIT 编译是重阻塞（首次还含网络下载）——offload 线程
+            self._model, _utils = await asyncio.to_thread(self._load_model, device)
             self._h = None
         except ImportError as e:
             raise BlockSetupError(
@@ -108,9 +112,10 @@ class SileroVadBlock(Block):
             return
 
         pcm = self._decode_pcm(pcm_b64)
-        # Silero 要求 512 samples（16kHz）为一个 chunk
+        # Silero 要求 512 samples（16kHz）为一个 chunk；
+        # torch 前向 + .item() 同步是阻塞调用——逐 chunk offload，不卡事件循环
         for chunk in self._chunk(pcm, 512):
-            prob, self._h = self._infer(chunk, self._h)
+            prob, self._h = await asyncio.to_thread(self._infer, chunk, self._h)
             await self._update_state(ctx, prob)
 
     async def _update_state(self, ctx: BlockContext, prob: float) -> None:
@@ -149,6 +154,18 @@ class SileroVadBlock(Block):
         self._is_speaking = False
         self._silence_count = 0
         self._h = None
+
+    async def shutdown(self) -> None:
+        """释放模型与缓存（HIGH-4 补齐：此前无 shutdown，VAD 模型常驻，
+        WS 断开/重连后旧实例资源不归还）。gc/empty_cache 阻塞——offload 线程。"""
+        model = self._model
+        self._model = None
+        self._h = None
+        self._is_speaking = False
+        self._silence_count = 0
+        holder = [model]
+        model = None
+        await asyncio.to_thread(release_gpu_objects, holder)
 
     # ---- 纯逻辑 helpers（可单测，不依赖 torch）----
 

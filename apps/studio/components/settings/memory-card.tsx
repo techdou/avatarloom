@@ -20,7 +20,7 @@ interface MemoryConfig {
  * （运行时 store 活在 orchestrator 进程，REST 不可达）。
  */
 export function MemoryCard() {
-  const [profileId, setProfileId] = useState("autodl-best");
+  const [profileId, setProfileId] = useState("mock");
   const [cfg, setCfg] = useState<MemoryConfig | null>(null);
   const [found, setFound] = useState<boolean | null>(null);
 

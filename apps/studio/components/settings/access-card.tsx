@@ -23,7 +23,7 @@ export function AccessCard() {
 
   const copyShowLink = () => {
     let persona = "demo-assistant";
-    let profile = "autodl-best";
+    let profile = "mock";
     try {
       persona = localStorage.getItem("al.persona") || persona;
       profile = localStorage.getItem("al.profile") || profile;

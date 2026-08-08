@@ -10,7 +10,6 @@ import asyncio
 import base64
 
 import pytest
-
 from avatarloom_protocol import (
     AUDIO_APPENDED,
     SPEECH_DETECTED,
@@ -18,6 +17,7 @@ from avatarloom_protocol import (
     TRANSCRIPT_COMPLETED,
     Event,
 )
+
 from runtime.orchestrator.config import BlockRef, OrchestratorConfig
 from runtime.orchestrator.orchestrator import Orchestrator
 
@@ -154,7 +154,6 @@ async def test_stt_subscription_includes_audio_appended() -> None:
     await orch._wire_event_bus()
 
     # EventBus 内部订阅表：验证 STT handler 同时挂在 audio.appended 和 speech.ended
-    bus = orch.event_bus
     # 通过发布事件验证：发 audio.appended，STT 应收到（否则 bufs 空）
     session = await orch.start_session(persona_id="demo-assistant", workspace_root=".")
     pcm = b"\x01\x02" * 512

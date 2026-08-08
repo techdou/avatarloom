@@ -19,9 +19,12 @@ setup-gpu: ## 安装包含 GPU 全套重型依赖
 dev: ## 启动三服务（Control API + Runtime Gateway + Studio）
 	$(PYTHON) scripts/dev.py
 
-stop: ## 停止所有 AvatarLoom 服务
-	-@for pid in .data/control-api.pid .data/runtime-gateway.pid; do \
-	  [ -f $$pid ] && kill `cat $$pid` 2>/dev/null && rm -f $$pid; \
+stop: ## 停止所有 AvatarLoom 服务（pid 文件由 scripts/autodl_start.sh 写入 data/）
+	-@for pidfile in data/control-api.pid data/runtime-gateway.pid data/studio.pid; do \
+	  if [ -f $$pidfile ]; then \
+	    kill `cat $$pidfile` 2>/dev/null || true; \
+	    rm -f $$pidfile; \
+	  fi; \
 	done
 	@echo "✓ 服务已停止"
 

@@ -1,7 +1,6 @@
 packages:
   - "apps/studio"
   - "packages/sdk-typescript"
-  - "packages/ui"
 
 allowBuilds:
   esbuild: true

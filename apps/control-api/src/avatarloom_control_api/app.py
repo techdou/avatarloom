@@ -58,10 +58,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         description="Composable Digital Human Runtime — Control Plane",
         version="0.1.0",
         lifespan=lifespan,
-        # 全局鉴权：env 未设 token 时 verify_token 直接放行（开发模式）；
-        # 设了 token 后所有 router 自动受保护。
+        # 全局鉴权：token 未配置时 verify_token 直接放行（开发模式）；
+        # 配置后所有 router 自动受保护。
         dependencies=[Depends(verify_token)],
     )
+
+    # 提前挂上 settings——verify_token 从 app.state 读 api_token，
+    # 不依赖 lifespan 是否已执行（lifespan 里的赋值保留，二者一致）。
+    app.state.settings = settings
 
     # CORS——白名单（allow_credentials=True 时不能用通配符）
     app.add_middleware(

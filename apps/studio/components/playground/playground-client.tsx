@@ -21,8 +21,8 @@ import { DebugDrawer } from "@/components/playground/debug-drawer";
  * 音频是主时钟：PcmPlayer 用 AudioContext.currentTime 调度，AVMux 按节奏消费帧。
  */
 export function PlaygroundClient() {
-  // profile / persona：客户端持久化（默认 autodl-best / demo-assistant）
-  const [profileId, setProfileId] = useState<string>("autodl-best");
+  // profile / persona：客户端持久化（默认 mock / demo-assistant——mock 无 GPU 也能跑）
+  const [profileId, setProfileId] = useState<string>("mock");
   const [personaId, setPersonaId] = useState<string>("demo-assistant");
   const [showDebug, setShowDebug] = useState(false);
   const [runsOpen, setRunsOpen] = useState(false);
@@ -100,6 +100,7 @@ export function PlaygroundClient() {
   const personaLabel = currentPersona?.label || currentPersona?.name || personaId;
 
   // 空格键切换麦克风（输入控件 focus 时豁免；长按不重复触发）
+  const { conn: sessionConn, toggleMic } = session;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.code !== "Space" || e.repeat) return;
@@ -113,13 +114,13 @@ export function PlaygroundClient() {
       ) {
         return;
       }
-      if (session.conn !== "connected") return;
+      if (sessionConn !== "connected") return;
       e.preventDefault();
-      void session.toggleMic();
+      void toggleMic();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [session.conn, session.toggleMic]);
+  }, [sessionConn, toggleMic]);
 
   return (
     <div className="flex flex-col gap-2 h-[calc(100vh-3.5rem)] md:h-[calc(100vh-0px)] md:p-2">

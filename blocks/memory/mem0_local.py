@@ -168,7 +168,7 @@ class Mem0MemoryBlock(Block):
     def active(self) -> bool:
         return self._store is not None
 
-    async def process(self, ctx: BlockContext, event) -> None:  # noqa: ARG002
+    async def process(self, ctx: BlockContext, event) -> None:
         """不订阅任何事件——recall/memorize 由 orchestrator 鸭子调用（同 vision 模式）。"""
         return
 

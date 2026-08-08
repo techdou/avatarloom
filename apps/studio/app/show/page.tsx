@@ -12,7 +12,7 @@ interface ShowPageProps {
 }
 
 export default function ShowPage({ searchParams }: ShowPageProps) {
-  const profileId = searchParams.profile || "autodl-best";
+  const profileId = searchParams.profile || "mock";
   const personaId = searchParams.persona || "demo-assistant";
   return <ShowcaseClient profileId={profileId} personaId={personaId} />;
 }

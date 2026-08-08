@@ -10,20 +10,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # 安装 uv
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-# 先拷贝依赖清单（利用 Docker 层缓存）
-COPY pyproject.toml uv.lock* ./
-COPY packages/ ./packages/
+# 先拷贝依赖清单（利用 Docker 层缓存）。
+# uv workspace 的 4 个成员必须全部在场，否则 uv sync 直接报错
+# （根项目 avatarloom 依赖全部 4 个 workspace 成员）。
+COPY pyproject.toml uv.lock ./
+COPY packages/protocol ./packages/protocol
+COPY packages/sdk-python ./packages/sdk-python
 COPY apps/control-api ./apps/control-api
+COPY apps/runtime-gateway ./apps/runtime-gateway
 
-# 安装依赖（仅 control-api 需要的）
-RUN uv sync --extra dev --no-dev 2>/dev/null || uv sync
+# 安装依赖：--frozen 严格按 uv.lock 安装，失败立即报错（不做静默兜底）；
+# --no-dev 生产镜像不带 dev 依赖。
+RUN uv sync --frozen --no-dev
 
 # 拷贝源码
 COPY . .
 
 ENV AVATARLOOM_HOST=0.0.0.0
-ENV AVATARLOOM_PORT=8100
+ENV AVATARLOOM_CONTROL_API_PORT=8100
 ENV AVATARLOOM_DB_URL=sqlite+aiosqlite:///./data/avatarloom.db
 EXPOSE 8100
 
-CMD ["uv", "run", "python", "-m", "avatarloom_control_api"]
+# --no-sync：容器启动不再按 lockfile 重新 sync，直接用上面装好的环境。
+CMD ["uv", "run", "--no-sync", "python", "-m", "avatarloom_control_api"]

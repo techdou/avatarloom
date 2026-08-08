@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 import types
@@ -34,11 +35,13 @@ from avatarloom_protocol.envelope import (  # noqa: E402
     AVATAR_IDLE_FRAME,
     AVATAR_RESET,
     AVATAR_SPEECH_FRAME,
+    AVATAR_VIDEO_READY,
     BLOCK_ERROR,
     BLOCK_HEALTH,
     BLOCK_READY,
     BLOCK_SETUP,
     LLM_ERROR,
+    LLM_REQUEST,
     LLM_TEXT_DELTA,
     LLM_TEXT_DONE,
     PERSONA_CHANGED,
@@ -59,6 +62,7 @@ from avatarloom_protocol.envelope import (  # noqa: E402
     TTS_AUDIO_COMPLETED,
     TTS_AUDIO_DELTA,
     TTS_ERROR,
+    VISION_REQUEST,
     VISION_RESULT,
 )
 from pydantic import BaseModel  # noqa: E402
@@ -78,6 +82,7 @@ EVENT_PAYLOAD_MAP: dict[str, type[BaseModel]] = {
     SPEECH_ENDED: P.SpeechEndedPayload,
     TRANSCRIPT_COMPLETED: P.TranscriptCompletedPayload,
     TRANSCRIPT_PARTIAL: P.TranscriptPartialPayload,
+    LLM_REQUEST: P.LlmRequestPayload,
     LLM_TEXT_DELTA: P.LlmTextDeltaPayload,
     LLM_TEXT_DONE: P.LlmTextDonePayload,
     LLM_ERROR: P.SessionErrorPayload,  # LLM 错误复用 SessionError 结构
@@ -88,6 +93,8 @@ EVENT_PAYLOAD_MAP: dict[str, type[BaseModel]] = {
     AVATAR_IDLE_FRAME: P.AvatarFramePayload,
     AVATAR_RESET: P.AvatarResetPayload,
     AVATAR_DEGRADED: P.AvatarDegradedPayload,
+    AVATAR_VIDEO_READY: P.AvatarVideoReadyPayload,
+    VISION_REQUEST: P.VisionRequestPayload,
     VISION_RESULT: P.VisionResultPayload,
     PERSONA_CHANGED: P.PersonaChangedPayload,
     RESPONSE_STARTED: P.ResponseStartedPayload,
@@ -222,21 +229,45 @@ export type Event = EventEnvelope;"""
     return header + "\n".join(type_lines) + "\n" + envelope_ts + "\n\n" + payload_ts + "\n"
 
 
-def main() -> int:
-    out_dir = ROOT / "packages" / "sdk-typescript" / "src" / "generated"
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    # events.ts
-    (out_dir / "events.ts").write_text(generate_events_ts(), encoding="utf-8")
-    # state.ts
-    (out_dir / "state.ts").write_text(generate_state_ts(), encoding="utf-8")
-    # events.json（JSON Schema 汇总，供 Control API 校验用）
+def _generated_files() -> dict[str, str]:
     schemas = {
         event_type: payload.model_json_schema() for event_type, payload in EVENT_PAYLOAD_MAP.items()
     }
-    (out_dir / "events.json").write_text(
-        json.dumps(schemas, indent=2, ensure_ascii=False), encoding="utf-8"
+    return {
+        "events.ts": generate_events_ts(),
+        "state.ts": generate_state_ts(),
+        "events.json": json.dumps(schemas, indent=2, ensure_ascii=False),
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="只检查已签入生成物是否与 Python 协议源同步",
     )
+    args = parser.parse_args()
+
+    out_dir = ROOT / "packages" / "sdk-typescript" / "src" / "generated"
+    generated = _generated_files()
+    if args.check:
+        drifted = [
+            name
+            for name, content in generated.items()
+            if not (out_dir / name).exists()
+            or (out_dir / name).read_text(encoding="utf-8") != content
+        ]
+        if drifted:
+            print(f"协议生成物已漂移: {', '.join(drifted)}", file=sys.stderr)
+            print("请运行: uv run python scripts/gen_protocol.py", file=sys.stderr)
+            return 1
+        print("✓ 协议生成物与 Python 源同步")
+        return 0
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for name, content in generated.items():
+        (out_dir / name).write_text(content, encoding="utf-8")
 
     print(f"✓ 生成协议类型到 {out_dir}")
     print(f"  - events.ts ({len(EVENT_PAYLOAD_MAP)} 事件类型)")

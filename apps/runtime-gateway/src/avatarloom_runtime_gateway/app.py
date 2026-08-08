@@ -41,6 +41,7 @@ load_dotenv(_PROJECT_ROOT / ".env", override=False)
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 
+from avatarloom_runtime_gateway.auth import verify_ws_access  # noqa: E402
 from avatarloom_runtime_gateway.config import Settings, load_settings  # noqa: E402
 from avatarloom_runtime_gateway.ws_handler import WebSocketSession  # noqa: E402
 
@@ -104,7 +105,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.websocket("/ws/realtime")
     async def ws_realtime(ws: WebSocket) -> None:
-        """主 WS 通道。"""
+        """主 WS 通道。先过 Origin + token 校验（空 token 即开发模式直接放行）。"""
+        if not await verify_ws_access(ws, settings):
+            return  # 已拒绝：accept 前 close，握手失败（HTTP 403），零资源分配
         await ws.accept()
         session = WebSocketSession(ws, settings)
         try:

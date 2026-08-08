@@ -8,6 +8,7 @@ GPU 实机未验证——单测覆盖 WAV 构造、状态机分支。
 
 from __future__ import annotations
 
+import asyncio
 import base64
 from typing import Any
 
@@ -26,14 +27,20 @@ from avatarloom_sdk import (
     ResourceRequirements,
 )
 
+from blocks import release_gpu_objects
+
 
 class SenseVoiceSttBlock(Block):
     """SenseVoice STT——FunASR 多语种 ASR。"""
 
-    _model: Any = None
-    _device: str = "cpu"
-    _language: str = "zh"
-    _audio_buffers: dict[str, bytearray] = {}
+    def __init__(self) -> None:
+        super().__init__()
+        # 实例级状态——_audio_buffers 此前挂类属性且从未重新赋值，
+        # 多实例（fallback 重建、单测）共享同一份音频缓冲互相串扰
+        self._model: Any = None
+        self._device: str = "cpu"
+        self._language: str = "zh"
+        self._audio_buffers: dict[str, bytearray] = {}
 
     @classmethod
     def manifest(cls) -> BlockManifest:
@@ -69,7 +76,8 @@ class SenseVoiceSttBlock(Block):
         model_name = str(cfg.get("model", "iic/SenseVoiceSmall"))
 
         try:
-            self._model = self._load_model(model_name, self._device)
+            # FunASR 模型加载（权重读盘+初始化，首次还含下载）——offload 线程
+            self._model = await asyncio.to_thread(self._load_model, model_name, self._device)
         except ImportError as e:
             raise BlockSetupError(
                 "stt.sensevoice",
@@ -99,7 +107,8 @@ class SenseVoiceSttBlock(Block):
             return
         wav_bytes = pcm16_to_wav(bytes(buf), 16000)
         try:
-            text, tags = self._infer(wav_bytes)
+            # model.generate 是百毫秒~秒级推理——offload 线程，不阻塞事件循环
+            text, tags = await asyncio.to_thread(self._infer, wav_bytes)
         except Exception as e:
             await ctx.logger.aerror("sensevoice infer error", error=str(e))
             text, tags = "", {}
@@ -119,21 +128,16 @@ class SenseVoiceSttBlock(Block):
 
     async def shutdown(self) -> None:
         """释放模型与显存（HIGH-4：WS 断开时 Orchestrator 调 shutdown，
-        此前空实现导致 SenseVoice 常驻显存，多次重连后 OOM）。"""
-        import gc
+        此前空实现导致 SenseVoice 常驻显存，多次重连后 OOM）。
 
+        gc/empty_cache 阻塞——offload 线程；torch 缺失环境（mock/单测）安全跳过。
+        """
         model = self._model
         self._model = None
-        if model is not None:
-            try:
-                del model
-            except Exception:
-                pass
-        gc.collect()
-        import torch
-
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        self._audio_buffers.clear()
+        holder = [model]
+        model = None
+        await asyncio.to_thread(release_gpu_objects, holder)
 
     # ---- 重依赖 ----
 

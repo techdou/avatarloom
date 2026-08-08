@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import contextlib
 import json
 import logging
 import os
@@ -160,8 +161,9 @@ class AvatarEngine:
         任何异常都不得让本静默挂死：捕获后清空 _pending、记 _inference_error，
         warmup 与 ws 收发循环据此把状态暴露给 orchestrator，而不是无限等待。
         """
-        import numpy as np
         import time as _time
+
+        import numpy as np
         from flash_head.inference import get_audio_embedding, run_pipeline
 
         chunk_seconds = CHUNK_SAMPLES / SAMPLE_RATE  # 0.96s
@@ -293,10 +295,8 @@ async def _serve(ws, engine: AvatarEngine, jpeg_quality: int) -> None:
         tag = FRAME_TAG_IDLE if is_idle else FRAME_TAG_SPEECH
         for frame in frames:
             if raw_queue.full():
-                try:
+                with contextlib.suppress(_queue.Empty):
                     raw_queue.get_nowait()
-                except _queue.Empty:
-                    pass
             raw_queue.put_nowait((tag, frame))
 
     def _encoder() -> None:
@@ -307,10 +307,8 @@ async def _serve(ws, engine: AvatarEngine, jpeg_quality: int) -> None:
 
     def _offer(data: bytes) -> None:
         if out_queue.full():
-            try:
+            with contextlib.suppress(asyncio.QueueEmpty):
                 out_queue.get_nowait()
-            except asyncio.QueueEmpty:
-                pass
         out_queue.put_nowait(data)
 
     engine.on_frames = on_frames  # 单客户端设计：最后一个连接接管帧流

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import logging
 import re
 from pathlib import Path
@@ -36,6 +37,10 @@ from avatarloom_protocol import (
 from fastapi import WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 
+from avatarloom_runtime_gateway.auth import (
+    header_token_authenticated,
+    token_matches,
+)
 from avatarloom_runtime_gateway.config import Settings
 from avatarloom_runtime_gateway.protocol import (
     MAX_CAMERA_FRAME_BYTES,
@@ -55,10 +60,19 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# profile_id / persona_id 白名单——两者都会拼进 workspace 下的文件路径
+# （profiles/{id}.yaml、personas/{id}/），客户端可控，必须防路径穿越。
+_ID_PATTERN = re.compile(r"[a-zA-Z0-9_-]{1,64}")
+
 # 进程级活跃会话锁（HIGH-4）：GPU profile 每套模型占 ~10-16G，多标签/重复连接
 # 并存会直接 OOM。session.mode=single 只在 profile 里声明，这里强制执行——
 # 已有活跃 orchestrator 时拒绝新会话，前端刷新会先断开旧连接（cleanup 释放）。
 _active_orchestrator: Orchestrator | None = None
+# setup 占位标记：orchestrator.setup() 要加载 GPU 模型（秒~分钟级），
+# 仅在登记 _active_orchestrator 时才拦截会让并发连接双双穿透检查、各加载一套模型。
+# check + 占位必须在 _session_lock 内原子完成。
+_orchestrator_starting: bool = False
+_session_lock = asyncio.Lock()
 
 
 # Mock Profile 默认配置（无 GPU/API Key 也能跑）
@@ -128,10 +142,14 @@ class WebSocketSession:
         90s idle 超时（AL-P2-007）：半开连接（断网未发 FIN）不再永久悬挂——
         前端 20s ping 保活，正常连接不会触发；超时主动断开走 cleanup。
         """
-        # 启动下行发送任务
-        self._downlink_task = asyncio.create_task(self._downlink_sender())
-
         try:
+            # 浏览器不能设置 Authorization：token 开启时，握手后必须先发一次
+            # {"type":"auth","token":"..."}，通过后才允许创建会话/装载模型。
+            if not await self._authenticate():
+                return
+
+            # 启动下行发送任务
+            self._downlink_task = asyncio.create_task(self._downlink_sender())
             while not self._closed:
                 try:
                     msg = await asyncio.wait_for(self.ws.receive(), timeout=90)
@@ -149,11 +167,39 @@ class WebSocketSession:
         finally:
             await self.cleanup()
 
+    async def _authenticate(self) -> bool:
+        """完成浏览器首条 auth 消息鉴权；空 token 或握手 Bearer 直接放行。"""
+        expected = self.settings.api_token.strip()
+        if not expected:
+            return True
+        # 握手 Bearer 必须真验值（纵深防御：即使入口未走 verify_ws_access 也成立）
+        if header_token_authenticated(self.ws, self.settings):
+            return True
+
+        try:
+            message = await asyncio.wait_for(self.ws.receive(), timeout=10)
+        except (TimeoutError, WebSocketDisconnect):
+            logger.warning("ws auth timeout/disconnect")
+            await self.ws.close(code=1008)
+            return False
+        if message.get("type") != "websocket.receive" or not message.get("text"):
+            await self.ws.close(code=1008)
+            return False
+        try:
+            data = json.loads(message["text"])
+        except (TypeError, json.JSONDecodeError):
+            await self.ws.close(code=1008)
+            return False
+        token = data.get("token") if data.get("type") == "auth" else None
+        if not isinstance(token, str) or not token_matches(token.strip(), expected):
+            logger.warning("ws rejected: invalid auth message")
+            await self.ws.close(code=1008)
+            return False
+        return True
+
     async def _handle_json(self, text: str) -> None:
         """处理上行 JSON 消息。"""
         try:
-            import json
-
             data = json.loads(text)
             msg = ClientMessage(**data)
         except Exception as e:
@@ -252,57 +298,95 @@ class WebSocketSession:
 
     async def _start_session(self, payload: dict[str, Any]) -> None:
         """启动新会话。"""
-        global _active_orchestrator
+        global _active_orchestrator, _orchestrator_starting
 
         profile_id = payload.get("profile_id") or self.settings.default_profile
         persona_id = payload.get("persona_id")
 
         # profile_id 白名单校验——客户端可控，防路径穿越（../../ 读任意 yaml）
-        if not isinstance(profile_id, str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", profile_id):
+        if not isinstance(profile_id, str) or not _ID_PATTERN.fullmatch(profile_id):
             await self._send_error(f"invalid profile_id: {profile_id!r}")
             return
 
-        # 单会话强制（HIGH-4）：GPU 模型重复加载会 OOM，拒绝并存
-        if _active_orchestrator is not None:
+        # persona_id 白名单校验——会拼进 personas/{id}/ 路径，同样防穿越
+        if persona_id is not None and (
+            not isinstance(persona_id, str) or not _ID_PATTERN.fullmatch(persona_id)
+        ):
+            await self._send_error(f"invalid persona_id: {persona_id!r}")
+            return
+
+        # 单会话强制（HIGH-4）：GPU 模型重复加载会 OOM，拒绝并存。
+        # check + 占位原子化——否则两个连接都通过 None 检查后并发 setup，
+        # 各自全量加载一套 GPU 模型（真实发生过的 OOM 路径）
+        async with _session_lock:
+            busy = _active_orchestrator is not None or _orchestrator_starting
+            if not busy:
+                _orchestrator_starting = True
+        if busy:
             await self._send_error(
                 "已有活跃会话，请先关闭/刷新页面（旧会话断开后模型会释放）"
             )
             return
 
-        # v0.1：默认用 Mock profile（profile 加载逻辑在阶段 9 完善）
-        config = None
-        profiles_dir = Path(self.settings.workspace_root) / "profiles"
-        profile_path = profiles_dir / f"{profile_id}.yaml"
-        if profile_path.exists():
-            try:
-                from runtime.orchestrator.profile_loader import load_profile
-
-                config = load_profile(profile_path)
-            except Exception as e:
-                await self._send_error(f"profile load failed: {e}")
-                return
-        if config is None:
-            config = _mock_profile_config()
-            config.profile_id = profile_id
-
-        # Recorder 接收所有事件
-        self.recorder = RunRecorder(root=self.settings.runs_root)
-        orchestrator = Orchestrator(
-            config,
-            event_sink=self._on_orchestrator_event,
-        )
         try:
-            await orchestrator.setup()
-        except Exception as e:
-            await self._send_error(f"orchestrator setup failed: {e}")
-            return
+            # v0.1：默认用 Mock profile（profile 加载逻辑在阶段 9 完善）
+            config = None
+            profiles_dir = Path(self.settings.workspace_root) / "profiles"
+            profile_path = profiles_dir / f"{profile_id}.yaml"
+            if profile_path.exists():
+                try:
+                    from runtime.orchestrator.profile_loader import load_profile
 
-        self.orchestrator = orchestrator
-        _active_orchestrator = orchestrator  # 登记活跃会话（单会话锁）
-        self.session = await orchestrator.start_session(
-            persona_id=persona_id,
-            workspace_root=self.settings.workspace_root,
-        )
+                    config = load_profile(profile_path)
+                except Exception:
+                    # 对外脱敏：异常原文（含服务器绝对路径/内部细节）只进服务端日志
+                    logger.exception("profile %s load failed", profile_id)
+                    await self._send_error(f"profile 加载失败（{profile_id}），详见服务端日志")
+                    return
+            if config is None:
+                config = _mock_profile_config()
+                config.profile_id = profile_id
+
+            # Recorder 接收所有事件
+            recorder = RunRecorder(root=self.settings.runs_root)
+            orchestrator = Orchestrator(
+                config,
+                event_sink=self._on_orchestrator_event,
+            )
+            try:
+                await orchestrator.setup()
+                session = await orchestrator.start_session(
+                    persona_id=persona_id,
+                    workspace_root=self.settings.workspace_root,
+                )
+            except asyncio.CancelledError:
+                # 外部取消（服务关停）中途打断 setup——先回收已装配的模型再透传
+                try:
+                    await orchestrator.shutdown()
+                except Exception:
+                    logger.exception("setup 取消后 orchestrator 回收异常")
+                raise
+            except Exception:
+                # setup/start 失败回收：已部分装配的 block/模型必须 shutdown 释放
+                # （否则显存泄漏 + 占位卡死后续所有重试），再回错给客户端
+                try:
+                    await orchestrator.shutdown()
+                except Exception:
+                    logger.exception("setup 失败后 orchestrator 回收异常")
+                # 对外脱敏：异常原文只进服务端日志
+                logger.exception("orchestrator setup/start failed (profile=%s)", profile_id)
+                await self._send_error("orchestrator 初始化失败，详见服务端日志")
+                return
+
+            # 全部就绪后原子登记（锁内 set，与上面的 check 配对）
+            async with _session_lock:
+                _active_orchestrator = orchestrator
+            self.recorder = recorder
+            self.orchestrator = orchestrator
+            self.session = session
+        finally:
+            async with _session_lock:
+                _orchestrator_starting = False
 
         await self._enqueue_json(
             {
@@ -334,8 +418,9 @@ class WebSocketSession:
         if not self.session or not self.orchestrator:
             await self._send_error("persona.set 需要先建立会话（session.start）")
             return
-        if not persona_id:
-            await self._send_error("persona.set 缺少 persona_id")
+        # persona_id 白名单校验——会拼进 personas/{id}/ 路径，防路径穿越
+        if not persona_id or not _ID_PATTERN.fullmatch(persona_id):
+            await self._send_error(f"invalid persona_id: {persona_id!r}")
             return
         try:
             from blocks.persona.loader import load_persona
@@ -343,9 +428,10 @@ class WebSocketSession:
             workspace = Path(self.settings.workspace_root)
             persona = load_persona(workspace / "personas" / persona_id, workspace_root=str(workspace))
             await self.orchestrator.switch_persona(self.session, persona)
-        except Exception as e:
-            logger.warning("persona.set %s failed: %s", persona_id, e)
-            await self._send_error(f"persona 切换失败（{persona_id}）：{e}")
+        except Exception:
+            # 对外脱敏：异常原文（含服务器路径/persona 包内部结构）只进服务端日志
+            logger.exception("persona.set %s failed", persona_id)
+            await self._send_error(f"persona 切换失败（{persona_id}），详见服务端日志")
             return
         await self._enqueue_json(
             {
@@ -464,32 +550,31 @@ class WebSocketSession:
                 sent = False
                 # 控制队列（JSON）
                 try:
-                    data = self._control_queue.get_nowait()
+                    ctrl = self._control_queue.get_nowait()
                     if self.ws.client_state != WebSocketState.CONNECTED:
                         break
-                    import json
 
-                    await self.ws.send_text(json.dumps(data, ensure_ascii=False))
+                    await self.ws.send_text(json.dumps(ctrl, ensure_ascii=False))
                     sent = True
                 except asyncio.QueueEmpty:
                     pass
                 # 音频队列
                 if not sent:
                     try:
-                        data = self._audio_queue.get_nowait()
+                        audio = self._audio_queue.get_nowait()
                         if self.ws.client_state != WebSocketState.CONNECTED:
                             break
-                        await self.ws.send_bytes(data)
+                        await self.ws.send_bytes(audio)
                         sent = True
                     except asyncio.QueueEmpty:
                         pass
                 # 视频队列
                 if not sent:
                     try:
-                        data = self._video_queue.get_nowait()
+                        video = self._video_queue.get_nowait()
                         if self.ws.client_state != WebSocketState.CONNECTED:
                             break
-                        await self.ws.send_bytes(data)
+                        await self.ws.send_bytes(video)
                         sent = True
                     except asyncio.QueueEmpty:
                         pass
@@ -530,12 +615,16 @@ class WebSocketSession:
                 logger.exception("end_session error")
 
         if self.orchestrator:
-            if _active_orchestrator is self.orchestrator:
-                _active_orchestrator = None  # 先释放锁再 shutdown（防并发 start 被误拒）
             try:
                 await self.orchestrator.shutdown()
             except Exception:
                 logger.exception("orchestrator shutdown error")
+            finally:
+                # 单会话锁在 shutdown 完成后才释放（HIGH-4 根因：先释放会让新会话
+                # 在旧模型 VRAM 未清时并发加载 → 瞬态双份占用 → OOM）
+                async with _session_lock:
+                    if _active_orchestrator is self.orchestrator:
+                        _active_orchestrator = None
 
         # 收尾 Recorder：flush 所有未 finalize 的 Run（events.jsonl 文件句柄、
         # metrics/transcript 落盘），避免客户端断开时资源泄漏。

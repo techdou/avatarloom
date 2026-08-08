@@ -8,19 +8,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-COPY pyproject.toml uv.lock* ./
-COPY packages/ ./packages/
-COPY apps/runtime-gateway ./apps/runtime-gateway
+# uv workspace 的 4 个成员必须全部在场（见 Dockerfile.control-api 注释）。
+COPY pyproject.toml uv.lock ./
+COPY packages/protocol ./packages/protocol
+COPY packages/sdk-python ./packages/sdk-python
 COPY apps/control-api ./apps/control-api
+COPY apps/runtime-gateway ./apps/runtime-gateway
 
-RUN uv sync --extra dev --no-dev 2>/dev/null || uv sync
+# 严格按 lockfile 安装，失败立即报错；不带 dev 依赖。
+RUN uv sync --frozen --no-dev
 
+# gateway 运行时需要 runtime/ 与 blocks/（Orchestrator 在镜像内装配 Block），
+# 以及 profiles/ 与 personas/（ws_handler 直接读这两个目录）。
+# 顶层 prompts/ 是开发文档、templates/ 是脚手架模板，不进镜像。
 COPY runtime/ ./runtime/
 COPY blocks/ ./blocks/
-COPY . .
+COPY profiles/ ./profiles/
+COPY personas/ ./personas/
 
 ENV AVATARLOOM_HOST=0.0.0.0
-ENV AVATARLOOM_PORT=8101
+ENV AVATARLOOM_RUNTIME_GATEWAY_PORT=8101
 EXPOSE 8101
 
-CMD ["uv", "run", "python", "-m", "avatarloom_runtime_gateway"]
+# --no-sync：容器启动不再重新 sync，直接用镜像内环境。
+CMD ["uv", "run", "--no-sync", "python", "-m", "avatarloom_runtime_gateway"]

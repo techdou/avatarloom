@@ -11,10 +11,11 @@ from avatarloom_protocol import (
     LLM_REQUEST,
     LLM_TEXT_DELTA,
     LLM_TEXT_DONE,
-    TRANSCRIPT_COMPLETED,
     Event,
 )
 from avatarloom_sdk import Block, BlockContext, BlockManifest, Capability, ResourceRequirements
+
+from blocks.llm.openai_compatible import OpenAILlmBlock
 
 
 class OllamaLlmBlock(Block):
@@ -22,6 +23,10 @@ class OllamaLlmBlock(Block):
 
     _base_url: str = "http://127.0.0.1:11434/v1"
     _model: str = "qwen2.5:7b"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._delegate: OpenAILlmBlock | None = None
 
     @classmethod
     def manifest(cls) -> BlockManifest:
@@ -56,11 +61,9 @@ class OllamaLlmBlock(Block):
 
         实际实现把 process 委托给 OpenAILlmBlock（同接口）。
         """
-        from blocks.llm.openai_compatible import OpenAILlmBlock
-
         # 惰性创建共享实例
-        if not hasattr(self, "_delegate"):
-            self._delegate = OpenAILlmBlock()  # type: ignore[attr-defined]
+        if self._delegate is None:
+            self._delegate = OpenAILlmBlock()
             delegate_ctx = BlockContext(
                 session_id=ctx.session_id,
                 run_id=ctx.run_id,
@@ -71,8 +74,8 @@ class OllamaLlmBlock(Block):
                     "model": self._model,
                 },
             )
-            await self._delegate.setup(delegate_ctx)  # type: ignore[attr-defined]
+            await self._delegate.setup(delegate_ctx)
 
         # 注入 emit
-        self._delegate._api_key = "ollama"  # type: ignore[attr-defined]
-        await self._delegate.process(ctx, event)  # type: ignore[attr-defined]
+        self._delegate._api_key = "ollama"
+        await self._delegate.process(ctx, event)

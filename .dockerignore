@@ -1,0 +1,58 @@
+# AvatarLoom Docker 构建上下文排除清单
+# 目标：上下文尽量小、镜像可复现、不泄漏密钥。
+# 注意：deploy/docker/Dockerfile.* 的 COPY 只依赖本文件未排除的路径，
+# 新增排除项前确认没有 Dockerfile 在 COPY 它。
+
+# ===== 版本控制 / 元信息 =====
+.git
+.gitignore
+.gitattributes
+.zcode
+.omx
+.claude
+
+# ===== 密钥与环境（绝不进镜像，example 也不需要）=====
+.env
+.env.*
+
+# ===== Python =====
+.venv
+**/__pycache__
+**/*.pyc
+**/*.pyo
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# ===== Node / 前端 =====
+node_modules
+**/node_modules
+apps/studio/.next
+**/tsconfig.tsbuildinfo
+
+# ===== 运行时数据 / 模型权重（运行时挂卷，不打进镜像）=====
+data
+models
+vendor
+
+# ===== 文档与测试（镜像不需要）=====
+# 注意：不排除 README.md——packages/*/pyproject.toml 的 readme 字段指向各成员 README.md，
+# uv sync 构建 metadata 时缺了会直接报错。
+docs
+tests
+
+# ===== 构建产物 =====
+dist
+build
+*.tar
+*.tar.gz
+
+# ===== 日志 / PID =====
+*.log
+*.pid
+
+# ===== IDE / 系统 =====
+.idea
+.vscode
+.DS_Store
+Thumbs.db

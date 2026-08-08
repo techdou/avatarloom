@@ -9,7 +9,7 @@ import type { Persona, RuntimeProfile } from "@/lib/api";
  * + /api/control 拉取名称映射。未连接 API 时降级显示 id。
  */
 export function ActiveContextCard() {
-  const [profileId, setProfileId] = useState("autodl-best");
+  const [profileId, setProfileId] = useState("mock");
   const [personaId, setPersonaId] = useState("demo-assistant");
   const [profileName, setProfileName] = useState<string | null>(null);
   const [personaName, setPersonaName] = useState<string | null>(null);

@@ -8,6 +8,7 @@ GPU 实机未验证——单测覆盖语速补偿（rate 参数）和重采样�
 
 from __future__ import annotations
 
+import asyncio
 import base64
 from typing import Any
 
@@ -28,8 +29,19 @@ from avatarloom_sdk import (
     ResourceRequirements,
 )
 
+from blocks import release_gpu_objects
+
 # 流式切块粒度：512 采样 = 32ms @16kHz（对齐 VoxEMW blocksize）
 BLOCK_SIZE = 512
+_GENERATOR_DONE = object()
+
+
+def _next_generator_item(generator: Any) -> Any:
+    """在线程中推进同步 generator，避免 StopIteration 穿过 Future。"""
+    try:
+        return next(generator)
+    except StopIteration:
+        return _GENERATOR_DONE
 
 
 class VoxCpm2TtsBlock(Block):
@@ -50,9 +62,14 @@ class VoxCpm2TtsBlock(Block):
     _normalize: bool = False
     _denoise: bool = False
     _prompt_text: str = ""  # 参考音频对应的文本（与 voiceRef 成对，音色克隆锚点）
-    _voice_caches: dict[str, Any] = {}
-    _sentence_buffers: dict[int, str] = {}
-    _total_samples: int = 0
+    def __init__(self) -> None:
+        super().__init__()
+        self._model: Any = None
+        self._voice_caches: dict[str, Any] = {}
+        self._sentence_buffers: dict[int, str] = {}
+        self._total_samples = 0
+        self._run_id: str | None = None
+        self._cancelled_run_ids: set[str] = set()
 
     @classmethod
     def manifest(cls) -> BlockManifest:
@@ -96,8 +113,10 @@ class VoxCpm2TtsBlock(Block):
         # 参考音频对应的文本（VoxCPM2 要求 prompt_wav_path+prompt_text 成对）
         self._prompt_text = str(cfg.get("promptText") or cfg.get("stylePrefix") or "")
         try:
-            self._model = self._load_model(
-                str(cfg.get("model", "openbmb/VoxCPM2")), self._device
+            self._model = await asyncio.to_thread(
+                self._load_model,
+                str(cfg.get("model", "openbmb/VoxCPM2")),
+                self._device,
             )
         except ImportError as e:
             raise BlockSetupError(
@@ -109,9 +128,8 @@ class VoxCpm2TtsBlock(Block):
 
         self._mark_ready()
         # 按 run 隔离的可变状态（AL-P2-003）+ 打断协作标记（AL-P1-006）。
-        # 必须实例级初始化——类属性 dict/set 会跨实例共享。
-        self._run_id: str | None = None
-        self._cancelled_run_ids: set[str] = set()
+        self._run_id = None
+        self._cancelled_run_ids.clear()
         self._sentence_buffers = {}
         self._total_samples = 0
         await ctx.logger.ainfo(
@@ -185,9 +203,12 @@ class VoxCpm2TtsBlock(Block):
         block = self._block_size  # 512 采样 = 32ms @16k（profile 可配）
         phase = 0  # 跨 chunk 降采样相位（防边界爆音）
         try:
-            for wav48 in gen:
-                # 打断检查（AL-P1-006）：同步 generator 无法真取消，
-                # 跳出循环丢弃剩余输出——当前 chunk 推理完即停，不再 emit
+            while True:
+                # 每次推进同步 generator 都放到线程，GPU 推理不会卡住事件循环。
+                wav48 = await asyncio.to_thread(_next_generator_item, gen)
+                if wav48 is _GENERATOR_DONE:
+                    break
+                # 打断检查：当前 chunk 完成后立即丢弃后续输出。
                 if ctx.run_id is not None and ctx.run_id in self._cancelled_run_ids:
                     return
                 # 48k float32 -> 16k int16（线性插值，带 rate 语速补偿 + 相位连续）
@@ -243,24 +264,17 @@ class VoxCpm2TtsBlock(Block):
         self._sentence_buffers = {}
 
     async def shutdown(self) -> None:
-        """释放模型与显存——WS 断开时 Orchestrator 会调（HIGH-4：此前无释放，
-        每次页面刷新/重连都全量重载模型，torch caching allocator 持有显存，
-        32G 卡多次刷新后必然 OOM，voxcpm 合成失败降级到 tts.mock（440Hz 正弦波）。"""
-        import gc
-
+        """清空会话状态，并在线程中释放模型与 CUDA 缓存。"""
         model = self._model
         self._model = None
         self._voice_caches.clear()
-        if model is not None:
-            try:
-                del model
-            except Exception:
-                pass
-        gc.collect()
-        import torch
-
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        self._sentence_buffers.clear()
+        self._cancelled_run_ids.clear()
+        self._run_id = None
+        self._total_samples = 0
+        holder = [model]
+        model = None
+        await asyncio.to_thread(release_gpu_objects, holder)
 
     # ---- 重依赖 ----
 
@@ -293,7 +307,7 @@ class VoxCpm2TtsBlock(Block):
         # __init__，传 device 会 TypeError。device 参数保留作语义记录。
         import os
 
-        from voxcpm import VoxCPM  # type: ignore
+        from voxcpm import VoxCPM
 
         local_path = str(model_name)
         if os.path.isdir(local_path):
@@ -357,7 +371,7 @@ def _resample_48k_to_16k(
         new_phase = (phase + n48) % 3
         # rate 语速补偿：rate<1 拉长（插值出更多点），rate>1 压缩
         if rate != 1.0 and len(arr16) > 1:
-            n_out = max(1, int(round(len(arr16) / rate)))
+            n_out = max(1, round(len(arr16) / rate))
             x_old = np.linspace(0.0, 1.0, len(arr16))
             x_new = np.linspace(0.0, 1.0, n_out)
             arr16 = np.interp(x_new, x_old, arr16).astype(np.float32)

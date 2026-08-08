@@ -79,18 +79,23 @@ log "uv 版本: $(uv --version)"
 # ---------------------------------------------------------------------------
 # HuggingFace 镜像（国内网络必需）
 # ---------------------------------------------------------------------------
+# 上次完整安装会在 shell 中开启离线模式；重跑安装时先关闭，确保缺失模型可续传。
+unset HF_HUB_OFFLINE
 log "=== 配置 HuggingFace 国内镜像 ==="
 export HF_ENDPOINT=https://hf-mirror.com
 export HF_HOME="$AUTODL_TMP/huggingface"
 export HF_HUB_DISABLE_XET=1
-# 持久化到 .env / .bashrc
-cat >> ~/.bashrc << 'EOF'
+# 持久化到 .bashrc——带标记守卫，重复运行不重复追加（幂等）
+if ! grep -q "AvatarLoom HuggingFace" ~/.bashrc 2>/dev/null; then
+    cat >> ~/.bashrc << EOF
 
 # AvatarLoom HuggingFace 镜像配置
 export HF_ENDPOINT=https://hf-mirror.com
 export HF_HUB_DISABLE_XET=1
+export HF_HOME="$AUTODL_TMP/huggingface"
 EOF
-log "HF_ENDPOINT=$HF_ENDPOINT"
+fi
+log "HF_ENDPOINT=$HF_ENDPOINT  HF_HOME=$HF_HOME"
 
 # ---------------------------------------------------------------------------
 # Node.js + pnpm（Studio 前端用）
@@ -130,43 +135,47 @@ log "前端依赖装完"
 # ---------------------------------------------------------------------------
 log "=== 下载模型权重（首次约 15-30 分钟）==="
 
+# 下载失败统一记账，结尾汇总并非零退出——调用方（SSH/CI）能看到真实状态；
+# 重跑本脚本可续传（HF/modelscope 缓存幂等）。
+FAILED_MODELS=()
+
 # 1. Silero VAD（torch hub，~30MB）
 log "[1/4] Silero VAD..."
-uv run python -c "
+if ! uv run python -c "
 import torch
 torch.hub.load(repo_or_dir='snakers4/silero-vad', model='silero_vad', trust_repo=True, force_reload=False)
 print('Silero VAD 已缓存')
-" 2>&1 | tail -2 || warn "Silero VAD 下载失败（网络问题，可稍后重试）"
+" 2>&1 | tail -2; then
+    warn "Silero VAD 下载失败（网络问题，重跑本脚本续传）"
+    FAILED_MODELS+=("silero-vad")
+fi
 
 # 2. SenseVoiceSmall（FunASR，~900MB）
 log "[2/4] SenseVoiceSmall..."
-uv run python -c "
+if ! uv run python -c "
 from funasr import AutoModel
 AutoModel(model='iic/SenseVoiceSmall', trust_remote_code=True, device='cpu', disable_update=True)
 print('SenseVoiceSmall 已缓存')
-" 2>&1 | tail -2 || warn "SenseVoice 下载失败（可稍后重试，或用 openai-compatible STT 替代）"
+" 2>&1 | tail -2; then
+    warn "SenseVoice 下载失败（重跑续传，或用 openai-compatible STT 替代）"
+    FAILED_MODELS+=("sensevoice")
+fi
 
 # 3. VoxCPM2（~1.5GB）
 log "[3/4] VoxCPM2..."
-uv run python -c "
+if ! uv run python -c "
 from huggingface_hub import snapshot_download
 snapshot_download(repo_id='openbmb/VoxCPM2', cache_dir='$AUTODL_TMP/huggingface')
 print('VoxCPM2 已缓存')
-" 2>&1 | tail -2 || warn "VoxCPM2 下载失败"
+" 2>&1 | tail -2; then
+    warn "VoxCPM2 下载失败（重跑续传）"
+    FAILED_MODELS+=("voxcpm2")
+fi
 
 # 4. MuseTalk 权重（按 MuseTalk 官方文档，~2GB）
 log "[4/4] MuseTalk（可选，按官方仓库说明）..."
 warn "MuseTalk 需手动按官方仓库下载（依赖结构特殊）"
 warn "参考：https://github.com/TMElyralab/MuseTalk"
-
-# ---------------------------------------------------------------------------
-# 离线模式（避免每次启动检查）
-# ---------------------------------------------------------------------------
-log "=== 启用离线模式（加速启动）==="
-cat >> ~/.bashrc << 'EOF'
-export HF_HUB_OFFLINE=1
-EOF
-export HF_HUB_OFFLINE=1
 
 # ---------------------------------------------------------------------------
 # 创建 .env（如果不存在）
@@ -184,6 +193,23 @@ fi
 # 完成
 # ---------------------------------------------------------------------------
 echo ""
+if [ "${#FAILED_MODELS[@]}" -gt 0 ]; then
+    err "以下模型下载失败：${FAILED_MODELS[*]}"
+    err "环境其余部分已就绪——网络恢复后重跑本脚本即可续传（幂等）"
+    exit 1
+fi
+
+# 所有模型检查成功后才启用离线模式，避免下载失败把后续重试毒化。
+log "=== 启用离线模式（加速启动）==="
+if ! grep -q "AvatarLoom 离线模式" ~/.bashrc 2>/dev/null; then
+    cat >> ~/.bashrc << 'EOF'
+
+# AvatarLoom 离线模式
+export HF_HUB_OFFLINE=1
+EOF
+fi
+export HF_HUB_OFFLINE=1
+
 log "========================================"
 log "AvatarLoom 环境部署完成"
 log "========================================"
@@ -202,4 +228,4 @@ echo ""
 echo "  4. 浏览器开 http://<你的 AutoDL IP>:3000"
 echo "     （AutoDL 需在控制台做端口映射，或用 SSH 隧道）"
 echo ""
-warn "模型下载失败的可在 .env 配好后重跑本脚本（幂等）"
+log "本脚本可随时重跑；安装阶段会临时关闭离线模式并校验缺失模型"

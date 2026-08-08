@@ -8,6 +8,7 @@ GPU 实机未验证——单测覆盖重采样数学、流式切分逻辑。
 
 from __future__ import annotations
 
+import asyncio
 import base64
 from typing import Any
 
@@ -28,19 +29,27 @@ from avatarloom_sdk import (
     ResourceRequirements,
 )
 
+from blocks import release_gpu_objects
+
 TARGET_SR = 16000
 
 
 class Qwen3TtsBlock(Block):
     """Qwen3-TTS——流式语音合成 + 音色克隆。"""
 
-    _model: Any = None
-    _tokenizer: Any = None
-    _device: str = "cuda"
-    _model_name: str = "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
-    _voice_cache: dict[str, Any] = {}  # persona_id -> 预编码 voice prompt
-    _sentence_buffers: dict[int, str] = {}
-    _total_samples: int = 0
+    def __init__(self) -> None:
+        super().__init__()
+        # 实例级状态——_voice_cache 此前挂类属性，多实例/重建时共享串扰
+        self._model: Any = None
+        self._tokenizer: Any = None
+        self._device: str = "cuda"
+        self._model_name: str = "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
+        self._voice_cache: dict[str, Any] = {}  # persona_id -> 预编码 voice prompt
+        self._sentence_buffers: dict[int, str] = {}
+        self._total_samples: int = 0
+        # 按 run 隔离 + 打断协作（同 voxcpm2 模式，见 AL-P2-003 / AL-P1-006）
+        self._run_id: str | None = None
+        self._cancelled_run_ids: set[str] = set()
 
     @classmethod
     def manifest(cls) -> BlockManifest:
@@ -78,7 +87,10 @@ class Qwen3TtsBlock(Block):
         self._model_name = str(cfg.get("model", "Qwen/Qwen3-TTS-12Hz-0.6B-Base"))
         self._device = str(cfg.get("device", "cuda"))
         try:
-            self._tokenizer, self._model = self._load_model(self._model_name, self._device)
+            # 模型加载是重阻塞 IO+初始化——offload 线程，不卡事件循环
+            self._tokenizer, self._model = await asyncio.to_thread(
+                self._load_model, self._model_name, self._device
+            )
         except ImportError as e:
             raise BlockSetupError(
                 "tts.qwen3",
@@ -89,9 +101,8 @@ class Qwen3TtsBlock(Block):
 
         self._total_samples = 0
         self._sentence_buffers = {}
-        # 按 run 隔离 + 打断协作（同 voxcpm2 模式，见 AL-P2-003 / AL-P1-006）
-        self._run_id: str | None = None
-        self._cancelled_run_ids: set[str] = set()
+        self._run_id = None
+        self._cancelled_run_ids = set()
         self._mark_ready()
         await ctx.logger.ainfo("tts.qwen3 ready", model=self._model_name, device=self._device)
 
@@ -138,7 +149,10 @@ class Qwen3TtsBlock(Block):
 
     async def _synthesize(self, ctx: BlockContext, text: str) -> None:
         try:
-            pcm_chunks = self._infer_stream(text, ctx.persona_voice_ref)
+            # model.generate 是秒级 GPU/CPU 推理——offload 线程，不阻塞事件循环
+            pcm_chunks = await asyncio.to_thread(
+                self._infer_stream, text, ctx.persona_voice_ref
+            )
         except Exception as e:
             await ctx.logger.aerror("qwen3 synth error", error=str(e))
             return
@@ -176,11 +190,29 @@ class Qwen3TtsBlock(Block):
         self._total_samples = 0
         self._sentence_buffers = {}
 
+    async def shutdown(self) -> None:
+        """释放模型与显存（HIGH-4 补齐：此前无 shutdown，页面刷新/重连后
+        模型常驻显存，torch caching allocator 不归还，多次重连必然 OOM）。
+        gc + empty_cache 是阻塞调用——offload 线程执行。"""
+        model = self._model
+        tokenizer = self._tokenizer
+        self._model = None
+        self._tokenizer = None
+        self._voice_cache.clear()
+        self._sentence_buffers = {}
+        self._total_samples = 0
+        self._run_id = None
+        self._cancelled_run_ids.clear()
+        holder = [model, tokenizer]
+        model = None
+        tokenizer = None
+        await asyncio.to_thread(release_gpu_objects, holder)
+
     # ---- 重依赖 ----
 
     def _load_model(self, model_name: str, device: str) -> tuple[Any, Any]:
         import torch
-        from transformers import AutoModelForCausalLM, AutoTokenizer  # type: ignore
+        from transformers import AutoModelForCausalLM, AutoTokenizer
 
         tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
         model = AutoModelForCausalLM.from_pretrained(

@@ -65,6 +65,10 @@ _VISION_CONTEXT_TTL_S = 30.0
 # Vision 手动帧最小调用间隔（AL-P1-011 节流）——无同轮等待的帧限频
 _VISION_MIN_INTERVAL_S = 2.0
 
+# 单个 Block shutdown 的最长等待：GPU 模型释放/子进程终止正常秒级完成，
+# 卡死（如子进程僵死、死锁）时跳过该 block 继续清理其余资源，不拖垮整体关停
+_BLOCK_SHUTDOWN_TIMEOUT_S = 15.0
+
 
 def _read_wav_16k_mono_s16(path: Path) -> bytes | None:
     """读取 16kHz 单声道 s16 wav，返回裸 PCM；格式不符返回 None（VoxEMW 同款严格校验）。"""
@@ -208,17 +212,21 @@ class Orchestrator:
 
         顺序很重要：先关 sessions（会 emit closed 事件）→ 再关 EventBus。
         否则 session.close() 往已关闭的 bus publish 会抛。
+
+        每一步故障隔离：单个 block 异常/超时/误抛 CancelledError 都只记日志，
+        后续 block 与 EventBus 等资源的清理照常进行——GPU 进程关停路径上
+        任何一环卡死都不能挡住其余显存释放。
         """
         async with self._lock:
             # 1. 先关 sessions（emit session.closed）
-            await self.sessions.close_all()
+            try:
+                await self.sessions.close_all()
+            except Exception:
+                logger.exception("sessions close_all error during shutdown")
 
-            # 2. 关 Block
-            for block in self.blocks.values():
-                try:
-                    await block.shutdown()
-                except Exception:
-                    logger.exception("block shutdown error: %s", block.manifest().block_id)
+            # 2. 关 Block——逐个隔离（异常/超时/自取消泄漏不扩散）
+            for block in list(self.blocks.values()):
+                await self._shutdown_block(block)
 
             # 3. 取消内部任务
             for task in self._tasks:
@@ -227,12 +235,45 @@ class Orchestrator:
                 try:
                     await task
                 except asyncio.CancelledError:
-                    pass
+                    # 这些 task 是我们自己 cancel 的——自取消吞掉；
+                    # 仅当前 shutdown 任务自身被外部取消时透传
+                    current = asyncio.current_task()
+                    if current is not None and current.cancelling() > 0:
+                        raise
+                except Exception:
+                    logger.exception("orchestrator internal task error during shutdown")
             self._tasks.clear()
 
             # 4. 最后关 EventBus
-            await self.event_bus.close()
+            try:
+                await self.event_bus.close()
+            except Exception:
+                logger.exception("event bus close error during shutdown")
             self._setup_done = False
+
+    async def _shutdown_block(self, block: Block) -> None:
+        """关闭单个 Block——异常/超时/误抛取消全部隔离，保证后续资源继续清理。"""
+        block_id = block.manifest().block_id
+        try:
+            await asyncio.wait_for(block.shutdown(), timeout=_BLOCK_SHUTDOWN_TIMEOUT_S)
+        except TimeoutError:
+            logger.error(
+                "block %s shutdown 超时（%.1fs），跳过并继续清理其余资源",
+                block_id,
+                _BLOCK_SHUTDOWN_TIMEOUT_S,
+            )
+        except asyncio.CancelledError:
+            current = asyncio.current_task()
+            if current is not None and current.cancelling() > 0:
+                raise  # 外部取消（loop teardown）——必须透传让任务正常消亡
+            # block 内部任务自取消泄漏到 shutdown（如 reader task 未吞取消）——
+            # 降级为错误日志，不让一个 block 的取消语义 bug 中断整体清理
+            logger.error(
+                "block %s shutdown 误抛 CancelledError（内部自取消未吞），已隔离",
+                block_id,
+            )
+        except Exception:
+            logger.exception("block shutdown error: %s", block_id)
 
     # ------------------------------------------------------------------
     # Session
@@ -322,7 +363,7 @@ class Orchestrator:
 
         await self._apply_persona_context(session, persona)
 
-        await session._emit_event(  # type: ignore[attr-defined]
+        await session._emit_event(
             Event(
                 type=PERSONA_CHANGED,
                 session_id=session.session_id,
@@ -428,7 +469,10 @@ class Orchestrator:
         )
         async with lock:
             try:
-                result = await vision.describe_frame(
+                describe_frame = getattr(vision, "describe_frame", None)
+                if not callable(describe_frame):
+                    raise AttributeError("vision block does not implement describe_frame")
+                result = await describe_frame(
                     ctx,
                     jpeg_b64,
                     prompt=(
