@@ -37,6 +37,7 @@ from avatarloom_sdk import (
     Capability,
     ResourceRequirements,
 )
+
 from runtime.orchestrator.avatar_state import AvatarState, transition_avatar_state
 
 
@@ -51,6 +52,7 @@ class FlashHeadAvatarBlock(Block):
     _portrait_bytes: bytes = b""
     _portrait_path: str = ""
     _fps: int = 25
+    _shutdown: bool = False  # shutdown() 置位——reader 退出后不再 emit（防 unwired ctx 报错）
 
     @classmethod
     def manifest(cls) -> BlockManifest:
@@ -306,12 +308,13 @@ class FlashHeadAvatarBlock(Block):
             # reader 退出后置 ws 为 None：process() 的 None 守卫会拦截后续 send，
             # 避免对已死 ws 反复报错刷屏。emit 一帧 idle 做兜底，下游不至于画面卡死。
             self._ws = None
-            try:
-                await self._emit_idle(ctx)
-            except Exception as e:
-                await ctx.logger.aerror(
-                    "flashhead idle fallback emit failed", error=str(e)
-                )
+            if not self._shutdown:
+                try:
+                    await self._emit_idle(ctx)
+                except Exception as e:
+                    await ctx.logger.aerror(
+                        "flashhead idle fallback emit failed", error=str(e)
+                    )
 
     async def _emit_idle(self, ctx: BlockContext) -> None:
         await ctx.emit(
@@ -342,6 +345,7 @@ class FlashHeadAvatarBlock(Block):
                 pass
 
     async def shutdown(self) -> None:
+        self._shutdown = True  # 先置位——reader 退出后不 emit（ctx 可能已 unwire）
         await self._stop()
 
     async def _stop(self) -> None:

@@ -55,6 +55,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# 进程级活跃会话锁（HIGH-4）：GPU profile 每套模型占 ~10-16G，多标签/重复连接
+# 并存会直接 OOM。session.mode=single 只在 profile 里声明，这里强制执行——
+# 已有活跃 orchestrator 时拒绝新会话，前端刷新会先断开旧连接（cleanup 释放）。
+_active_orchestrator: Orchestrator | None = None
+
 
 # Mock Profile 默认配置（无 GPU/API Key 也能跑）
 def _mock_profile_config() -> OrchestratorConfig:
@@ -247,12 +252,21 @@ class WebSocketSession:
 
     async def _start_session(self, payload: dict[str, Any]) -> None:
         """启动新会话。"""
+        global _active_orchestrator
+
         profile_id = payload.get("profile_id") or self.settings.default_profile
         persona_id = payload.get("persona_id")
 
         # profile_id 白名单校验——客户端可控，防路径穿越（../../ 读任意 yaml）
         if not isinstance(profile_id, str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", profile_id):
             await self._send_error(f"invalid profile_id: {profile_id!r}")
+            return
+
+        # 单会话强制（HIGH-4）：GPU 模型重复加载会 OOM，拒绝并存
+        if _active_orchestrator is not None:
+            await self._send_error(
+                "已有活跃会话，请先关闭/刷新页面（旧会话断开后模型会释放）"
+            )
             return
 
         # v0.1：默认用 Mock profile（profile 加载逻辑在阶段 9 完善）
@@ -284,6 +298,7 @@ class WebSocketSession:
             return
 
         self.orchestrator = orchestrator
+        _active_orchestrator = orchestrator  # 登记活跃会话（单会话锁）
         self.session = await orchestrator.start_session(
             persona_id=persona_id,
             workspace_root=self.settings.workspace_root,
@@ -297,6 +312,9 @@ class WebSocketSession:
                     "profile_id": profile_id,
                     "persona_id": persona_id,
                     "state": self.session.state.value,
+                    # 降级可见（AL-xxx）：block 装配失败走 fallback 时前端要能看到，
+                    # 否则 TTS 静默降级 mock（440Hz 正弦波）用户只听到"电流声"
+                    "degraded": orchestrator.degraded_blocks,
                 },
             }
         )
@@ -499,6 +517,8 @@ class WebSocketSession:
 
     async def cleanup(self) -> None:
         """清理会话资源。"""
+        global _active_orchestrator
+
         if self._closed:
             return
         self._closed = True
@@ -510,6 +530,8 @@ class WebSocketSession:
                 logger.exception("end_session error")
 
         if self.orchestrator:
+            if _active_orchestrator is self.orchestrator:
+                _active_orchestrator = None  # 先释放锁再 shutdown（防并发 start 被误拒）
             try:
                 await self.orchestrator.shutdown()
             except Exception:

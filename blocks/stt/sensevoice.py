@@ -117,6 +117,24 @@ class SenseVoiceSttBlock(Block):
     async def reset(self, session_id: str) -> None:
         self._audio_buffers.pop(session_id, None)
 
+    async def shutdown(self) -> None:
+        """释放模型与显存（HIGH-4：WS 断开时 Orchestrator 调 shutdown，
+        此前空实现导致 SenseVoice 常驻显存，多次重连后 OOM）。"""
+        import gc
+
+        model = self._model
+        self._model = None
+        if model is not None:
+            try:
+                del model
+            except Exception:
+                pass
+        gc.collect()
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
     # ---- 重依赖 ----
 
     def _load_model(self, model_name: str, device: str) -> Any:

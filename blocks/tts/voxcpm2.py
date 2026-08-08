@@ -12,7 +12,6 @@ import base64
 from typing import Any
 
 import numpy as np
-
 from avatarloom_protocol import (
     LLM_TEXT_DELTA,
     LLM_TEXT_DONE,
@@ -243,6 +242,26 @@ class VoxCpm2TtsBlock(Block):
         self._total_samples = 0
         self._sentence_buffers = {}
 
+    async def shutdown(self) -> None:
+        """释放模型与显存——WS 断开时 Orchestrator 会调（HIGH-4：此前无释放，
+        每次页面刷新/重连都全量重载模型，torch caching allocator 持有显存，
+        32G 卡多次刷新后必然 OOM，voxcpm 合成失败降级到 tts.mock（440Hz 正弦波）。"""
+        import gc
+
+        model = self._model
+        self._model = None
+        self._voice_caches.clear()
+        if model is not None:
+            try:
+                del model
+            except Exception:
+                pass
+        gc.collect()
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
     # ---- 重依赖 ----
 
     @staticmethod
@@ -269,12 +288,12 @@ class VoxCpm2TtsBlock(Block):
         return str(p)
 
     def _load_model(self, model_name: str, device: str) -> Any:
-        from voxcpm import VoxCPM  # type: ignore
-
         # voxcpm 1.0.5 API：VoxCPM(voxcpm_model_path, ..., optimize)——无 device 参数，
         # 设备由库内部自选（cuda 可用即上卡）。from_pretrained 的 **kwargs 直达
         # __init__，传 device 会 TypeError。device 参数保留作语义记录。
         import os
+
+        from voxcpm import VoxCPM  # type: ignore
 
         local_path = str(model_name)
         if os.path.isdir(local_path):

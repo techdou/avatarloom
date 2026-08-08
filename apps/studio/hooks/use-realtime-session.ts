@@ -225,14 +225,24 @@ export function useRealtimeSession({
     (msg: { type: string; payload?: Record<string, unknown> }) => {
       const ts = Date.now();
       switch (msg.type) {
-        case "session.started":
+        case "session.started": {
           dispatch({
             kind: "sessionStarted",
             sessionId: (msg.payload?.session_id as string) || "",
             state: (msg.payload?.state as string) || "idle",
             ts,
           });
+          // 降级可见：block 装配失败走 fallback（如 TTS OOM → tts.mock 440Hz 正弦波）
+          // 前端明确提示，避免用户只听到"电流声"却不知原因
+          const degraded = msg.payload?.degraded as Record<string, string> | undefined;
+          if (degraded && Object.keys(degraded).length > 0) {
+            const detail = Object.entries(degraded)
+              .map(([cat, fb]) => `${cat} → ${fb}`)
+              .join(", ");
+            console.warn(`[AvatarLoom] block 降级: ${detail}`);
+          }
           break;
+        }
         case "session.state_changed": {
           const to = (msg.payload?.to as string) || "idle";
           dispatch({ kind: "stateChanged", to, ts });
