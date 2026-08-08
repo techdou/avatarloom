@@ -560,6 +560,9 @@ class Orchestrator:
             run_id=None,
             workspace_root=".",
             config=config,
+            # setup 阶段也要能发事件——FlashHead 等 block 在 setup 时启动常驻
+            # reader task 持续发帧，缺省 _emit_fn 会 RuntimeError（帧全丢）
+            _emit_fn=self._on_event,
         )
         try:
             await block.setup(ctx)

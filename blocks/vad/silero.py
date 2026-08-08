@@ -181,9 +181,8 @@ class SileroVadBlock(Block):
 
         import torch
 
-        # torch.hub.get_dir() 同时尊重 TORCH_HOME 与 XDG_CACHE_HOME，与 torch 实际
-        # 缓存语义一致（不要手写 ~/.cache/torch 回退——设了 XDG 时探针会错位）。
-        hub_cache = os.path.join(torch.hub.get_dir(), "hub", "snakers4_silero-vad_master")
+        # torch.hub.get_dir() 返回 $TORCH_HOME/hub（已含 hub 段）——不要再 join "hub"。
+        hub_cache = os.path.join(torch.hub.get_dir(), "snakers4_silero-vad_master")
         if os.path.isdir(hub_cache):
             logging.getLogger("vad.silero").info("silero 模型从本地 hub 缓存加载: %s", hub_cache)
             model, utils = torch.hub.load(

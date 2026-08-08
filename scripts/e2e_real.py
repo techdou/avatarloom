@@ -140,6 +140,17 @@ async def main() -> int:
 
     async def sink(e: Event) -> None:
         events.append((time.perf_counter() - t_start, e))
+        # 非高频事件直接打印（排障：状态迁移/finish_reason/打断 一目了然）
+        if e.type not in ("audio.appended", "tts.audio.delta", "avatar.speech_frame", "avatar.idle_frame"):
+            extra = ""
+            if e.type == "llm.text.done":
+                extra = f" finish={e.payload.get('finish_reason')}"
+            elif e.type == "session.state_changed":
+                extra = f" {e.payload.get('from')}→{e.payload.get('to')}"
+            print(f"    [evt] {e.type} @{time.perf_counter() - t_start:.2f}s{extra}", flush=True)
+
+    async def sink_quiet(e: Event) -> None:
+        pass
 
     orch = Orchestrator(config, event_sink=sink)
     print("[2] orchestrator.setup() ...")
