@@ -149,6 +149,13 @@ class VoxCpm2TtsBlock(Block):
                 if sentence.strip():
                     await self._synthesize(ctx, sentence, ctx.persona_voice_ref)
         elif event.type == LLM_TEXT_DONE:
+            # 句尾剩余合成：回复没有句末标点时（is_sentence_end 始终 False），
+            # 缓冲内容此前被直接丢弃——TTS 零产出（E2E 实测 tts_delta=False 的真因）
+            pending = sorted(self._sentence_buffers.items())
+            self._sentence_buffers = {}
+            for _idx, sentence in pending:
+                if sentence.strip():
+                    await self._synthesize(ctx, sentence, ctx.persona_voice_ref)
             await ctx.emit(
                 Event(
                     type=TTS_AUDIO_COMPLETED,

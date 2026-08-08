@@ -153,14 +153,17 @@ async def main() -> int:
     pcm = _load_pcm16_16k(user_wav)
     print(f"    {len(pcm) / 2 / 16000:.2f}s @16k")
     print("[5] feed audio to orchestrator ...")
+    # 接近实时节奏喂食（512 采样=32ms @16k）：此前 5ms 快喂导致 silero VAD
+    # 积压，滞后的 speech.detected 在 LLM 启动后才到达 → 假打断吞掉全部 delta。
+    # 真实用户就是实时说话，E2E 对齐真实时序。
     for chunk in _chunks16(pcm):
         await orch.ingest_audio(session, base64.b64encode(chunk).decode("ascii"), 512)
-        await asyncio.sleep(0.005)
+        await asyncio.sleep(0.032)
     # append >=1.25s silence so Silero VAD emits speech.ended
     silent = base64.b64encode(b"\x00\x00" * 512).decode("ascii")
     for _ in range(40):
         await orch.ingest_audio(session, silent, 512)
-        await asyncio.sleep(0.005)
+        await asyncio.sleep(0.032)
     print("    (appended 1.25s silence to trigger speech end)")
 
     print("[6] wait for pipeline ...")
@@ -349,6 +352,10 @@ async def main() -> int:
     print("[8] shutdown")
     try:
         await asyncio.wait_for(orch.shutdown(), timeout=30)
+    except asyncio.CancelledError:
+        # 基类异常，不受 Exception 捕获——musetalk 渲染 task 取消时透传，
+        # 此前吞掉了 RESULT 打印（真因排查花了三轮）
+        pass
     except Exception:
         pass
 

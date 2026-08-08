@@ -117,6 +117,12 @@ class Qwen3TtsBlock(Block):
                 if sentence.strip():
                     await self._synthesize(ctx, sentence)
         elif event.type == LLM_TEXT_DONE:
+            # 句尾剩余合成（无句末标点时缓冲会被丢弃的真因修复）
+            pending = sorted(self._sentence_buffers.items())
+            self._sentence_buffers = {}
+            for _idx, sentence in pending:
+                if sentence.strip():
+                    await self._synthesize(ctx, sentence)
             await ctx.emit(
                 Event(
                     type=TTS_AUDIO_COMPLETED,
