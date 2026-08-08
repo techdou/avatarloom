@@ -80,8 +80,13 @@ blocks:
     deployment: local
     optional: true
     config:
-      enabled: false
-      apiKeyEnv: DEEPSEEK_API_KEY
+      # AutoDL 启用：DeepSeek 抽取（复用 LLM_API_KEY）+ 本地 bge-m3（数据盘预置）
+      enabled: true
+      apiKeyEnv: LLM_API_KEY
+      model: ${LLM_MODEL}
+      baseUrl: ${LLM_BASE_URL}
+      embedderModel: /root/autodl-tmp/models/bge-m3
+      storeDir: /root/autodl-tmp/avatarloom/data/memory
 
 sync:
   audio_delay_ms: 800

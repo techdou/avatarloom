@@ -77,8 +77,12 @@ blocks:
     deployment: local
     optional: true
     config:
-      enabled: false
-      apiKeyEnv: DEEPSEEK_API_KEY
+      enabled: true
+      apiKeyEnv: LLM_API_KEY
+      model: ${LLM_MODEL}
+      baseUrl: ${LLM_BASE_URL}
+      embedderModel: /root/autodl-tmp/models/bge-m3
+      storeDir: /root/autodl-tmp/avatarloom/data/memory
 
 sync:
   audio_delay_ms: 600
