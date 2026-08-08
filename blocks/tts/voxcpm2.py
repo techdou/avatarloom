@@ -264,15 +264,16 @@ class VoxCpm2TtsBlock(Block):
     def _load_model(self, model_name: str, device: str) -> Any:
         from voxcpm import VoxCPM  # type: ignore
 
-        # 本地目录（如 AutoDL 数据盘的 modelscope-voxcpm）直接加载，不走 HF 下载
+        # voxcpm 1.0.5 API：VoxCPM(voxcpm_model_path, ..., optimize)——无 device 参数，
+        # 设备由库内部自选（cuda 可用即上卡）。from_pretrained 的 **kwargs 直达
+        # __init__，传 device 会 TypeError。device 参数保留作语义记录。
         import os
 
         local_path = str(model_name)
         if os.path.isdir(local_path):
-            return VoxCPM.from_pretrained(
-                local_path, local_files_only=True, device=device
-            )
-        return VoxCPM.from_pretrained(model_name).to(device)
+            # 本地目录（如 AutoDL 数据盘的 modelscope-voxcpm）直接加载，不走 HF 下载
+            return VoxCPM.from_pretrained(local_path, local_files_only=True)
+        return VoxCPM.from_pretrained(model_name)
 
     def _infer_stream(self, text: str, voice_ref: str | None):
         """流式合成，yield 48kHz float32 numpy chunk。
