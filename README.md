@@ -18,6 +18,22 @@ AvatarLoom 是一个模块化、积木式的实时 AI 数字人运行与管理�
 - **Mock 永远可跑**：不依赖 GPU/Docker/API Key 的完整开发回归链路
 - **可观测**：每轮 Run 落盘事件流、首字/首音/首帧延迟、降级路径与产物
 
+## 端口约定（唯一权威）
+
+AvatarLoom 的端口分两层，**用户访问永远走"访问入口"一列，不直连服务端口**：
+
+| 服务 | 服务端口（进程监听） | 本地 dev 直连 | **AutoDL 隧道访问入口（统一）** |
+|---|---|---|---|
+| Studio | 3000 | `http://127.0.0.1:3000` | **`http://localhost:13000`** |
+| Control API | 8100 | `http://127.0.0.1:8100` | **`http://localhost:18100`** |
+| Runtime Gateway | 8101 | `ws://127.0.0.1:8101/ws/realtime` | **`ws://localhost:18101/ws/realtime`** |
+
+- **AutoDL 场景**：SSH 隧道把服务器 3000/8100/8101 映射到本地 13000/18100/18101。
+  浏览器地址栏、WS 目标、演示链接、文档示例**只允许出现隧道端口**。
+  前端 WS 地址自动推导（页面端口 >10000 时按隧道映射换算），无需 URL 参数。
+- **本地 dev 场景**（`make dev` 三服务在本机）：直连服务端口即可。
+- 服务端口由 `.env` 配置（`AVATARLOOM_CONTROL_API_PORT` / `AVATARLOOM_RUNTIME_GATEWAY_PORT` / `STUDIO_PORT`）；隧道端口在 `.omx/scripts/tunnel.py` 固定（本地工作区，不入库）。
+
 ## 快速开始
 
 ### 环境要求
@@ -47,7 +63,9 @@ uv run python scripts/smoke_mock.py
 # 启动三服务
 make dev        # 或 uv run python scripts/dev.py
 
-# 浏览器打开 http://127.0.0.1:3000 -> Realtime Playground
+# 浏览器打开
+#   本地 dev：http://127.0.0.1:3000
+#   AutoDL 隧道：http://localhost:13000/playground（推荐入口，见上方端口约定）
 ```
 
 ### 配置真实 Adapter（可选）

@@ -85,7 +85,7 @@ useRealtimeSession
 ```
 
 - 音频是**主时钟**：`PcmPlayer` 用 `AudioContext.currentTime` 调度，`AVMux` 按音频播放位置消费视频帧（对齐 VoxEMW，见 docs/02）。
-- WS URL 推导优先级：`?wsPort=` 参数 > `NEXT_PUBLIC_WS_PORT` env > 隧道推导（页面端口>10000 时 +5101）> 默认 8101；https 页面自动 `wss://`（AL-P2-005）。
+- WS URL 推导优先级：`?wsPort=` 参数 > `NEXT_PUBLIC_WS_PORT` env > 隧道映射（页面端口 13000 → gateway 18101）> 默认 8101；https 页面自动 `wss://`（AL-P2-005）。隧道端口约定见 README「端口约定」（用户入口永远是 13000/18100/18101）。
 - 下行通道（Gateway 侧，AL-P2-006）：control/audio/video 三队列，控制不丢、媒体丢最旧；心跳 20s ping + gateway 90s idle 断开（AL-P2-007）。
 - 帧构造纯函数在 `lib/frames.ts`（`buildPcmUplinkFrame` / `buildCameraUplinkFrame`，配协议单测）。
 
