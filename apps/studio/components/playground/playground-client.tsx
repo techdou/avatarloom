@@ -150,6 +150,7 @@ export function PlaygroundClient() {
           sessionState={session.sessionState}
           framesShown={session.debugInfo.framesShown}
           personaLabel={personaLabel}
+          wsUrl={session.wsUrl}
         />
 
         {/* 对话面板 + 底部控制条 */}

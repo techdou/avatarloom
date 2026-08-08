@@ -15,6 +15,19 @@ import {
 
 export type ConnState = "disconnected" | "connecting" | "connected" | "error";
 
+/** 推导 WS 地址（纯函数，挂载即算）：
+ * 1. URL 参数 ?wsPort=xxxxx；2. NEXT_PUBLIC_WS_PORT env；
+ * 3. 隧道推导：页面端口 > 10000 时 wsPort = 页面端口 + 5101；4. 默认 8101。
+ * https 页面自动 wss。仅在浏览器环境调用。 */
+export function computeWsUrl(): string {
+  const pagePort = window.location.port;
+  const urlWsPort = new URLSearchParams(window.location.search).get("wsPort");
+  const tunnelWsPort = parseInt(pagePort) > 10000 ? String(parseInt(pagePort) + 5101) : null;
+  const wsPort = urlWsPort || process.env.NEXT_PUBLIC_WS_PORT || tunnelWsPort || "8101";
+  const wsProto = window.location.protocol === "https:" ? "wss" : "ws";
+  return `${wsProto}://${window.location.hostname}:${wsPort}/ws/realtime`;
+}
+
 /** 会话状态 → 徽章文案/样式。渲染层共享，避免重复定义。 */
 export const STATE_META_FALLBACK: Record<string, { label: string; badge: string }> = {
   idle: { label: "待机", badge: "" },
@@ -63,6 +76,8 @@ export interface RealtimeSession {
   error: string | null;
   debugInfo: DebugInfo;
   timing: SessionTiming;
+  /** 实际连接的 WS 地址（推导完成后可知）——WelcomePane 显示用，避免静态文案误导。 */
+  wsUrl: string | null;
   /** 下行 JSON 事件滚动记录（ring buffer 200 条）——调试面板事件流数据源。 */
   events: SessionEvent[];
   /** 最近一次 run.started 时刻（payload 不带 run_id，仅作展示锚点）。 */
@@ -104,6 +119,7 @@ export function useRealtimeSession({
   const [micActive, setMicActive] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [wsUrlState, setWsUrlState] = useState<string | null>(null);
   const [debugInfo, setDebugInfo] = useState<DebugInfo>({
     framesShown: 0,
     audioChunks: 0,
@@ -383,19 +399,9 @@ export function useRealtimeSession({
     );
     void playerRef.current.resume();
 
-    // WS 端口推导（优先级从高到低）：
-    // 1. URL 参数 ?wsPort=xxxxx（显式指定）
-    // 2. NEXT_PUBLIC_WS_PORT 环境变量（build 时注入）
-    // 3. 隧道自动推导：页面端口 > 10000 时，WS 端口 = 页面端口 + 5101
-    //    （隧道映射规律：studio 13000→3000，gateway 18101→8101，偏移 5101）
-    // 4. 默认 8101（与 gateway 直连）
-    const pagePort = window.location.port;
-    const urlWsPort = new URLSearchParams(window.location.search).get("wsPort");
-    const tunnelWsPort = parseInt(pagePort) > 10000 ? String(parseInt(pagePort) + 5101) : null;
-    const wsPort = urlWsPort || process.env.NEXT_PUBLIC_WS_PORT || tunnelWsPort || "8101";
-    // HTTPS 页面必须 wss，否则浏览器拦截混合内容（AL-P2-005）
-    const wsProto = window.location.protocol === "https:" ? "wss" : "ws";
-    const wsUrl = `${wsProto}://${window.location.hostname}:${wsPort}/ws/realtime`;
+    // WS 地址推导（computeWsUrl 纯函数；挂载时已展示在 WelcomePane）
+    const wsUrl = computeWsUrl();
+    setWsUrlState(wsUrl);
     const ws = new WebSocket(wsUrl);
     ws.binaryType = "arraybuffer";
     wsRef.current = ws;
@@ -531,6 +537,11 @@ export function useRealtimeSession({
     };
   }, []);
 
+  // 挂载即推导 WS 地址（WelcomePane 未连接时也显示真实目标）
+  useEffect(() => {
+    setWsUrlState(computeWsUrl());
+  }, []);
+
   // autoConnect：挂载即连。仅触发一次，profile/persona 变化不自动重连（避免打断会话）。
   useEffect(() => {
     if (!autoConnect) return;
@@ -562,6 +573,7 @@ export function useRealtimeSession({
     error,
     debugInfo,
     timing: runtime.timing,
+    wsUrl: wsUrlState,
     events: runtime.events,
     lastRunAt: runtime.lastRunAt,
     connect,

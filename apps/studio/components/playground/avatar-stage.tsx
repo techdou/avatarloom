@@ -12,6 +12,8 @@ interface AvatarStageProps {
   sessionState: string;
   framesShown: number;
   personaLabel: string;
+  /** 实际 WS 目标地址（未连接提示用，替代写死的端口文案）。 */
+  wsUrl: string | null;
 }
 
 /**
@@ -27,6 +29,7 @@ export function AvatarStage({
   sessionState,
   framesShown,
   personaLabel,
+  wsUrl,
 }: AvatarStageProps) {
   return (
     <div className="card flex flex-col overflow-hidden p-0 min-h-0">
@@ -35,7 +38,7 @@ export function AvatarStage({
           // eslint-disable-next-line @next/next/no-img-element
           <img src={frameUrl} alt="avatar" className="w-full h-full object-cover" />
         ) : conn === "disconnected" || conn === "error" ? (
-          <WelcomePane conn={conn} error={error} onConnect={onConnect} personaLabel={personaLabel} />
+          <WelcomePane conn={conn} error={error} onConnect={onConnect} personaLabel={personaLabel} wsUrl={wsUrl} />
         ) : (
           <PendingAvatar />
         )}
@@ -49,17 +52,19 @@ export function AvatarStage({
   );
 }
 
-/** 未连接引导态：克制占位 + 连接 CTA。链路组成不在此展示（跟随 profile 变，硬编码会失真）。 */
+/** 未连接引导态：克制占位 + 连接 CTA + 真实 WS 目标地址。 */
 function WelcomePane({
   conn,
   error,
   onConnect,
   personaLabel,
+  wsUrl,
 }: {
   conn: ConnState;
   error: string | null;
   onConnect: () => void;
   personaLabel: string;
+  wsUrl: string | null;
 }) {
   const connecting = conn === "connecting";
   return (
@@ -88,7 +93,7 @@ function WelcomePane({
           <div className="mt-2.5 text-micro text-err text-left leading-snug">{error}</div>
         ) : (
           <div className="mt-2.5 text-micro text-fg-subtle">
-            需要本地 Runtime Gateway 监听 <code className="font-mono">:8101</code>
+            将连接 <code className="font-mono">{wsUrl ?? "ws://…"}</code>
           </div>
         )}
       </div>
