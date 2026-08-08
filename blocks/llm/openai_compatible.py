@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from typing import Any
@@ -158,71 +159,85 @@ class OpenAILlmBlock(Block):
                 if self._disable_thinking:
                     payload["extra_body"] = {"thinking": {"type": "disabled"}}
 
-                async with client.stream("POST", "/chat/completions", json=payload) as resp:
-                    resp.raise_for_status()
-                    self._active_resp = resp
+                # 连接级失败重试（AutoDL 出网抖动：连接超时/重置/无产出断流，最多 3 次退避）
+                for _attempt in range(3):
                     try:
-                        async for line in resp.aiter_lines():
-                            # 打断检查（AL-P1-006）——reset() 已标记本 run
-                            if ctx.run_id is not None and ctx.run_id in self._interrupted_run_ids:
-                                interrupted = True
-                                break
-                            if not line or not line.startswith("data: "):
-                                continue
-                            data = line[6:].strip()
-                            if data == "[DONE]":
-                                break
+                        async with client.stream("POST", "/chat/completions", json=payload) as resp:
+                            resp.raise_for_status()
+                            self._active_resp = resp
                             try:
-                                chunk = json.loads(data)
-                            except json.JSONDecodeError:
-                                continue
-                            delta = _extract_delta(chunk)
-                            if not delta:
-                                continue
+                                async for line in resp.aiter_lines():
+                                    # 打断检查（AL-P1-006）——reset() 已标记本 run
+                                    if ctx.run_id is not None and ctx.run_id in self._interrupted_run_ids:
+                                        interrupted = True
+                                        break
+                                    if not line or not line.startswith("data: "):
+                                        continue
+                                    data = line[6:].strip()
+                                    if data == "[DONE]":
+                                        break
+                                    try:
+                                        chunk = json.loads(data)
+                                    except json.JSONDecodeError:
+                                        continue
+                                    delta = _extract_delta(chunk)
+                                    if not delta:
+                                        continue
 
-                            full_text += delta
-                            sentence_buf += delta
+                                    full_text += delta
+                                    sentence_buf += delta
 
-                            # 流式 emit 每个 delta
-                            await ctx.emit(
-                                Event(
-                                    type=LLM_TEXT_DELTA,
-                                    session_id=ctx.session_id,
-                                    source="llm.openai-compatible",
-                                    run_id=ctx.run_id,
-                                    payload={
-                                        "text": delta,
-                                        "sentence_index": sentence_idx,
-                                        "is_sentence_end": False,
-                                    },
-                                )
-                            )
-
-                            # 按句切分（sentence 不直接用，TTS 按 sentence_index 累积）
-                            while _has_sentence_end(sentence_buf):
-                                _unused, sentence_buf = _split_sentence(sentence_buf)
-                                sentence_idx += 1
-                                await ctx.emit(
-                                    Event(
-                                        type=LLM_TEXT_DELTA,
-                                        session_id=ctx.session_id,
-                                        source="llm.openai-compatible",
-                                        run_id=ctx.run_id,
-                                        payload={
-                                            "text": "",
-                                            "sentence_index": sentence_idx - 1,
-                                            "is_sentence_end": True,
-                                        },
+                                    # 流式 emit 每个 delta
+                                    await ctx.emit(
+                                        Event(
+                                            type=LLM_TEXT_DELTA,
+                                            session_id=ctx.session_id,
+                                            source="llm.openai-compatible",
+                                            run_id=ctx.run_id,
+                                            payload={
+                                                "text": delta,
+                                                "sentence_index": sentence_idx,
+                                                "is_sentence_end": False,
+                                            },
+                                        )
                                     )
-                                )
-                    except httpx.StreamError:
-                        # reset() 里 resp.aclose() 会让 aiter_lines 抛 StreamError
-                        if ctx.run_id is not None and ctx.run_id in self._interrupted_run_ids:
-                            interrupted = True
-                        else:
-                            raise
-                    finally:
-                        self._active_resp = None
+
+                                    # 按句切分（sentence 不直接用，TTS 按 sentence_index 累积）
+                                    while _has_sentence_end(sentence_buf):
+                                        _unused, sentence_buf = _split_sentence(sentence_buf)
+                                        sentence_idx += 1
+                                        await ctx.emit(
+                                            Event(
+                                                type=LLM_TEXT_DELTA,
+                                                session_id=ctx.session_id,
+                                                source="llm.openai-compatible",
+                                                run_id=ctx.run_id,
+                                                payload={
+                                                    "text": "",
+                                                    "sentence_index": sentence_idx - 1,
+                                                    "is_sentence_end": True,
+                                                },
+                                            )
+                                        )
+                            except httpx.StreamError:
+                                # reset() 里 resp.aclose() 会让 aiter_lines 抛 StreamError
+                                if ctx.run_id is not None and ctx.run_id in self._interrupted_run_ids:
+                                    interrupted = True
+                                elif not full_text and _attempt < 2:
+                                    # 无产出断流——重试（有产出不重试，避免内容重复）
+                                    await asyncio.sleep(0.5 * (_attempt + 1))
+                                    continue
+                                else:
+                                    raise
+                            finally:
+                                self._active_resp = None
+                        break  # 流式正常完成，跳出重试
+                    except (httpx.ConnectTimeout, httpx.ConnectError, httpx.ReadTimeout):
+                        # 连接阶段失败（未产出任何内容）——退避重试
+                        if _attempt < 2 and not full_text:
+                            await asyncio.sleep(0.5 * (_attempt + 1))
+                            continue
+                        raise
 
         except httpx.HTTPStatusError as e:
             await ctx.emit(
