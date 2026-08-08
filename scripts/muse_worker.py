@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import faulthandler
 import json
 import os
 import subprocess
@@ -24,9 +25,27 @@ import sys
 import time
 from pathlib import Path
 
-import cv2
-import numpy as np
-import torch
+# 启动探针：worker 段错误（SIGSEGV）无输出时，用这些标记定位崩溃的 import。
+# 同时写文件——block 侧 drain 与崩溃存在读取竞争，pipe 数据可能丢失
+_DBG = open("/tmp/muse_worker_boot.log", "a", buffering=1)  # noqa: SIM115 -- 进程级探针日志，faulthandler 需持有句柄
+faulthandler.enable(file=_DBG)
+
+
+def _probe(msg: str) -> None:
+    _DBG.write(f"{msg}\n")
+    print(msg, flush=True)
+
+
+_probe("M1_IMPORT_START")
+import cv2  # noqa: E402
+
+_probe("M2_CV2_OK")
+import numpy as np  # noqa: E402
+
+_probe("M3_NUMPY_OK")
+import torch  # noqa: E402
+
+_probe("M4_TORCH_OK")
 
 MUSETALK_ROOT = Path("/root/autodl-tmp/musetalk")
 sys.path.insert(0, str(MUSETALK_ROOT))

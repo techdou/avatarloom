@@ -177,9 +177,11 @@ class OpenAILlmBlock(Block):
                     "max_tokens": self._max_tokens,
                     "temperature": self._temperature,
                 }
-                # DeepSeek 等推理模型：关 thinking
+                # DeepSeek 等推理模型：关 thinking。必须是顶层 thinking 字段——
+                # DeepSeek 官方 API 只认顶层（extra_body 嵌套会被忽略，思考照跑，
+                # 思考 token 挤占 max_tokens 时偶发 content 全空 → TTS 零产出）
                 if self._disable_thinking:
-                    payload["extra_body"] = {"thinking": {"type": "disabled"}}
+                    payload["thinking"] = {"type": "disabled"}
 
                 # 连接级失败重试（AutoDL 出网抖动：连接超时/重置/无产出断流，最多 3 次退避）
                 for _attempt in range(3):
@@ -256,6 +258,11 @@ class OpenAILlmBlock(Block):
                                     raise
                             finally:
                                 self._active_resp = None
+                        if not full_text and _attempt < 2:
+                            # 成功完成但零产出——推理模型偶发空流（DeepSeek v4-flash 实测
+                            # 正常 stop 但 content 全空），直接 stop 会让 TTS 零产出，重试
+                            await asyncio.sleep(0.5 * (_attempt + 1))
+                            continue
                         break  # 流式正常完成，跳出重试
                     except (httpx.ConnectTimeout, httpx.ConnectError, httpx.ReadTimeout, httpx.ReadError, httpx.RemoteProtocolError):
                         # 连接/传输层失败（ConnectTimeout/ConnectError/ReadTimeout/ReadError/

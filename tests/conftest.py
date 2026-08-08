@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
+
+# 测试环境标记：ws_handler.cleanup 的"会话后自重启"（os._exit(42)）只应在
+# 真实 uvicorn 进程里触发，测试进程不能被它杀掉。
+os.environ.setdefault("AVATARLOOM_TESTING", "1")
 
 # 让 pytest-asyncio 的 event_loop scope 跟 session 一致，避免跨 fixture 警告。
 # pytest-asyncio 1.x 默认 strict mode，需显式声明。

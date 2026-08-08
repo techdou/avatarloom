@@ -119,7 +119,9 @@ start_service() {
     rm -f "$pidfile"   # stale pidfile
 
     echo "启动 $name..."
-    "$@" &
+    # 日志落盘（data/<name>.log）——后台进程的 stdout 不重定向会在
+    # SSH 会话结束后写进死管道，排障时日志直接丢失。
+    "$@" >> "$PID_DIR/$name.log" 2>&1 &
     local pid=$!
     echo "$pid" > "$pidfile"
     echo "  $name pid=$pid，等待端口 $port 就绪..."
@@ -163,9 +165,22 @@ case "$ACTION" in
         start_service control-api "$CONTROL_API_PORT" \
             uv run --no-sync python -m avatarloom_control_api || { rollback; exit 1; }
 
-        # Runtime Gateway
+        # Runtime Gateway——守护循环：gateway 每次真实会话后以 42 自重启
+        # （CUDA context 污染后 fork 子进程必崩，见 ws_handler.cleanup），
+        # 循环在此拉起新进程；stop 时 bash 收 TERM 转发给子进程后退出。
         start_service runtime-gateway "$RUNTIME_GATEWAY_PORT" \
-            uv run --no-sync python -m avatarloom_runtime_gateway || { rollback; exit 1; }
+            bash -c '
+                while true; do
+                    uv run --no-sync python -m avatarloom_runtime_gateway
+                    rc=$?
+                    echo "[autodl_start] runtime-gateway exited rc=$rc"
+                    if [ "$rc" -eq 42 ]; then
+                        echo "[autodl_start] 会话后自动重启 gateway"
+                        continue
+                    fi
+                    break
+                done
+            ' || { rollback; exit 1; }
 
         # Studio（生产模式，省内存；next start 读 PORT）
         start_service studio "$STUDIO_PORT" \
@@ -195,6 +210,15 @@ case "$ACTION" in
         stop_service studio
         stop_service runtime-gateway
         stop_service control-api
+        # 守护循环兜底：bash 收 TERM 退出后 uv run/python 子进程可能残留，
+        # 按服务名精确清理（与 restart 脚本同款姿势）
+        for pat in 'avatarloom_runtime_gateway' 'avatarloom_control_api' 'next-server'; do
+            pids=$(ps -eo pid,cmd | grep -E "$pat" | grep -v grep | awk '{print $1}')
+            if [ -n "$pids" ]; then
+                kill $pids 2>/dev/null || true
+                echo "  ✓ 清理残留 $pat ($pids)"
+            fi
+        done
         echo "所有服务已停止"
         ;;
 

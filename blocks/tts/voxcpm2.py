@@ -170,6 +170,12 @@ class VoxCpm2TtsBlock(Block):
             # 缓冲内容此前被直接丢弃——TTS 零产出（E2E 实测 tts_delta=False 的真因）
             pending = sorted(self._sentence_buffers.items())
             self._sentence_buffers = {}
+            # 兜底：非流式/被截断的 LLM 只发 DONE 带 full_text 时缓冲为空，
+            # 直接用 full_text 合成，避免 TTS 零产出
+            if not pending:
+                full_text = (event.payload.get("full_text") or "").strip()
+                if full_text:
+                    pending = [(0, full_text)]
             for _idx, sentence in pending:
                 if sentence.strip():
                     await self._synthesize(ctx, sentence, ctx.persona_voice_ref)

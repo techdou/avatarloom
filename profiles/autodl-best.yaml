@@ -8,6 +8,22 @@ metadata:
     DeepSeek 云端 LLM + 本地 VoxCPM2 流式克隆 TTS + MuseTalk 口型驱动 Avatar。
     显存占用约 11-16GB / 32GB。
 blocks:
+  avatar:
+    id: avatar.musetalk
+    deployment: local
+    config:
+      device: cuda
+      portrait: personas/demo-assistant/avatar/portrait.jpg
+      fps: 25
+      workerPython: /root/autodl-tmp/avatarloom-avatar-venv/bin/python
+      workerScript: scripts/muse_worker.py
+      musetalkRoot: /root/autodl-tmp/musetalk
+      version: v1
+      batchSize: 8
+      crf: 18
+      activityFps: 2.5
+      maxSide: 1280
+    fallback: avatar.static
   vad:
     id: vad.silero
     deployment: local
@@ -29,7 +45,7 @@ blocks:
       baseUrl: ${LLM_BASE_URL}
       apiKeyEnv: LLM_API_KEY
       model: ${LLM_MODEL}
-      maxTokens: 200
+      maxTokens: 512
       temperature: 0.6
       disableThinking: true
       systemPrompt: "你是小灵，一个温柔亲切的数字人语音助理。回答简短自然，最多2-3句话，不要使用Markdown符号或列表，适合语音合成朗读。"
@@ -50,22 +66,6 @@ blocks:
       promptText: "你好，很高兴认识你。今天过得怎么样？"
       voiceRef: personas/demo-assistant/voice/ref.wav
     fallback: tts.mock
-  avatar:
-    id: avatar.musetalk
-    deployment: local
-    config:
-      device: cuda
-      portrait: personas/demo-assistant/avatar/portrait.jpg
-      fps: 25
-      workerPython: /root/autodl-tmp/musetalk-venv/bin/python
-      workerScript: scripts/muse_worker.py
-      musetalkRoot: /root/autodl-tmp/musetalk
-      version: v1
-      batchSize: 8
-      crf: 18
-      activityFps: 2.5
-      maxSide: 1280
-    fallback: avatar.static
   vision:
     id: vision.openai-compatible
     deployment: remote

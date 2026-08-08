@@ -142,37 +142,74 @@ class MuseTalkAvatarBlock(Block):
             )
 
         self._worker_lock = asyncio.Lock()
-        try:
-            self._worker_proc = await asyncio.create_subprocess_exec(
-                worker_python,
-                worker_script,
-                "--model-dir",
-                model_dir,
-                "--version",
-                version,
-                "--device",
-                str(cfg.get("device", "cuda")),
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-                cwd=musetalk_root,
-                env=None,
-            )
-            self._worker_stdin = self._worker_proc.stdin
-            reader = asyncio.create_task(self._drain_worker())
-            self._tasks.append(reader)
-            await asyncio.wait_for(self._wait_line(30.0), timeout=35.0)
-            await self._call_worker({"cmd": "ping"}, timeout=30.0)
-            # 后台预热：会话建立即加载 MuseTalk 模型，首次渲染免去模型加载等待
-            warm = asyncio.create_task(self._warm_worker(ctx))
-            self._tasks.append(warm)
-        except Exception as e:
-            leftover = " | ".join(list(self._worker_lines)[-10:])
-            await self._stop_worker()
-            raise BlockSetupError(
-                "avatar.musetalk",
-                f"worker 启动失败: {e} | worker_output={leftover!r}",
-            ) from e
+        last_error: Exception | None = None
+        for attempt in range(3):
+            try:
+                # 诊断探针：worker 在会话里 rc=-11 且解释器零输出（独立复现全部正常），
+                # 先验证同一 fork+exec 上下文中最小 python 能否正常启动
+                probe = await asyncio.create_subprocess_exec(
+                    worker_python,
+                    "-c",
+                    "print('PROBE_OK')",
+                    stdin=asyncio.subprocess.DEVNULL,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                    env=None,
+                )
+                probe_out, _ = await probe.communicate()
+                if probe.returncode != 0:
+                    raise BlockSetupError(
+                        "avatar.musetalk",
+                        f"fork/exec 探针失败 rc={probe.returncode} out={probe_out!r}",
+                    )
+                self._worker_proc = await asyncio.create_subprocess_exec(
+                    worker_python,
+                    # faulthandler：worker 段错误（SIGSEGV）时打印 C/Python 栈到 stderr，
+                    # 否则崩溃无输出，排障只能靠猜
+                    "-X",
+                    "faulthandler",
+                    worker_script,
+                    "--model-dir",
+                    model_dir,
+                    "--version",
+                    version,
+                    "--device",
+                    str(cfg.get("device", "cuda")),
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                    cwd=musetalk_root,
+                    env=None,
+                )
+                self._worker_stdin = self._worker_proc.stdin
+                reader = asyncio.create_task(self._drain_worker())
+                self._tasks.append(reader)
+                await asyncio.wait_for(self._wait_line(30.0), timeout=120.0)
+                await self._call_worker({"cmd": "ping"}, timeout=30.0)
+                # 后台预热：会话建立即加载 MuseTalk 模型，首次渲染免去模型加载等待
+                warm = asyncio.create_task(self._warm_worker(ctx))
+                self._tasks.append(warm)
+                break  # 启动成功
+            except Exception as e:
+                last_error = e
+                leftover = " | ".join(list(self._worker_lines)[-10:])
+                await self._stop_worker()
+                self._worker_lines.clear()
+                if attempt < 2:
+                    # worker 启动在真实会话上下文里偶发段错误（独立复现 100% 成功），
+                    # 重试几乎必成——不让偶发崩溃直接把 avatar 降级成 static
+                    await ctx.logger.awarning(
+                        "avatar.musetalk worker 启动失败，重试",
+                        attempt=attempt + 1,
+                        error=str(e),
+                        worker_output=leftover,
+                    )
+                    await asyncio.sleep(1.0)
+                    continue
+                raise BlockSetupError(
+                    "avatar.musetalk",
+                    f"worker 启动失败（重试 3 次）: {last_error} | worker_output={leftover!r}",
+                ) from last_error
 
         self._mark_ready()
         await ctx.logger.ainfo(

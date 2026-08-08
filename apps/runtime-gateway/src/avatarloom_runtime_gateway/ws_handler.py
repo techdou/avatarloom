@@ -16,6 +16,7 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -641,6 +642,17 @@ class WebSocketSession:
             except asyncio.CancelledError:
                 pass
 
+        had_gpu_session = self.orchestrator is not None
         self.orchestrator = None
         self.session = None
         self.recorder = None
+
+        if had_gpu_session and not os.environ.get("AVATARLOOM_TESTING"):
+            # 真实会话结束 → 本进程自重启（退出码 42，supervisor 拉起）。
+            # 根因：gateway 进程一旦初始化 CUDA context（加载过任何 GPU 模型），
+            # 之后 fork 任何子进程（MuseTalk worker）都会 SIGSEGV——NV 驱动在
+            # fork 后（exec 前）的 atfork 清理与活跃 CUDA context 冲突。
+            # 新进程无 CUDA context，avatar 首位装配（fork 在 GPU 加载前）即安全。
+            # 模型与显存已在上面 shutdown 释放；os._exit 跳过 uvicorn 收尾直接退出。
+            logger.info("ws session cleaned, self-restarting (rc=42) for clean CUDA state")
+            os._exit(42)
