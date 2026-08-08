@@ -21,11 +21,22 @@ class TestProfileLoader:
         assert cfg.blocks["vad"].id == "vad.mock"
         assert cfg.blocks["llm"].id == "llm.mock"
 
-    def test_load_lite_profile(self) -> None:
+    def test_load_lite_profile(self, monkeypatch) -> None:
+        # lite profile 的 llm 是远程 OpenAI 兼容端点，缺 env 加载会 ProfileError——
+        # 补上测试环境变量，语义与生产一致（缺变量早报错，不带空串到运行期）
+        monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:9999/v1")
+        monkeypatch.setenv("LLM_MODEL", "test-model")
         cfg = load_profile("profiles/lite-12gb.yaml")
         assert cfg.profile_id == "lite-12gb"
         assert cfg.blocks["vad"].id == "vad.silero"
         assert cfg.blocks["llm"].deployment == "remote"
+
+    def test_load_lite_profile_missing_env_raises(self, monkeypatch) -> None:
+        # 远程 LLM 无 fallback、缺必需 env——加载阶段直接报错，不带到运行期
+        monkeypatch.delenv("LLM_BASE_URL", raising=False)
+        monkeypatch.delenv("LLM_MODEL", raising=False)
+        with pytest.raises(ProfileError, match="LLM_BASE_URL"):
+            load_profile("profiles/lite-12gb.yaml")
 
     def test_load_full_profile(self) -> None:
         cfg = load_profile("profiles/full-24gb.yaml")

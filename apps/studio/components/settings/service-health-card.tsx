@@ -29,7 +29,15 @@ export function ServiceHealthCard() {
           detail: j.db_ok ? `v${j.version} · db ok` : `v${j.version} · db 异常`,
         });
       })
-      .catch(() => setControlApi({ ok: false, detail: "不可达" }));
+      .catch((e: Error) =>
+        setControlApi({
+          ok: false,
+          // 网络失败与"可达但响应异常"分开报——后者是契约不符，误导排障
+          detail: /fetch failed|Failed to fetch|NetworkError/i.test(e.message)
+            ? "不可达"
+            : `响应异常（${e.message}）`,
+        })
+      );
     // gateway：/api/realtime/* → 8101/api/*
     fetch("/api/realtime/health")
       .then(async (r) => {
@@ -37,7 +45,14 @@ export function ServiceHealthCard() {
         const j = await r.json();
         setGateway({ ok: true, detail: `v${j.version}` });
       })
-      .catch(() => setGateway({ ok: false, detail: "不可达" }));
+      .catch((e: Error) =>
+        setGateway({
+          ok: false,
+          detail: /fetch failed|Failed to fetch|NetworkError/i.test(e.message)
+            ? "不可达"
+            : `响应异常（${e.message}）`,
+        })
+      );
     setLastCheck(new Date());
   }, []);
 

@@ -54,7 +54,7 @@ dependencies = [
 silero = ["torch>=2.2", "torchaudio>=2.2"]
 sensevoice = ["funasr>=1.1", "torch>=2.2", "torchaudio>=2.2", "modelscope>=1.20"]
 qwen3-tts = ["torch>=2.2", "transformers>=4.46", "soundfile>=0.12"]
-voxcpm2 = ["torch>=2.2", "transformers>=4.46", "soundfile>=0.12", "scipy>=1.13"]
+voxcpm2 = ["torch>=2.2", "transformers>=4.46", "soundfile>=0.12", "scipy>=1.13", "voxcpm>=1.0.5"]
 memory = ["mem0ai>=0.1.0", "qdrant-client>=1.9"]
 musetalk = ["torch>=2.2", "opencv-python>=4.10", "imageio>=2.36", "Pillow>=10"]
 ollama = ["ollama>=0.4"]
@@ -69,6 +69,7 @@ gpu-full = [
     "opencv-python>=4.10",
     "imageio>=2.36",
     "Pillow>=10",
+    "voxcpm>=1.0.5",
 ]
 dev = [
     "pytest>=8.3",

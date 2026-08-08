@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,7 +20,12 @@ class Settings(BaseSettings):
 
     # 服务
     host: str = "127.0.0.1"
-    port: int = 8100
+    # 端口走独立别名：避免与 gateway 共用 AVATARLOOM_PORT 撞车。
+    # .env 里写 AVATARLOOM_CONTROL_API_PORT=8100（或兼容旧名 AVATARLOOM_PORT）。
+    port: int = Field(
+        default=8100,
+        validation_alias=AliasChoices("AVATARLOOM_CONTROL_API_PORT", "AVATARLOOM_PORT"),
+    )
 
     # 数据库
     db_url: str = Field(

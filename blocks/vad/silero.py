@@ -176,15 +176,16 @@ class SileroVadBlock(Block):
         在线 torch.hub.load 会做版本校验而挂起（Remote end closed / timeout）。
         缓存目录约定：$TORCH_HOME/hub/snakers4_silero-vad_master/（预置 repo + jit）。
         """
+        import logging
         import os
 
         import torch
 
-        torch_home = os.environ.get(
-            "TORCH_HOME", os.path.expanduser("~/.cache/torch")
-        )
-        hub_cache = os.path.join(torch_home, "hub", "snakers4_silero-vad_master")
+        # torch.hub.get_dir() 同时尊重 TORCH_HOME 与 XDG_CACHE_HOME，与 torch 实际
+        # 缓存语义一致（不要手写 ~/.cache/torch 回退——设了 XDG 时探针会错位）。
+        hub_cache = os.path.join(torch.hub.get_dir(), "hub", "snakers4_silero-vad_master")
         if os.path.isdir(hub_cache):
+            logging.getLogger("vad.silero").info("silero 模型从本地 hub 缓存加载: %s", hub_cache)
             model, utils = torch.hub.load(
                 repo_or_dir=hub_cache,
                 model="silero_vad",
@@ -194,6 +195,9 @@ class SileroVadBlock(Block):
             )
         else:
             # 在线模式（本地无缓存时从 GitHub 下载）
+            logging.getLogger("vad.silero").warning(
+                "silero 本地缓存缺失（%s），走在线 torch.hub 下载——AutoDL 上可能挂起", hub_cache
+            )
             model, utils = torch.hub.load(
                 repo_or_dir="snakers4/silero-vad",
                 model="silero_vad",

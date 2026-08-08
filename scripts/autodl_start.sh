@@ -70,12 +70,15 @@ case "$ACTION" in
         echo "========================================"
 
         # Control API
+        # 注意：必须 --no-sync——uv run 默认会按 lockfile 重新 sync 并 prune 掉
+        # setup.sh 用 --extra gpu-full 装的 torch/funasr/transformers 等（不在默认 extras），
+        # 不带 --no-sync 首次启动会把 GPU 依赖全部卸载，SenseVoice 装配直接失败。
         start_service control-api \
-            uv run python -m avatarloom_control_api
+            uv run --no-sync python -m avatarloom_control_api
 
         # Runtime Gateway
         start_service runtime-gateway \
-            uv run python -m avatarloom_runtime_gateway
+            uv run --no-sync python -m avatarloom_runtime_gateway
 
         # Studio（生产模式，省内存）
         cd apps/studio

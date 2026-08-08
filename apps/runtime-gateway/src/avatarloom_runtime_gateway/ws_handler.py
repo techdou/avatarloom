@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -248,6 +249,11 @@ class WebSocketSession:
         """启动新会话。"""
         profile_id = payload.get("profile_id") or self.settings.default_profile
         persona_id = payload.get("persona_id")
+
+        # profile_id 白名单校验——客户端可控，防路径穿越（../../ 读任意 yaml）
+        if not isinstance(profile_id, str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", profile_id):
+            await self._send_error(f"invalid profile_id: {profile_id!r}")
+            return
 
         # v0.1：默认用 Mock profile（profile 加载逻辑在阶段 9 完善）
         config = None

@@ -27,7 +27,6 @@ from avatarloom_protocol import (
     LLM_REQUEST,
     LLM_TEXT_DELTA,
     LLM_TEXT_DONE,
-    TRANSCRIPT_COMPLETED,
     Event,
 )
 from avatarloom_sdk import Block, BlockContext, BlockManifest, Capability
@@ -109,10 +108,27 @@ class OpenAILlmBlock(Block):
             self._interrupted_run_ids.add(self._active_run_id)
         resp = self._active_resp
         if resp is not None:
-            try:
+            # 关闭失败无所谓——标记已生效，流式循环会走打断检查退出
+            import contextlib
+
+            with contextlib.suppress(Exception):
                 await resp.aclose()
-            except Exception:
-                pass
+
+    async def _emit_done(self, ctx: BlockContext, full_text: str, finish_reason: str) -> None:
+        """收尾事件统一出口——error 路径也必须发 DONE，否则下游（TTS）永远等不到收尾。"""
+        await ctx.emit(
+            Event(
+                type=LLM_TEXT_DONE,
+                session_id=ctx.session_id,
+                source="llm.openai-compatible",
+                run_id=ctx.run_id,
+                payload={
+                    "full_text": full_text,
+                    "finish_reason": finish_reason,
+                    "first_token_ms": None,
+                },
+            )
+        )
 
     async def process(self, ctx: BlockContext, event: Event) -> None:
         # 只消费 llm.request（Orchestrator 完成 Vision 同轮编排后发出）。
@@ -228,6 +244,9 @@ class OpenAILlmBlock(Block):
                                     await asyncio.sleep(0.5 * (_attempt + 1))
                                     continue
                                 else:
+                                    # 重试耗尽/已有产出断流——必须补发 DONE(error) 收尾，
+                                    # 否则 TTS 收不到 DONE 不吐 completed，前端永远停在"思考中"
+                                    await self._emit_done(ctx, full_text, "error")
                                     raise
                             finally:
                                 self._active_resp = None
@@ -238,22 +257,12 @@ class OpenAILlmBlock(Block):
                         if _attempt < 2 and not full_text:
                             await asyncio.sleep(0.5 * (_attempt + 1))
                             continue
+                        # 重试耗尽/已有产出断流——补发 DONE(error) 收尾（同上）
+                        await self._emit_done(ctx, full_text, "error")
                         raise
 
         except httpx.HTTPStatusError as e:
-            await ctx.emit(
-                Event(
-                    type=LLM_TEXT_DONE,
-                    session_id=ctx.session_id,
-                    source="llm.openai-compatible",
-                    run_id=ctx.run_id,
-                    payload={
-                        "full_text": full_text,
-                        "finish_reason": "error",
-                        "first_token_ms": None,
-                    },
-                )
-            )
+            await self._emit_done(ctx, full_text, "error")
             raise RuntimeError(
                 f"LLM HTTP error {e.response.status_code}: {e.response.text[:200]}"
             ) from e

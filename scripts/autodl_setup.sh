@@ -22,7 +22,7 @@ NC='\033[0m'
 
 log()  { echo -e "${GREEN}[$(date +%H:%M:%S)]${NC} $*"; }
 warn() { echo -e "${YELLOW}[!]${NC} $*"; }
-err()  { echo -e "${RED}[ERROR]${NC} $*" >&1; }
+err()  { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 
 # ---------------------------------------------------------------------------
 # 环境检查
@@ -113,8 +113,8 @@ log "pnpm: $(pnpm --version)"
 log "=== 安装 Python 依赖（GPU 全套 extras）==="
 cd "$PROJECT_ROOT"
 uv sync --extra dev --extra gpu-full 2>&1 | tail -3 || {
-    warn "gpu-full 安装失败，尝试最小核心依赖"
-    uv sync --extra dev
+    err "gpu-full 依赖安装失败——缺少 torch/funasr 等，后续模型下载必然全部失败，直接停止"
+    exit 1
 }
 log "Python 依赖装完"
 
@@ -173,9 +173,9 @@ export HF_HUB_OFFLINE=1
 # ---------------------------------------------------------------------------
 log "=== 配置 .env ==="
 if [ ! -f "$PROJECT_ROOT/.env" ]; then
-    cp "$PROJECT_ROOT/.env.example" "$PROJECT_ROOT/.env"
-    log ".env 已从模板创建——你需要编辑填 DeepSeek API key"
-    warn "运行 nano .env 填 DEEPSEEK_API_KEY"
+    cp "$PROJECT_ROOT/.env.autodl.example" "$PROJECT_ROOT/.env"
+    log ".env 已从 AutoDL 模板创建——你需要编辑填 LLM API key"
+    warn "运行 nano .env 填 LLM_API_KEY"
 else
     log ".env 已存在，跳过"
 fi
@@ -189,9 +189,9 @@ log "AvatarLoom 环境部署完成"
 log "========================================"
 echo ""
 echo "下一步："
-echo "  1. 编辑 .env 填 DeepSeek API key："
+echo "  1. 编辑 .env 填 LLM API key："
 echo "     nano .env"
-echo "     # 找到 DEEPSEEK_API_KEY= 行，填上你的 key"
+echo "     # 找到 LLM_API_KEY= 行，填上你的 key（DeepSeek 等 OpenAI 兼容端点）"
 echo ""
 echo "  2. 跑 Mock 冒烟测试（验证基础链路）："
 echo "     uv run python scripts/smoke_mock.py"

@@ -44,10 +44,16 @@ def load_profile(profile_path: str | Path) -> OrchestratorConfig:
     if not p.exists():
         raise ProfileError(f"profile not found: {p}")
 
+    raw = p.read_text(encoding="utf-8")
+    # 未插值版本：${VAR} 是合法 YAML 字符串，可先解析出 blocks 结构做环境变量校验
     try:
-        raw = p.read_text(encoding="utf-8")
-        raw = _interpolate_env(raw)
-        data = yaml.safe_load(raw)
+        raw_data = yaml.safe_load(raw)
+    except yaml.YAMLError as e:
+        raise ProfileError(f"invalid yaml: {e}") from e
+
+    interpolated, missing_envs = _interpolate_env(raw)
+    try:
+        data = yaml.safe_load(interpolated)
     except yaml.YAMLError as e:
         raise ProfileError(f"invalid yaml: {e}") from e
 
@@ -94,12 +100,18 @@ def load_profile(profile_path: str | Path) -> OrchestratorConfig:
     # 校验：所有非 optional、无 fallback 的 block id 必须在 BLOCK_REGISTRY 中
     _validate_block_ids(blocks, profile_id=profile_id)
 
+    # 缺失环境变量检查：非 optional、无 fallback 的 block 依赖 ${VAR} 时，
+    # 缺变量会在运行期才暴露（空串 baseUrl → 连接错误），加载阶段直接报错更快定位。
+    _validate_required_env(raw_data, missing_envs, profile_id=profile_id)
+
     return OrchestratorConfig(
         profile_id=profile_id,
         blocks=blocks,
         sync=sync,
-        allow_interruption=bool(session_raw.get("allowInterruption", True)),
-        event_log=bool(session_raw.get("eventLog", True)),
+        allow_interruption=bool(
+            session_raw.get("allowInterruption", session_raw.get("allow_interruption", True))
+        ),
+        event_log=bool(session_raw.get("eventLog", session_raw.get("event_log", True))),
         session_mode=session_raw.get("mode", "single"),
         vision_timeout_s=float(
             session_raw.get("visionTimeoutS", session_raw.get("vision_timeout_s", 8.0))
@@ -149,13 +161,55 @@ def _validate_block_ids(
     )
 
 
-def _interpolate_env(text: str) -> str:
-    """${VAR} -> env value。未设置的变量替换为空字符串。"""
+def _interpolate_env(text: str) -> tuple[str, set[str]]:
+    """${VAR} -> env value。返回 (插值后文本, 未设置的变量名集合)。"""
+
+    missing: set[str] = set()
 
     def repl(m: re.Match[str]) -> str:
-        return os.environ.get(m.group(1), "")
+        name = m.group(1)
+        value = os.environ.get(name)
+        if value is None:
+            missing.add(name)
+            return ""
+        return value
 
-    return _ENV_PATTERN.sub(repl, text)
+    return _ENV_PATTERN.sub(repl, text), missing
+
+
+def _validate_required_env(
+    raw_data: dict[str, Any],
+    missing_envs: set[str],
+    *,
+    profile_id: str,
+) -> None:
+    """非 optional、无 fallback 的 block 若引用缺失环境变量，直接 ProfileError。
+
+    在未插值的 YAML 结构上检查：block.config 里字面 ${VAR} 命中缺失变量即报错，
+    避免空串配置带到运行期才暴露（baseUrl="" → 连接错误，排障绕远）。
+    """
+    if not missing_envs:
+        return
+
+    blocks_raw = raw_data.get("blocks") or {}
+    affected: list[str] = []
+    for category, block_data in blocks_raw.items():
+        if not isinstance(block_data, dict):
+            continue
+        if block_data.get("optional") or block_data.get("fallback"):
+            continue
+        cfg_text = str(block_data.get("config") or {})
+        for var in sorted(missing_envs):
+            if f"${{{var}}}" in cfg_text:
+                affected.append(f"  - blocks.{category}.config 引用 ${{{var}}}")
+                break
+
+    if affected:
+        raise ProfileError(
+            f"profile {profile_id!r} 引用了未设置的环境变量：\n"
+            + "\n".join(affected)
+            + "\n请在 .env 中设置（或 export 后重启服务）。"
+        )
 
 
 def list_profiles(profiles_dir: str | Path = "profiles") -> list[dict[str, Any]]:
