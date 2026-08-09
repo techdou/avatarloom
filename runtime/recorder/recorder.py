@@ -130,15 +130,16 @@ class RunRecorder:
                 # 非 Run 事件——跳过（session 级事件单独管理，v0.1 简化）
                 return
             state = self._active[run_id]
-            events_file = state.events_file
+
+            # 追加事件到 jsonl + 更新指标，都在锁内。
+            # 此前尝试把 write 移出锁外用 to_thread——但多个协程可能并发拿到同一
+            # events_file 句柄，to_thread 在不同线程并发 write 会导致行内容交错。
+            # 磁盘反压是性能问题（可接受），数据损坏是正确性问题（不可接受）。
+            state.events_file.write(line)
+            state.events_file.flush()
 
             # 更新指标（锁内——state 读改写需原子）
             self._update_metrics(state, event)
-
-        # 磁盘 write+flush 移出锁外——此前持锁同步写，慢磁盘会反压生产任务
-        # （含 TTS consumer，整链路卡死）。文件句柄的 write 是线程安全的（单写入者）。
-        await asyncio.to_thread(events_file.write, line)
-        await asyncio.to_thread(events_file.flush)
 
     def is_active(self, run_id: str) -> bool:
         """指定 Run 是否正在被记录（已 start_run，尚未 finalize）。

@@ -148,7 +148,9 @@ class Session:
                 state_event.payload.update(payload)
 
         # emit 和回调移出锁外——持锁期间 publish 遇 BLOCK 满队列会阻塞所有后续
-        # trigger（含打断路径）；回调里再调 try_trigger 会死锁（Lock 不可重入）
+        # trigger（含打断路径）；回调里再调 try_trigger 会死锁（Lock 不可重入）。
+        # trade-off：两个协程的 emit 可能乱序，但 state_event.sequence 严格递增，
+        # 下游需要严格保序时可按 sequence 排序。
         await self._emit_event(state_event)
 
         # 调状态回调
