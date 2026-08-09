@@ -1,3 +1,8 @@
+# ============================================================
+# AvatarLoom .gitignore
+# 原则：密钥/私密信息不泄漏、开发配置目录不上传、文档不入库。
+# ============================================================
+
 # ---- Python ----
 __pycache__/
 *.py[cod]
@@ -30,47 +35,62 @@ out/
 next-env.d.ts
 coverage/
 
-# ---- IDE / OS ----
+# ---- IDE / 编辑器 / OS ----
 .vscode/
 .idea/
-.zcode/
 *.swp
+*.swo
+*~
 .DS_Store
 Thumbs.db
+desktop.ini
 
-# ---- AvatarLoom runtime data ----
-# 注意：runs/ 与 artifacts/ 必须锚定到 data/ 下，否则会误伤
-# apps/studio/app/runs/ 和未来的 app/artifacts/ 路由目录。
+# ---- AI 开发工具与代理配置目录（不上传，避免内部状态/prompt 泄漏）----
+.zcode/
+.omx/
+.agents/
+.claude/
+.cursor/
+.aider*
+.continue/
+.windsurf/
+manifest.json
+prompts/
+
+# ---- 密钥与环境变量（绝不入库）----
+# .env 系列：本地配置含真实 API Key，只有 .env.example / .env.*.example 是模板可入库
+.env
+.env.local
+.env.*.local
+# 允许 example 模板入库（! 取反）
+!.env.example
+!.env.*.example
+# 密钥文件
+*.key
+*.pem
+*.cred
+*cred.json
+*.p12
+*.pfx
+# SSH / GPG
+.ssh/
+.gnupg/
+
+# ---- 运行时数据（不入库，运行时生成）----
+# runs/ 与 artifacts/ 锚定到 data/ 下，避免误伤 apps/studio/app/runs/ 路由目录
 data/
-data/runs/
-data/artifacts/
 *.db
 *.db-journal
 *.sqlite
 *.sqlite-journal
 alembic_versions_local/
 
-# ---- 环境变量 / 密钥 ----
-.env
-.env.local
-.env.*.local
-*.key
-*.pem
-*.cred
-*cred.json
+# ---- 文档（不入库，避免内部设计文档和开发状态泄漏）----
+# 所有 docs/ 下的文档仅本地维护，不纳入版本控制。
+# 面向用户的说明统一放项目根目录 README.md。
+docs/
 
-# ---- 开发工具与代理配置目录（不上传）----
-.omx/
-.agents/
-.claude/
-.cursor/
-.aider*
-
-# ---- 内部交接文档（不纳入版本控制，避免内部状态泄漏）----
-docs/*handover*.md
-docs/*交接*.md
-
-# ---- 模型与素材（不入库）----
+# ---- 模型与素材（不入库，体积大且含可识别信息）----
 models/
 assets/*/ref.*
 personas/*/voice/ref.wav
@@ -79,13 +99,15 @@ personas/*/avatar/idle.mp4
 !templates/persona-package/voice/.gitkeep
 !templates/persona-package/avatar/.gitkeep
 
-# ---- 构建产物 ----
+# ---- 构建产物 / 打包 ----
 *.zip
 *.tar.gz
+*.tar.bz2
 avatarloom-v*/
 
-# ---- 调试 / 临时 ----
+# ---- 调试 / 临时 / 缓存 ----
 *.log
 *.tmp
+*.bak
 .cache/
 vendor/
