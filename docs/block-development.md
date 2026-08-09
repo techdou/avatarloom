@@ -150,3 +150,14 @@ await ctx.emit(
 ```
 
 自定义事件类型用字符串——Block 的 manifest.inputs/outputs 声明订阅/产出的事件类型。
+
+## 核心约束（合并自原 01-架构与模块规范）
+
+1. Adapter 负责模型差异——Runtime 只依赖能力和事件协议，不 import 具体 Block。
+2. Block 必须可独立测试（纯逻辑 helper 提取为 staticmethod，不依赖 torch/httpx）。
+3. Block 必须支持超时和取消——`reset(session_id)` 是打断入口，必须真正停止进行中的流式输出（不能只清标志位）。
+4. Block 必须报告健康状态——`health()` 返回 BlockHealth。
+5. 重型依赖（torch/funasr/transformers 等）使用 optional extras 隔离，`uv sync` 不装 GPU 依赖也能跑 mock。
+6. 浏览器不能绕过 Runtime Gateway 直连模型——所有模型调用经 Block → EventBus → Gateway。
+7. Block 的可变状态（缓冲/缓存/计数器）必须是实例属性，不能挂类属性——多实例（fallback 重建/单测）共享类属性会串扰。
+8. persona 包内文件读取需校验路径不逃逸包根（`is_relative_to(root)`），防止路径遍历。

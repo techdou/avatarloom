@@ -15,7 +15,7 @@
 | `configs/assistant.yaml` | `profiles/*.yaml` | Block 声明式组合 |
 | `voxemw/pipeline/`（VAD/STT/TTS） | `blocks/vad|stt|tts/*` | 同栈：silero / SenseVoice / VoxCPM2 |
 | AVTR-1（TensorRT，0.2s 生成块） | `blocks/avatar/{musetalk,flashhead}` | 不同渲染路线 |
-| `voxemw/memory.py`（Mem0 内嵌） | `blocks/memory/`（stub，未实现） | 见 §4 借鉴点 |
+| `voxemw/memory.py`（Mem0 内嵌） | `blocks/memory/mem0_local.py`（已实现，Mem0 内嵌模式） | 见 §4.3 实现说明 |
 | Mem0：DeepSeek 抽取 + bge-m3 + 内嵌 Qdrant | — | 本地零服务依赖方案 |
 
 **上游实测延迟分解（RTX 4090D）**：VAD 端点 0.5s → STT 0.1s → LLM 首句 1.4s → TTS 首音 0.1s → 口型缓冲 0.35s，端到端 ~2.4s。
@@ -64,7 +64,7 @@
 - **落地草案**：base 只在显式 reset（interrupt/disconnect/新 run）后重锚；同一 run 内连播保持时钟连续。改 `PcmPlayer.enqueue` 自动锚逻辑 + hook 在新 run 边界显式控制。
 - **注意**：动核心同步逻辑，必须在 Mock + 真实链路双重验证后上，不要和 filler 同一天改。
 
-### 4.3 Memory block（Mem0 内嵌模式，`blocks/memory/` stub 的正解）
+### 4.3 Memory block（Mem0 内嵌模式）✅ 已实现
 
 - **上游模板**（`voxemw/memory.py`，可直接照抄架构）：
   - Mem0 Python SDK **内嵌模式**（零独立服务）；DeepSeek 做事实抽取（temperature 0）；`bge-m3` 本地 embedding；**内嵌 Qdrant 文件存储**（`data/memory`）。
@@ -72,6 +72,7 @@
   - **写**：`response.done` 后 `asyncio.to_thread` 异步抽取——**不占语音延迟**。
   - **降级**：disabled/无 key/初始化异常 → `None` 静默跳过，对话链路零影响。
 - **落地位置**：`blocks/memory/mem0_local.py` + orchestrator 在 run 边界调写、session 边界调读。
+- **实际效果（2026-08-09）**：已按上游模板落地 `mem0_local.py`，session 开始注入历史记忆、回复后异步抽取，初始化/无 key 时静默降级，对话链路零额外延迟。原"`blocks/memory/` stub"在本文档的其他历史描述以本节为准。
 
 ### 4.4 上游升级回归方法（`docs/upgrade-regression.md`）
 

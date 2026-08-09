@@ -1,6 +1,10 @@
 # AvatarLoom Studio — UI/UX 优化规格
 
-> **状态（2026-08-06 回填）**：本文 P0 批已全部实施、P1 大部实施，落地提交见 `docs/11-studio-frontend-architecture.md` §10。状态机重构以 11 号文 §3 为准（按联动性分组，非全量 useReducer）。逐页细节差异以代码为准。
+> **状态（2026-08-09 更新）**：
+> - **§2 设计令牌 + §3 组件契约 + §4 逐页清单**：✅ 仍有效，作为规格参考。
+> - **§1 当前状态诊断 + §5 反 AI-slop + §6 架构问题 + §7 优先级**：⚠️ 历史快照（改造前诊断）。这些问题已在 `docs/11-studio-frontend-architecture.md` §10 记录的批次 0-7 中修复。阅读这些章节时请对照 doc11 确认当前状态。
+> - **实施记录**：见 `docs/11-studio-frontend-architecture.md` §10。
+> - **最新前端修复**（2026-08-09 review）：WS stale socket 防护、AudioContext 重连泄漏修复、麦克风 start/stop 竞态修复、SDK 类型 snake_case 修正、showcase 重试层统一、React.memo 优化。详见 `docs/14-review-remediation-log.md`。
 
 > **目标读者**:下一位接手改 Studio 前端的开发者。拿到这份文档,应当能直接照着改设计令牌、组件、页面,不再猜。
 >

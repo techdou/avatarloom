@@ -215,7 +215,7 @@ PlaygroundClient          orchestration only（状态接线，无视觉细节）
 |---|---|
 | `docs/08-studio-ui-spec.md` | 视觉规格（色值/组件状态/逐页清单）。本文生效后，08 的 P0 批（令牌收尾、EmptyState/ErrorBanner、page-header 统一）视为已实施；P1-1 状态机重构以本文 §3 为准（分组而非全量 useReducer）。 |
 | `docs/02-事件协议状态机与音画同步.md` | WS 协议与音画同步的权威定义（含浏览器↔Gateway 通道协议章节，AL-P1-001 后已补录），本文 §2.2 是它的前端投影。 |
-| `docs/10-handover-maintenance-next-agent.md` | 后端协议债（AL-P1-001/002）修复时，前端需同步：上行 PCM 加 0x00 tag、vision 结果区分工具消息与正式回复。 |
+| `docs/10-handover-maintenance-next-agent.md` | 已同步：上行 PCM 加了 0x00 tag（AL-P1-001 已修）；vision 结果区分工具消息与正式回复（AL-P1-002）待同步。 |
 
 ---
 
@@ -239,5 +239,6 @@ PlaygroundClient          orchestration only（状态接线，无视觉细节）
 | 4 | settings 当前活动卡、YAML 迁移、personas/avatars/profiles/dashboard 视觉、runs/[id] MessageBubble 复用 | `cf9777f` |
 | 5 | /show 断线自动重试 + ContextBar 复制演示链接（clipboard 降级） | `e304b33` |
 | 6 | recorder.getLevel() + 音量波形条 + WS 非主动断线自动重连 + 空格切麦 | `c76bde3` |
+| 7（2026-08-09） | showcase 重试层删除（统一归 hook 逻辑）+ 展示组件 React.memo 优化重渲染 | — |
 
 每批次门禁均通过：`tsc --noEmit`、`vitest --run`（21 项）、`next build`。

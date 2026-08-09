@@ -37,6 +37,8 @@ Control API（apps/control-api，:8100，REST）
 
 浏览器**只连 Runtime Gateway**——Control API 的数据通过 Gateway 代理或 Studio 服务端调用。
 
+> **部署安全**：三服务默认绑 `127.0.0.1`（docker-compose 端口映射也绑 127.0.0.1）。未设 `AVATARLOOM_API_TOKEN` 时鉴权关闭——仅适合本地 dev。生产/隧道场景务必设 token。详见 `docs/deployment.md`。
+
 ## 核心抽象
 
 ### Block
@@ -61,7 +63,14 @@ class Block(abc.ABC):
 IDLE → LISTENING → TRANSCRIBING → THINKING → SPEAKING → IDLE
                        ↑              ↓            ↓
                      INTERRUPTING ←────────────── 用户打断
+                                                    ↓
+                       ┌────────── ERROR ←── 任意状态（致命错误）
+                       ↓
+                     CLOSED ←── session_closed
 ```
+
+- INTERRUPTING 是瞬态：打断完成后转 LISTENING（用户在说话）或 IDLE
+- ERROR/CLOSED 是终态，详见 `docs/02-事件协议状态机与音画同步.md`
 
 非法转换 raise `IllegalTransitionError`——不用散落布尔变量。
 

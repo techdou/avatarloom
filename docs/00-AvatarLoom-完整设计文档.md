@@ -5,6 +5,8 @@
 默认仓库名：`avatarloom`  
 许可证建议：Apache-2.0
 
+> 更新：2026-08-09（全量 review 后同步）
+
 ## 1. 项目定义
 
 AvatarLoom 是一个通过标准化积木模块搭建、编排、运行和管理实时 AI 数字人的开源平台。
@@ -109,7 +111,7 @@ Runtime 不得写死 DeepSeek、OpenAI 或其他提供商。
 
 - `tts.mock`
 - `tts.openai-compatible`
-- `tts.qwen3`
+- `tts.qwen3`（当前实现非真流式，整段合成后切片下发；manifest 已声明 `streaming=False`）
 - 预留 `tts.cosyvoice`、`tts.voxcpm2`、`tts.mlx-remote`
 
 ### Avatar
@@ -117,7 +119,7 @@ Runtime 不得写死 DeepSeek、OpenAI 或其他提供商。
 - `avatar.mock`
 - `avatar.static`
 - `avatar.musetalk` 或 `avatar.livetalking`
-- 预留 `avatar.flashhead`
+- `avatar.flashhead`（已实现）
 
 ### Vision
 
