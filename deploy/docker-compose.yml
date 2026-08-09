@@ -5,10 +5,9 @@
 #   docker compose -f deploy/docker-compose.yml up          # 启动
 #   docker compose -f deploy/docker-compose.yml down        # 停止
 #
-# 默认即是 Mock Profile（AVATARLOOM_DEFAULT_PROFILE=mock）——不依赖 GPU/API Key，
-# `docker compose up` 起来就能在 Studio 里对话。
-# 真实 GPU 模式：取消注释文末 deploy.resources，并把 AVATARLOOM_DEFAULT_PROFILE
-# 改成 profiles/ 里的真实档位（如 autodl-best），另需按 .env.example 配 LLM_API_KEY。
+# 默认真实链路（AVATARLOOM_DEFAULT_PROFILE=lite-12gb）——需要 12GB GPU + LLM_API_KEY。
+# 无 GPU 演示：AVATARLOOM_DEFAULT_PROFILE=mock docker compose up
+# 真实档位切换：改 AVATARLOOM_DEFAULT_PROFILE 为 profiles/ 里的其他档位（如 autodl-best）。
 #
 # 鉴权（可选）：在 compose 旁的 .env 或 shell 里设 AVATARLOOM_API_TOKEN=<随机串>，
 # control-api 全端点启用 Bearer 校验，gateway 自动带同一 token 调 control-api。
@@ -58,8 +57,9 @@ services:
       - AVATARLOOM_CONTROL_API_TOKEN=${AVATARLOOM_API_TOKEN:-}
       # WS 入口鉴权（gateway 自身校验 /ws/realtime 用的同一套 token，留空=关闭）。
       - AVATARLOOM_API_TOKEN=${AVATARLOOM_API_TOKEN:-}
-      # 默认 Mock 链路——无 GPU 无 Key 也能跑通全链路。
-      - AVATARLOOM_DEFAULT_PROFILE=${AVATARLOOM_DEFAULT_PROFILE:-mock}
+      # 默认真实链路（lite-12gb）——需要 12GB GPU + LLM_API_KEY。
+      # 无 GPU 环境降级：AVATARLOOM_DEFAULT_PROFILE=mock docker compose up
+      - AVATARLOOM_DEFAULT_PROFILE=${AVATARLOOM_DEFAULT_PROFILE:-lite-12gb}
       # 真实 Adapter 用——从 compose 旁的 .env 读
       - LLM_API_KEY=${LLM_API_KEY:-}
       - LLM_BASE_URL=${LLM_BASE_URL:-https://api.openai.com/v1}

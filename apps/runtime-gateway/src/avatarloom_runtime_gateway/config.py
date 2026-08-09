@@ -65,9 +65,9 @@ class Settings(BaseSettings):
     artifacts_root: str = "./data/artifacts"
     runs_root: str = "./data/runs"
 
-    # 默认 Profile（未指定时）——mock 不依赖 GPU/API Key，首次启动即可跑通；
-    # 真实档位（autodl-best 等）在 .env 显式设 AVATARLOOM_DEFAULT_PROFILE。
-    default_profile: str = "mock"
+    # 默认 Profile（未指定时）——lite-12gb 是真实后端（VAD/STT/TTS/Avatar 均用真 adapter），
+    # mock 仅作无 GPU 时的降级，需显式设 AVATARLOOM_DEFAULT_PROFILE=mock 才走假链路。
+    default_profile: str = "lite-12gb"
 
     # 日志
     log_level: str = "INFO"

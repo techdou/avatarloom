@@ -14,7 +14,7 @@ AvatarLoom 将 VAD、STT、LLM、TTS、Avatar、Vision、Memory、Persona 等能
 - **长期记忆**：Mem0 内嵌记忆（本地向量库，可选启用，默认关闭）
 - **Persona 一体**：人设/音色/形象/垫音/记忆按包切换
 - **降级容错**：Block 失败走 fallback 链路降级并显式记录，不静默
-- **Mock 永远可跑**：不依赖 GPU/Docker/API Key 的完整开发回归链路
+- **Mock 永远可跑**：无 GPU/Docker/API Key 时降级到 mock，仍能跑通完整开发回归链路
 - **可观测**：每轮 Run 落盘事件流、首字/首音/首帧延迟、降级路径与产物
 
 ## 架构总览
@@ -62,10 +62,10 @@ pnpm install
 uv run python scripts/doctor.py
 ```
 
-### 运行 Mock 全链路
+### 运行真实链路（默认）
 
 ```bash
-# 一键冒烟（不起服务，直接跑 Mock 链路）
+# 一键冒烟（不起服务，直接跑真实链路）
 uv run python scripts/smoke_mock.py
 
 # 启动三服务（Control API + Runtime Gateway + Studio）
@@ -75,7 +75,13 @@ make dev
 #   本地：http://127.0.0.1:3000/playground
 ```
 
-### 配置真实 Adapter（可选）
+默认档位 `lite-12gb` 需要 12GB GPU + `LLM_API_KEY`。无 GPU 环境降级到 mock：
+
+```bash
+AVATARLOOM_DEFAULT_PROFILE=mock make dev
+```
+
+### 配置真实 Adapter
 
 ```bash
 cp .env.example .env   # 填入 LLM/STT/TTS/Vision 任一路 API Key
@@ -87,10 +93,11 @@ cp .env.example .env   # 填入 LLM/STT/TTS/Vision 任一路 API Key
 
 | Profile | 说明 |
 |---|---|
-| `mock` | 纯 Mock，无 GPU/API Key，默认推荐 |
-| `lite-12gb` | 12GB GPU 单机 |
+| `lite-12gb` | 12GB GPU 单机，**默认档位**（真实后端） |
+| `mock` | 纯 Mock，无 GPU/API Key，降级用 |
 | `distributed` | 分布式（CPU STT + Remote LLM + Mac MLX TTS + NVIDIA Avatar） |
 | `full-24gb` | 24GB+ GPU 全量 |
+| `autodl-best` | AutoDL 云 GPU 最佳实践档 |
 
 ## 配置与安全
 
