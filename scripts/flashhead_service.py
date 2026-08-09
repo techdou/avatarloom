@@ -34,6 +34,7 @@ import sys
 import threading
 from collections import deque
 from pathlib import Path
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
@@ -99,13 +100,13 @@ class AvatarEngine:
         self._cond = threading.Condition()
         self._closed = False
         self._reset_motion = False
-        self._pending_image = None
+        self._pending_image: str | None = None
         self._inference_error: str | None = None
         # 门控状态（对齐 VoxEMW service.py）：说话期间禁 idle 生成，
         # 句间停顿 pending 排空时插入 idle 帧会被前端直画卡画面
         self._speech_active = False
         self._idle_mode = "calm"  # listening|thinking|calm（决定待机驱动）
-        self.on_frames = None  # 单客户端设计：ws 连接建立时接管帧流
+        self.on_frames: Any = None  # 单客户端设计：ws 连接建立时接管帧流
 
     def _new_audio_dq(self):
         self.audio_dq = deque(
@@ -171,62 +172,17 @@ class AvatarEngine:
         last_idle_at = 0.0
         while True:
             try:
-                with self._cond:
-                    is_idle = False
-                    while not self._closed and len(self._pending) < CHUNK_SAMPLES:
-                        # 无音频：非 speech_active 且 idle 节流到期 → 产 idle 帧。
-                        # _reset_motion/_pending_image 不挡 idle——它们会在下方
-                        # 公共路径被消费（reset 归位/换肖像），否则 reset 后无音频
-                        # 时 idle 分支被永久挡住导致停帧。
-                        if not self._speech_active:
-                            now = _time.monotonic()
-                            wait = last_idle_at + chunk_seconds - now
-                            # 进入 idle 评估即刷新基准：被音频唤醒后不会因旧基准立即重产
-                            last_idle_at = now
-                            if wait <= 0:
-                                is_idle = True
-                                break
-                            self._cond.wait(timeout=wait)
-                            continue
-                        notified = self._cond.wait(timeout=0.5)
-                        if not notified and len(self._pending) > 0:
-                            break  # 静默超时：句尾尾牙零填充生成
-                    if self._closed:
-                        return
-                    if is_idle:
-                        # idle 帧：静音驱动（不抄 murmur——已弃用），
-                        # 保持运动上下文，不做 reset 归位
-                        chunk = np.zeros(CHUNK_SAMPLES, dtype=np.float32)
-                    else:
-                        chunk = self._pending[:CHUNK_SAMPLES]
-                        self._pending = self._pending[CHUNK_SAMPLES:]
-                        if len(chunk) < CHUNK_SAMPLES:
-                            chunk = np.pad(chunk, (0, CHUNK_SAMPLES - len(chunk)))
-                    if self._reset_motion:
-                        self._new_audio_dq()
-                        self.pipeline.reset_person_name()
-                        self._reset_motion = False
-                    if self._pending_image:
-                        from flash_head.inference import get_base_data
-
-                        logger.info("切换数字人肖像: %s", self._pending_image)
-                        get_base_data(
-                            self.pipeline,
-                            cond_image_path_or_dir=self._pending_image,
-                            base_seed=self.seed,
-                            use_face_crop=True,
-                        )
-                        self._new_audio_dq()
-                        self._pending_image = None
-                self.audio_dq.extend(chunk.tolist())
-                emb = get_audio_embedding(
-                    self.pipeline,
-                    np.array(self.audio_dq),
-                    AUDIO_START_IDX,
-                    AUDIO_END_IDX,
+                next_chunk = self._next_audio_chunk(
+                    last_idle_at,
+                    chunk_seconds,
+                    _time.monotonic,
+                    np,
                 )
-                video = run_pipeline(self.pipeline, emb)
-                frames = video[MOTION_FRAMES_NUM:].cpu().numpy().astype("uint8")
+                if next_chunk is None:
+                    return
+                chunk, is_idle, last_idle_at = next_chunk
+                self.audio_dq.extend(chunk.tolist())
+                frames = self._render_frames(chunk, np, get_audio_embedding, run_pipeline)
                 on_frames(frames, is_idle)
             except Exception as e:
                 logger.exception("flashhead inference loop crashed")
@@ -237,6 +193,84 @@ class AvatarEngine:
                     self._inference_error = repr(e)
                     self._cond.notify_all()
                 return
+
+    def _next_audio_chunk(self, last_idle_at: float, chunk_seconds: float, monotonic, np):
+        with self._cond:
+            is_idle = False
+            while not self._closed and len(self._pending) < CHUNK_SAMPLES:
+                is_idle, should_break, last_idle_at = self._wait_for_pending_audio(
+                    last_idle_at,
+                    chunk_seconds,
+                    monotonic,
+                )
+                if should_break:
+                    break
+            if self._closed:
+                return None
+            chunk = self._idle_or_pending_chunk(is_idle, np)
+            self._apply_pending_controls()
+        return chunk, is_idle, last_idle_at
+
+    def _wait_for_pending_audio(
+        self,
+        last_idle_at: float,
+        chunk_seconds: float,
+        monotonic,
+    ) -> tuple[bool, bool, float]:
+        if not self._speech_active:
+            now = monotonic()
+            wait = last_idle_at + chunk_seconds - now
+            # 进入 idle 评估即刷新基准：被音频唤醒后不会因旧基准立即重产
+            last_idle_at = now
+            if wait <= 0:
+                return True, True, last_idle_at
+            self._cond.wait(timeout=wait)
+            return False, False, last_idle_at
+        notified = self._cond.wait(timeout=0.5)
+        # 静默超时且缓冲有残留：句尾尾牙零填充生成
+        return False, not notified and len(self._pending) > 0, last_idle_at
+
+    def _idle_or_pending_chunk(self, is_idle: bool, np):
+        if is_idle:
+            # idle 帧：静音驱动（不抄 murmur——已弃用），
+            # 保持运动上下文，不做 reset 归位
+            return np.zeros(CHUNK_SAMPLES, dtype=np.float32)
+        chunk = self._pending[:CHUNK_SAMPLES]
+        self._pending = self._pending[CHUNK_SAMPLES:]
+        if len(chunk) < CHUNK_SAMPLES:
+            chunk = np.pad(chunk, (0, CHUNK_SAMPLES - len(chunk)))
+        return chunk
+
+    def _apply_pending_controls(self) -> None:
+        if self._reset_motion:
+            self._new_audio_dq()
+            self.pipeline.reset_person_name()
+            self._reset_motion = False
+        if self._pending_image:
+            self._apply_pending_image()
+
+    def _apply_pending_image(self) -> None:
+        from flash_head.inference import get_base_data
+
+        logger.info("切换数字人肖像: %s", self._pending_image)
+        get_base_data(
+            self.pipeline,
+            cond_image_path_or_dir=self._pending_image,
+            base_seed=self.seed,
+            use_face_crop=True,
+        )
+        self._new_audio_dq()
+        self._pending_image = None
+
+    def _render_frames(self, chunk, np, get_audio_embedding, run_pipeline):
+        emb = get_audio_embedding(
+            self.pipeline,
+            np.array(self.audio_dq),
+            AUDIO_START_IDX,
+            AUDIO_END_IDX,
+        )
+        video = run_pipeline(self.pipeline, emb)
+        return video[MOTION_FRAMES_NUM:].cpu().numpy().astype("uint8")
 
     def warmup(self, on_frames, timeout: float = 300.0) -> None:
         import numpy as np
@@ -283,22 +317,12 @@ async def _serve(ws, engine: AvatarEngine, jpeg_quality: int) -> None:
     """单个 orchestrator 连接：收音频/控制消息，推 JPEG 帧。"""
     import queue as _queue
 
-    import numpy as np
-
     loop = asyncio.get_running_loop()
     out_queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=TGT_FPS * 4)
     raw_queue: _queue.Queue = _queue.Queue(maxsize=TGT_FPS * 2)
 
     def on_frames(frames, is_idle: bool = False) -> None:
-        # 推理线程只入队原始帧（满则丢最旧）；JPEG 编码在专用线程，
-        # 避免每 chunk 24 帧的编码耗时（q85 约 0.2-0.3s）阻塞下一个 chunk 生成。
-        # 每帧带 tag：0x00=idle（待机微动，前端直画）、0x01=speech（进口型队列）
-        tag = FRAME_TAG_IDLE if is_idle else FRAME_TAG_SPEECH
-        for frame in frames:
-            if raw_queue.full():
-                with contextlib.suppress(_queue.Empty):
-                    raw_queue.get_nowait()
-            raw_queue.put_nowait((tag, frame))
+        _queue_frames(raw_queue, frames, is_idle)
 
     def _encoder() -> None:
         while True:
@@ -324,40 +348,61 @@ async def _serve(ws, engine: AvatarEngine, jpeg_quality: int) -> None:
     await ws.send(json.dumps({"type": "ready"}))
     try:
         async for message in ws:
-            if not isinstance(message, str):
-                continue
-            try:
-                event = json.loads(message)
-            except json.JSONDecodeError:
-                continue
-            etype = event.get("type")
-            if etype == "audio":
-                pcm_b64 = event.get("pcm", "")
-                try:
-                    pcm_raw = base64.b64decode(pcm_b64, validate=True)
-                except (binascii.Error, ValueError) as e:
-                    # 畸形 base64：回 error 让客户端知道原因，再跳过本帧
-                    # （此前裸 b64decode 抛错会冒泡到 _serve 外层直接断连，
-                    # 客户端只看到连接关闭，不知道是数据格式问题）
-                    logger.warning("invalid base64 audio frame, skipped: %s", e)
-                    await ws.send(json.dumps({
-                        "type": "error",
-                        "message": "invalid base64",
-                    }))
-                    continue
-                pcm = np.frombuffer(pcm_raw, dtype=np.int16)
-                engine.feed_audio(pcm.astype(np.float32) / 32768.0)
-            elif etype == "reset":
-                engine.reset()
-            elif etype == "set_image":
-                engine.set_image(event["path"])
-            elif etype == "speech_active":
-                engine.set_speech_active(bool(event.get("on", False)))
-            elif etype == "idle_mode":
-                engine.set_idle_mode(str(event.get("mode", "calm")))
+            await _handle_ws_message(ws, engine, message)
     finally:
         send_task.cancel()
         engine.on_frames = None
+
+
+def _queue_frames(raw_queue, frames, is_idle: bool) -> None:
+    import queue as _queue
+
+    # 推理线程只入队原始帧（满则丢最旧）；JPEG 编码在专用线程，
+    # 避免每 chunk 24 帧的编码耗时（q85 约 0.2-0.3s）阻塞下一个 chunk 生成。
+    # 每帧带 tag：0x00=idle（待机微动，前端直画）、0x01=speech（进口型队列）
+    tag = FRAME_TAG_IDLE if is_idle else FRAME_TAG_SPEECH
+    for frame in frames:
+        if raw_queue.full():
+            with contextlib.suppress(_queue.Empty):
+                raw_queue.get_nowait()
+        raw_queue.put_nowait((tag, frame))
+
+
+async def _handle_ws_message(ws, engine: AvatarEngine, message) -> None:
+    if not isinstance(message, str):
+        return
+    try:
+        event = json.loads(message)
+    except json.JSONDecodeError:
+        return
+    etype = event.get("type")
+    if etype == "audio":
+        await _handle_audio_message(ws, engine, event)
+    elif etype == "reset":
+        engine.reset()
+    elif etype == "set_image":
+        engine.set_image(event["path"])
+    elif etype == "speech_active":
+        engine.set_speech_active(bool(event.get("on", False)))
+    elif etype == "idle_mode":
+        engine.set_idle_mode(str(event.get("mode", "calm")))
+
+
+async def _handle_audio_message(ws, engine: AvatarEngine, event: dict) -> None:
+    import numpy as np
+
+    pcm_b64 = event.get("pcm", "")
+    try:
+        pcm_raw = base64.b64decode(pcm_b64, validate=True)
+    except (binascii.Error, ValueError) as e:
+        # 畸形 base64：回 error 让客户端知道原因，再跳过本帧
+        # （此前裸 b64decode 抛错会冒泡到 _serve 外层直接断连，
+        # 客户端只看到连接关闭，不知道是数据格式问题）
+        logger.warning("invalid base64 audio frame, skipped: %s", e)
+        await ws.send(json.dumps({"type": "error", "message": "invalid base64"}))
+        return
+    pcm = np.frombuffer(pcm_raw, dtype=np.int16)
+    engine.feed_audio(pcm.astype(np.float32) / 32768.0)
 
 
 def main() -> None:

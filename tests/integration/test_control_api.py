@@ -5,7 +5,9 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import pytest
 from avatarloom_control_api.app import create_app
@@ -163,6 +165,120 @@ class TestProfilesCRUD:
         assert r.status_code == 201
         r = await client.get("/api/profiles/mock")
         assert r.json()["blocks"]["vad"]["id"] == "vad.mock"
+
+    async def test_crud_writes_runtime_yaml_mirror(
+        self, client: AsyncClient, tmp_path: Path
+    ) -> None:
+        payload = {
+            "id": "editable",
+            "name": "Editable",
+            "blocks": {"vad": {"id": "vad.mock", "deployment": "mock"}},
+            "sync": {"audioDelayMs": 100, "_session": {"mode": "single"}},
+        }
+        assert (await client.post("/api/profiles", json=payload)).status_code == 201
+        mirror = tmp_path / "profiles" / "editable.yaml"
+        assert mirror.exists()
+        text = mirror.read_text(encoding="utf-8")
+        assert "audioDelayMs: 100" in text
+        assert "mode: single" in text
+        response = await client.patch("/api/profiles/editable", json={"sync": {}})
+        assert response.status_code == 200
+        assert response.json()["sync"] == {"_session": {"mode": "single"}}
+        assert "mode: single" in mirror.read_text(encoding="utf-8")
+        assert (await client.delete("/api/profiles/editable")).status_code == 200
+        assert not mirror.exists()
+
+
+class TestRuntimeCatalogIndex:
+    async def test_startup_seeds_repository_profile_and_persona(self, tmp_path: Path) -> None:
+        profiles = tmp_path / "profiles"
+        profiles.mkdir()
+        (profiles / "seeded.yaml").write_text(
+            """apiVersion: avatarloom.io/v1alpha1
+kind: RuntimeProfile
+metadata:
+  id: seeded
+  name: Seeded Profile
+blocks:
+  vad: {id: vad.mock, deployment: mock}
+session: {mode: single}
+""",
+            encoding="utf-8",
+        )
+        persona_dir = tmp_path / "personas" / "seeded-persona"
+        persona_dir.mkdir(parents=True)
+        (persona_dir / "persona.yaml").write_text(
+            """apiVersion: avatarloom.io/v1alpha1
+kind: PersonaPackage
+metadata: {id: seeded-persona, name: Seeded Persona}
+prompt: {file: persona.md}
+""",
+            encoding="utf-8",
+        )
+        (persona_dir / "persona.md").write_text("System prompt", encoding="utf-8")
+        app = create_app(
+            Settings(
+                db_url=f"sqlite+aiosqlite:///{tmp_path / 'seed.db'}",
+                workspace_root=str(tmp_path),
+                artifacts_root=str(tmp_path / "artifacts"),
+                runs_root=str(tmp_path / "runs"),
+                auth_disabled=True,
+            )
+        )
+        transport = ASGITransport(app=app)
+        async with (
+            AsyncClient(transport=transport, base_url="http://test") as seeded_client,
+            app.router.lifespan_context(app),
+        ):
+            profile = (await seeded_client.get("/api/profiles/seeded")).json()
+            assert profile["sync"]["_session"] == {"mode": "single"}
+            persona = (await seeded_client.get("/api/personas/seeded-persona")).json()
+            assert persona["prompt"] == "System prompt"
+
+    async def test_run_recorder_files_feed_runs_and_sessions(
+        self, client: AsyncClient, tmp_path: Path
+    ) -> None:
+        run_dir = tmp_path / "runs" / "run_file_1"
+        run_dir.mkdir(parents=True)
+        (run_dir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "run_id": "run_file_1",
+                    "session_id": "ses_file_1",
+                    "profile_id": "mock",
+                    "persona_id": "demo",
+                    "started_at_ms": 1_700_000_000_000,
+                }
+            ),
+            encoding="utf-8",
+        )
+        (run_dir / "metrics.json").write_text(
+            json.dumps(
+                {
+                    "run_id": "run_file_1",
+                    "session_id": "ses_file_1",
+                    "profile_id": "mock",
+                    "started_at_ms": 1_700_000_000_000,
+                    "ended_at_ms": 1_700_000_001_000,
+                    "status": "completed",
+                }
+            ),
+            encoding="utf-8",
+        )
+        (run_dir / "transcript.json").write_text(
+            json.dumps({"user": "你好", "assistant": "你好！"}), encoding="utf-8"
+        )
+
+        runs = (await client.get("/api/runs")).json()
+        assert runs[0]["id"] == "run_file_1"
+        assert runs[0]["user_text"] == "你好"
+        sessions = (await client.get("/api/sessions")).json()
+        assert sessions[0]["id"] == "ses_file_1"
+        assert sessions[0]["status"] == "closed"
+
+        # 文件索引端点必须拒绝可逃逸 runs_root 的资源 id。
+        assert (await client.get("/api/runs/..%2Foutside")).status_code in {404, 422}
+        assert (await client.get("/api/sessions/..%2Foutside")).status_code in {404, 422}
 
 
 class TestSecretsCRUD:

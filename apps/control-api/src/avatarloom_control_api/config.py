@@ -48,10 +48,10 @@ class Settings(BaseSettings):
     artifacts_root: str = "./data/artifacts"
     runs_root: str = "./data/runs"
 
-    # 鉴权：留空（默认）→ 鉴权关闭（开发模式）；填值 → 所有端点要求 Bearer token
+    # 鉴权：token 非空时要求 Bearer；token 为空时必须显式 auth_disabled=True 才放行。
     api_token: str = Field(
         default="",
-        description="Bearer token required by all endpoints when set; empty disables auth.",
+        description="Bearer token required by all endpoints when set; empty remains fail-closed unless auth_disabled.",
     )
     # 显式开发模式开关：api_token 为空且 auth_disabled=False（默认）时 fail-closed（401），
     # 防止生产漏配 token 直接裸奔；本地开发需显式设置 AVATARLOOM_AUTH_DISABLED=1。

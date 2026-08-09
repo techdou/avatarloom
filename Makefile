@@ -64,7 +64,10 @@ build: ## 构建 Studio 生产版本 + SDK
 	$(PNPM) build
 
 docker: ## Docker Compose 配置校验
-	docker compose -f deploy/docker-compose.yml config > /dev/null && echo "✓ docker-compose.yml 配置有效"
+	docker compose -f deploy/docker-compose.yml config > /dev/null
+	docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.gpu.yml config > /dev/null
+	docker compose -f deploy/docker/docker-compose.yml config > /dev/null
+	@echo "✓ default / gpu / legacy compose 配置有效"
 
 clean: ## 清理构建产物和缓存
 	rm -rf .next node_modules/.cache .pytest_cache .mypy_cache .ruff_cache

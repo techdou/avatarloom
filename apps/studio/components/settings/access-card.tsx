@@ -4,6 +4,11 @@ import { useEffect, useState } from "react";
 import { Link2 } from "lucide-react";
 import { useToast } from "@/components/ui/toast";
 import { computeWsUrl } from "@/hooks/use-realtime-session";
+import {
+  DEFAULT_PERSONA_ID,
+  DEFAULT_PROFILE_ID,
+  RUNTIME_CONTEXT_STORAGE,
+} from "@/lib/runtime-context";
 
 /**
  * 访问入口卡——当前页面地址、WS 目标、演示链接复制。
@@ -22,11 +27,11 @@ export function AccessCard() {
   }, []);
 
   const copyShowLink = () => {
-    let persona = "demo-assistant";
-    let profile = "mock";
+    let persona = DEFAULT_PERSONA_ID;
+    let profile = DEFAULT_PROFILE_ID;
     try {
-      persona = localStorage.getItem("al.persona") || persona;
-      profile = localStorage.getItem("al.profile") || profile;
+      persona = localStorage.getItem(RUNTIME_CONTEXT_STORAGE.persona) || persona;
+      profile = localStorage.getItem(RUNTIME_CONTEXT_STORAGE.profile) || profile;
     } catch {
       /* ignore */
     }

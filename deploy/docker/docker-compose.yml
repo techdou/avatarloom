@@ -1,9 +1,11 @@
 name: avatarloom
 
+# Backward-compatible compose entrypoint. Prefer ../docker-compose.yml for new deployments.
+
 services:
   control-api:
     build:
-      context: ..
+      context: ../..
       dockerfile: deploy/docker/Dockerfile.control-api
     ports:
       - "8100:8100"
@@ -11,7 +13,8 @@ services:
       AVATARLOOM_HOST: "0.0.0.0"
       AVATARLOOM_CONTROL_API_PORT: "8100"
       AVATARLOOM_API_TOKEN: "${AVATARLOOM_API_TOKEN:-}"
-      AVATARLOOM_AUTH_DISABLED: "${AVATARLOOM_AUTH_DISABLED:-0}"
+      AVATARLOOM_AUTH_DISABLED: "${AVATARLOOM_AUTH_DISABLED:-1}"
+      AVATARLOOM_WORKSPACE_ROOT: "/app"
       AVATARLOOM_DB_URL: "sqlite+aiosqlite:////app/data/avatarloom.db"
       AVATARLOOM_ARTIFACTS_ROOT: "/app/data/artifacts"
       AVATARLOOM_RUNS_ROOT: "/app/data/runs"
@@ -21,7 +24,7 @@ services:
 
   runtime-gateway:
     build:
-      context: ..
+      context: ../..
       dockerfile: deploy/docker/Dockerfile.runtime-gateway
     ports:
       - "8101:8101"
@@ -29,9 +32,11 @@ services:
       AVATARLOOM_HOST: "0.0.0.0"
       AVATARLOOM_RUNTIME_GATEWAY_PORT: "8101"
       AVATARLOOM_API_TOKEN: "${AVATARLOOM_API_TOKEN:-}"
-      AVATARLOOM_AUTH_DISABLED: "${AVATARLOOM_AUTH_DISABLED:-0}"
-      AVATARLOOM_CONTROL_API_TOKEN: "${AVATARLOOM_CONTROL_API_TOKEN:-}"
+      AVATARLOOM_AUTH_DISABLED: "${AVATARLOOM_AUTH_DISABLED:-1}"
+      AVATARLOOM_CONTROL_API_TOKEN: "${AVATARLOOM_API_TOKEN:-}"
       AVATARLOOM_CONTROL_API_URL: "http://control-api:8100"
+      AVATARLOOM_WORKSPACE_ROOT: "/app"
+      AVATARLOOM_DEFAULT_PROFILE: "${AVATARLOOM_DEFAULT_PROFILE:-mock}"
       AVATARLOOM_SELF_RESTART: "${AVATARLOOM_SELF_RESTART:-1}"
       AVATARLOOM_ARTIFACTS_ROOT: "/app/data/artifacts"
       AVATARLOOM_RUNS_ROOT: "/app/data/runs"
@@ -43,15 +48,16 @@ services:
 
   studio:
     build:
-      context: ..
+      context: ../..
       dockerfile: deploy/docker/Dockerfile.studio
-      args:
-        # 单用户隧道共享密钥模型；多用户部署请改运行时注入（见 use-realtime-session.ts 注释）
-        NEXT_PUBLIC_WS_TOKEN: "${AVATARLOOM_API_TOKEN:-}"
     ports:
       - "3000:3000"
     environment:
       PORT: "3000"
+      CONTROL_API_BASE: "http://control-api:8100/api"
+      RUNTIME_GATEWAY_BASE: "http://runtime-gateway:8101/api"
+      AVATARLOOM_API_TOKEN: "${AVATARLOOM_API_TOKEN:-}"
+      AVATARLOOM_AUTH_DISABLED: "${AVATARLOOM_AUTH_DISABLED:-1}"
     depends_on:
       - runtime-gateway
     restart: unless-stopped

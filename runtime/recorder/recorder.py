@@ -16,7 +16,7 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from avatarloom_protocol import (
     ARTIFACT_CREATED,
@@ -29,7 +29,6 @@ from avatarloom_protocol import (
     RESPONSE_INTERRUPTED,
     SESSION_STATE_CHANGED,
     TRANSCRIPT_COMPLETED,
-    TTS_AUDIO_COMPLETED,
     TTS_AUDIO_DELTA,
     Event,
 )
@@ -47,12 +46,71 @@ class RunRecorder:
     但 finalize 可能异步——用锁保护文件写入。
     """
 
+    _METRIC_HANDLERS: ClassVar[dict[str, str]] = {
+        TRANSCRIPT_COMPLETED: "_record_transcript_completed",
+        LLM_TEXT_DELTA: "_record_llm_text_delta",
+        LLM_TEXT_DONE: "_record_llm_text_done",
+        TTS_AUDIO_DELTA: "_record_tts_audio_delta",
+        AVATAR_SPEECH_FRAME: "_record_avatar_frame",
+        AVATAR_IDLE_FRAME: "_record_avatar_frame",
+        AVATAR_DEGRADED: "_record_avatar_degraded",
+        SESSION_STATE_CHANGED: "_record_session_state_changed",
+        RESPONSE_INTERRUPTED: "_record_response_interrupted",
+        RESPONSE_DONE: "_record_response_done",
+        ARTIFACT_CREATED: "_record_artifact_created",
+    }
+
     def __init__(self, root: str | Path = "./data/runs") -> None:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
+        self.sessions_root = self.root / "_sessions"
+        self.sessions_root.mkdir(parents=True, exist_ok=True)
         # run_id -> 当前活跃记录状态
         self._active: dict[str, _RunState] = {}
         self._lock = asyncio.Lock()
+
+    async def start_session(
+        self, session_id: str, profile_id: str, persona_id: str | None = None
+    ) -> None:
+        """Persist session immediately, even before its first conversational run."""
+        async with self._lock:
+            self._write_session(
+                session_id,
+                {
+                    "id": session_id,
+                    "profile_id": profile_id,
+                    "persona_id": persona_id,
+                    "status": "active",
+                    "started_at_ms": int(time.time() * 1000),
+                    "ended_at_ms": None,
+                },
+            )
+
+    async def end_session(self, session_id: str, *, status: str = "closed") -> None:
+        async with self._lock:
+            path = self.sessions_root / f"{session_id}.json"
+            payload: dict[str, Any] = {}
+            if path.exists():
+                try:
+                    payload = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    payload = {}
+            payload.update(
+                {
+                    "id": session_id,
+                    "status": status,
+                    "ended_at_ms": int(time.time() * 1000),
+                }
+            )
+            self._write_session(session_id, payload)
+
+    def _write_session(self, session_id: str, payload: dict[str, Any]) -> None:
+        target = self.sessions_root / f"{session_id}.json"
+        temporary = target.with_suffix(".json.tmp")
+        temporary.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        temporary.replace(target)
 
     async def start_run(
         self,
@@ -172,8 +230,10 @@ class RunRecorder:
             state.metrics.cancelled = status in ("cancelled", "interrupted")
 
             # 写 metrics.json
+            metrics_payload = state.metrics.to_dict()
+            metrics_payload["status"] = status
             (state.run_dir / "metrics.json").write_text(
-                json.dumps(state.metrics.to_dict(), indent=2, ensure_ascii=False),
+                json.dumps(metrics_payload, indent=2, ensure_ascii=False),
                 encoding="utf-8",
             )
 
@@ -219,67 +279,76 @@ class RunRecorder:
 
     def _update_metrics(self, state: _RunState, event: Event) -> None:
         """根据事件类型更新指标。"""
-        m = state.metrics
-        elapsed = event.timestamp - m.started_at_ms
+        handler_name = self._METRIC_HANDLERS.get(event.type)
+        if handler_name is None:
+            return
+        elapsed = event.timestamp - state.metrics.started_at_ms
+        handler = getattr(self, handler_name)
+        handler(state, event, elapsed)
 
-        if event.type == TRANSCRIPT_COMPLETED:
-            m.user_text = event.payload.get("text", "")
-            state.rounds.append({"role": "user", "text": m.user_text})
+    def _record_transcript_completed(
+        self, state: _RunState, event: Event, elapsed: int
+    ) -> None:
+        del elapsed
+        state.metrics.user_text = event.payload.get("text", "")
+        state.rounds.append({"role": "user", "text": state.metrics.user_text})
 
-        elif event.type == LLM_TEXT_DELTA:
-            text = event.payload.get("text", "")
-            if text and m.first_text_ms is None:
-                m.first_text_ms = max(0, elapsed)
-            m.assistant_text += text
+    def _record_llm_text_delta(self, state: _RunState, event: Event, elapsed: int) -> None:
+        text = event.payload.get("text", "")
+        if text and state.metrics.first_text_ms is None:
+            state.metrics.first_text_ms = max(0, elapsed)
+        state.metrics.assistant_text += text
 
-        elif event.type == LLM_TEXT_DONE:
-            full_text = event.payload.get("full_text", "")
-            # 如果 delta 没累积到（或为空），用 done 的 full_text 兜底
-            if full_text and not m.assistant_text:
-                m.assistant_text = full_text
-            state.rounds.append(
-                {
-                    "role": "assistant",
-                    "text": full_text,
-                }
-            )
+    def _record_llm_text_done(self, state: _RunState, event: Event, elapsed: int) -> None:
+        del elapsed
+        full_text = event.payload.get("full_text", "")
+        # 如果 delta 没累积到（或为空），用 done 的 full_text 兜底
+        if full_text and not state.metrics.assistant_text:
+            state.metrics.assistant_text = full_text
+        state.rounds.append({"role": "assistant", "text": full_text})
 
-        elif event.type == TTS_AUDIO_DELTA:
-            # 垫音（filler=True）不计入延迟指标——此前 first_audio_ms≈0、
-            # assistant_audio_samples 虚高，"首音延迟"在垫音开启时恒失真
-            if event.payload.get("filler"):
-                return
-            if m.first_audio_ms is None:
-                m.first_audio_ms = max(0, elapsed)
-            m.assistant_audio_samples += event.payload.get("samples", 0)
+    def _record_tts_audio_delta(self, state: _RunState, event: Event, elapsed: int) -> None:
+        # 垫音（filler=True）不计入延迟指标——此前 first_audio_ms≈0、
+        # assistant_audio_samples 虚高，"首音延迟"在垫音开启时恒失真
+        if event.payload.get("filler"):
+            return
+        if state.metrics.first_audio_ms is None:
+            state.metrics.first_audio_ms = max(0, elapsed)
+        state.metrics.assistant_audio_samples += event.payload.get("samples", 0)
 
-        elif event.type == TTS_AUDIO_COMPLETED:
-            pass  # 已在 delta 累计
+    def _record_avatar_frame(self, state: _RunState, event: Event, elapsed: int) -> None:
+        del event
+        if state.metrics.first_frame_ms is None:
+            state.metrics.first_frame_ms = max(0, elapsed)
+        state.metrics.avatar_frames += 1
 
-        elif event.type in (AVATAR_SPEECH_FRAME, AVATAR_IDLE_FRAME):
-            if m.first_frame_ms is None:
-                m.first_frame_ms = max(0, elapsed)
-            m.avatar_frames += 1
+    def _record_avatar_degraded(self, state: _RunState, event: Event, elapsed: int) -> None:
+        del elapsed
+        state.metrics.degradations += 1
+        state.metrics.degraded_blocks[event.payload.get("from_block", "")] = event.payload.get(
+            "to_block", ""
+        )
 
-        elif event.type == AVATAR_DEGRADED:
-            m.degradations += 1
-            m.degraded_blocks[event.payload.get("from_block", "")] = event.payload.get(
-                "to_block", ""
-            )
+    def _record_session_state_changed(
+        self, state: _RunState, event: Event, elapsed: int
+    ) -> None:
+        del elapsed
+        if event.payload.get("to", "") == "interrupting":
+            state.metrics.interruptions += 1
 
-        elif event.type == SESSION_STATE_CHANGED:
-            to_state = event.payload.get("to", "")
-            if to_state == "interrupting":
-                m.interruptions += 1
+    def _record_response_interrupted(
+        self, state: _RunState, event: Event, elapsed: int
+    ) -> None:
+        del event, elapsed
+        state.metrics.cancelled = True
 
-        elif event.type == RESPONSE_INTERRUPTED:
-            m.cancelled = True
+    def _record_response_done(self, state: _RunState, event: Event, elapsed: int) -> None:
+        del elapsed
+        state.metrics.cancelled = event.payload.get("interrupted", False)
 
-        elif event.type == RESPONSE_DONE:
-            m.cancelled = event.payload.get("interrupted", False)
-
-        elif event.type == ARTIFACT_CREATED:
-            state.artifacts.append(event.payload)
+    def _record_artifact_created(self, state: _RunState, event: Event, elapsed: int) -> None:
+        del elapsed
+        state.artifacts.append(event.payload)
 
     # ------------------------------------------------------------------
     # 查询

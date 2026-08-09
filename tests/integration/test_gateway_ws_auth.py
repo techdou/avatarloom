@@ -21,6 +21,7 @@ import pytest
 import uvicorn
 import websockets
 from avatarloom_runtime_gateway.app import create_app
+from avatarloom_runtime_gateway.auth import issue_ws_ticket
 from avatarloom_runtime_gateway.config import Settings
 
 
@@ -132,6 +133,24 @@ class TestWsTokenAuth:
                 await ws.send(json.dumps({"type": "auth", "token": "s3cret"}))
                 await ws.send(json.dumps({"type": "ping"}))
                 assert await _recv_until(ws, "pong") is not None
+
+    async def test_short_lived_ticket_accepted(self, tmp_path: Path) -> None:
+        """Studio 使用服务端签发的短期 ticket，不需要获得长期 API token。"""
+        with _gateway(tmp_path, api_token="s3cret") as (host, port):
+            ticket = issue_ws_ticket("s3cret")
+            async with websockets.connect(_url(host, port)) as ws:
+                await ws.send(json.dumps({"type": "auth", "token": ticket}))
+                await ws.send(json.dumps({"type": "ping"}))
+                assert await _recv_until(ws, "pong") is not None
+
+    async def test_expired_ticket_rejected(self, tmp_path: Path) -> None:
+        with _gateway(tmp_path, api_token="s3cret") as (host, port):
+            ticket = issue_ws_ticket("s3cret", ttl_seconds=1, now=1)
+            async with websockets.connect(_url(host, port)) as ws:
+                await ws.send(json.dumps({"type": "auth", "token": ticket}))
+                with pytest.raises(websockets.exceptions.ConnectionClosed) as ei:
+                    await ws.recv()
+                assert ei.value.rcvd.code == 1008
 
     async def test_bearer_header_accepted(self, tmp_path: Path) -> None:
         """脚本/服务端客户端可走 Authorization: Bearer。"""

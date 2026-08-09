@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { BrainCircuit, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
 import {
   apiFetch,
@@ -9,6 +9,11 @@ import {
   type RuntimeProfile,
 } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
+import {
+  DEFAULT_PERSONA_ID,
+  DEFAULT_PROFILE_ID,
+  RUNTIME_CONTEXT_STORAGE,
+} from "@/lib/runtime-context";
 
 interface MemoryConfig {
   enabled?: boolean;
@@ -27,9 +32,10 @@ interface MemoryConfig {
  */
 export function MemoryManager() {
   const toast = useToast();
-  const [profileId, setProfileId] = useState("mock");
-  const [personaId, setPersonaId] = useState("demo-assistant");
-  const [personaDraft, setPersonaDraft] = useState("");
+  const [profileId, setProfileId] = useState(DEFAULT_PROFILE_ID);
+  const [personaId, setPersonaId] = useState(DEFAULT_PERSONA_ID);
+  const [personaDraft, setPersonaDraft] = useState(DEFAULT_PERSONA_ID);
+  const [personaError, setPersonaError] = useState<string | null>(null);
   const [cfg, setCfg] = useState<MemoryConfig | null>(null);
   const [cfgFound, setCfgFound] = useState<boolean | null>(null);
   const [runtime, setRuntime] = useState<MemoryListResponse | null>(null);
@@ -37,24 +43,30 @@ export function MemoryManager() {
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [configError, setConfigError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
   const [lastCheck, setLastCheck] = useState<Date | null>(null);
+  const requestRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     try {
-      const p = localStorage.getItem("al.profile");
+      const p = localStorage.getItem(RUNTIME_CONTEXT_STORAGE.profile);
       if (p) setProfileId(p);
-      const persona = localStorage.getItem("al.persona");
-      if (persona) setPersonaId(persona);
+      const persona = localStorage.getItem(RUNTIME_CONTEXT_STORAGE.persona);
+      if (persona) {
+        setPersonaId(persona);
+        setPersonaDraft(persona);
+      }
     } catch {
       /* ignore */
     }
   }, []);
 
   useEffect(() => {
-    let alive = true;
-    apiFetch<RuntimeProfile[]>("/profiles")
+    const controller = new AbortController();
+    apiFetch<RuntimeProfile[]>("/profiles", { signal: controller.signal })
       .then((list) => {
-        if (!alive || !Array.isArray(list)) return;
+        if (!Array.isArray(list)) throw new Error("Profile API 返回了无效数据");
         const hit = list.find((x) => x.id === profileId);
         const mem = hit
           ? (hit.blocks as Record<string, { config?: MemoryConfig }>)?.memory
@@ -66,33 +78,55 @@ export function MemoryManager() {
           setCfg(null);
           setCfgFound(false);
         }
+        setConfigError(null);
       })
-      .catch(() => {
-        if (alive) setCfgFound(null);
+      .catch((reason: unknown) => {
+        if (reason instanceof Error && reason.name === "AbortError") return;
+        setCfgFound(null);
+        setConfigError(reason instanceof Error ? reason.message : String(reason));
       });
-    return () => {
-      alive = false;
-    };
+    return () => controller.abort();
   }, [profileId]);
 
   const load = useCallback(async (persona: string) => {
+    requestRef.current?.abort();
+    const controller = new AbortController();
+    requestRef.current = controller;
+    setRefreshing(true);
     try {
       const data = await gatewayFetch<MemoryListResponse>(
-        `/memory?persona_id=${encodeURIComponent(persona)}`
+        `/memory?persona_id=${encodeURIComponent(persona)}`,
+        { signal: controller.signal }
       );
       setRuntime(data);
       setError(null);
-    } catch (e) {
+    } catch (e: unknown) {
+      if (e instanceof Error && e.name === "AbortError") return;
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setLastCheck(new Date());
+      if (requestRef.current === controller) {
+        requestRef.current = null;
+        if (!controller.signal.aborted) {
+          setRefreshing(false);
+          setLastCheck(new Date());
+        }
+      }
     }
   }, []);
 
   useEffect(() => {
-    load(personaId);
-    const t = setInterval(() => load(personaId), 30000);
-    return () => clearInterval(t);
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
+      await load(personaId);
+      if (!stopped) timer = setTimeout(poll, 30000);
+    };
+    void poll();
+    return () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+      requestRef.current?.abort();
+    };
   }, [load, personaId]);
 
   const enabled = runtime?.active === true && cfg?.enabled !== false;
@@ -102,10 +136,15 @@ export function MemoryManager() {
 
   const applyPersona = () => {
     const v = personaDraft.trim();
-    if (!v) return;
+    if (!v) {
+      setPersonaError("Persona ID 不能为空");
+      return;
+    }
+    setPersonaError(null);
+    setPersonaDraft(v);
     setPersonaId(v);
     try {
-      localStorage.setItem("al.persona", v);
+      localStorage.setItem(RUNTIME_CONTEXT_STORAGE.persona, v);
     } catch {
       /* ignore */
     }
@@ -175,10 +214,11 @@ export function MemoryManager() {
           <button
             type="button"
             onClick={() => load(personaId)}
+            disabled={refreshing}
             className="btn btn-sm btn-ghost inline-flex items-center gap-1"
             title="立即刷新"
           >
-            <RefreshCw className="w-3.5 h-3.5" />
+            <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} />
             <span className="hidden sm:inline">刷新</span>
           </button>
         </div>
@@ -188,6 +228,10 @@ export function MemoryManager() {
         <p className="text-sm text-fg-muted mb-3">
           当前 profile <code className="text-xs">{profileId}</code> 未包含 memory block。
         </p>
+      )}
+
+      {configError && (
+        <p className="text-sm text-err mb-3">Profile 配置获取失败：{configError}</p>
       )}
 
       {cfg && (
@@ -207,8 +251,11 @@ export function MemoryManager() {
           <input
             id="mem-persona"
             className="input font-mono flex-1 min-w-0"
-            value={personaDraft || personaId}
-            onChange={(e) => setPersonaDraft(e.target.value)}
+            value={personaDraft}
+            onChange={(e) => {
+              setPersonaDraft(e.target.value);
+              if (personaError) setPersonaError(null);
+            }}
             onKeyDown={(e) => {
               if (e.key === "Enter") applyPersona();
             }}
@@ -226,6 +273,8 @@ export function MemoryManager() {
           />
         </div>
       </div>
+
+      {personaError && <p className="text-sm text-err mb-3">{personaError}</p>}
 
       {error && (
         <p className="text-sm text-err mb-3">获取失败：{error}（确认 Gateway 已启动）</p>

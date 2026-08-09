@@ -112,10 +112,32 @@ class TestMemoryEndpoints:
             assert r.json() == {"active": False, "persona_id": None, "items": []}
 
             r2 = await c.post("/api/memory", json={"text": "x", "persona_id": "p"})
-            assert r2.json()["ok"] is False
+            assert r2.status_code == 409
+            assert r2.json()["detail"] == "memory block 未启用"
 
             r3 = await c.delete("/api/memory/mem_xxx")
-            assert r3.json()["ok"] is False
+            assert r3.status_code == 409
+            assert r3.json()["detail"] == "memory block 未启用"
+
+    async def test_memory_read_failure_returns_503_not_empty(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        class _FailingMemory:
+            active = True
+
+            async def list_memories(self, persona_id: str):
+                raise RuntimeError(f"qdrant unavailable for {persona_id}")
+
+        fake = _FakeOrchestrator()
+        fake.blocks["memory"] = _FailingMemory()
+        monkeypatch.setattr(wh, "_active_orchestrator", fake)
+        try:
+            async with _gateway_client(tmp_path) as (client, _):
+                response = await client.get("/api/memory?persona_id=demo-assistant")
+            assert response.status_code == 503
+            assert response.json()["detail"] == "记忆存储读取失败"
+        finally:
+            monkeypatch.setattr(wh, "_active_orchestrator", None)
 
     async def test_memory_routes_fail_closed(self, tmp_path: Path) -> None:
         """auth_disabled=False 且无 token → 管理端点 401。"""

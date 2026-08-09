@@ -18,7 +18,7 @@ export default async function ProfilesPage() {
         <div>
           <h1 className="page-title">运行时配置</h1>
           <p className="page-desc">
-            模块组合与参数档位。当前推荐：<span className="badge badge-accent ml-1">autodl-best</span>
+            模块组合与参数档位。开箱默认：<span className="badge badge-accent ml-1">mock</span>
           </p>
         </div>
         <span className="badge">{profiles.length} 个配置</span>
@@ -40,7 +40,7 @@ export default async function ProfilesPage() {
         <div className="space-y-3">
           {profiles.map((p) => {
             const blockCategories = Object.keys(p.blocks || {});
-            const isBest = p.id === "autodl-best";
+            const isBest = p.id === "mock";
             return (
               <div key={p.id} className={isBest ? "card card-hover ring-1 ring-accent/30" : "card card-hover"}>
                 <div className="flex items-start justify-between gap-3 mb-2">

@@ -15,8 +15,10 @@ COPY packages/sdk-python ./packages/sdk-python
 COPY apps/control-api ./apps/control-api
 COPY apps/runtime-gateway ./apps/runtime-gateway
 
-# 严格按 lockfile 安装，失败立即报错；不带 dev 依赖。
-RUN uv sync --frozen --no-dev
+# 严格按 lockfile 安装，失败立即报错；默认不带重型 GPU 依赖。
+# GPU override 通过 AVATARLOOM_UV_EXTRAS="--extra gpu-full" 显式构建。
+ARG AVATARLOOM_UV_EXTRAS=""
+RUN uv sync --frozen --no-dev ${AVATARLOOM_UV_EXTRAS}
 
 # gateway 运行时需要 runtime/ 与 blocks/（Orchestrator 在镜像内装配 Block），
 # 以及 profiles/ 与 personas/（ws_handler 直接读这两个目录）。

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { clsx } from "clsx";
 import { Blocks, RefreshCw } from "lucide-react";
 import { gatewayFetch, type BlockHealthReport } from "@/lib/api";
@@ -24,24 +24,48 @@ const STATUS_META: Record<
 export function BlocksHealthCard() {
   const [report, setReport] = useState<BlockHealthReport | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
   const [lastCheck, setLastCheck] = useState<Date | null>(null);
+  const requestRef = useRef<AbortController | null>(null);
 
   const probe = useCallback(async () => {
+    requestRef.current?.abort();
+    const controller = new AbortController();
+    requestRef.current = controller;
+    setRefreshing(true);
     try {
-      const data = await gatewayFetch<BlockHealthReport>("/health/blocks");
+      const data = await gatewayFetch<BlockHealthReport>("/health/blocks", {
+        signal: controller.signal,
+      });
       setReport(data);
       setError(null);
-    } catch (e) {
+    } catch (e: unknown) {
+      if (e instanceof Error && e.name === "AbortError") return;
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setLastCheck(new Date());
+      if (requestRef.current === controller) {
+        requestRef.current = null;
+        if (!controller.signal.aborted) {
+          setRefreshing(false);
+          setLastCheck(new Date());
+        }
+      }
     }
   }, []);
 
   useEffect(() => {
-    probe();
-    const t = setInterval(probe, 30000);
-    return () => clearInterval(t);
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
+      await probe();
+      if (!stopped) timer = setTimeout(poll, 30000);
+    };
+    void poll();
+    return () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+      requestRef.current?.abort();
+    };
   }, [probe]);
 
   const degradedCount =
@@ -65,10 +89,11 @@ export function BlocksHealthCard() {
           <button
             type="button"
             onClick={probe}
+            disabled={refreshing}
             className="btn btn-sm btn-ghost inline-flex items-center gap-1"
             title="立即刷新"
           >
-            <RefreshCw className="w-3.5 h-3.5" />
+            <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} />
             <span className="hidden sm:inline">刷新</span>
           </button>
         </div>

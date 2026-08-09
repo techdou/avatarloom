@@ -62,10 +62,10 @@ pnpm install
 uv run python scripts/doctor.py
 ```
 
-### 运行真实链路（默认）
+### Mock 快速开始（默认）
 
 ```bash
-# 一键冒烟（不起服务，直接跑真实链路）
+# 一键冒烟（不起服务，验证完整 Mock 事件链）
 uv run python scripts/smoke_mock.py
 
 # 启动三服务（Control API + Runtime Gateway + Studio）
@@ -75,10 +75,11 @@ make dev
 #   本地：http://127.0.0.1:3000/playground
 ```
 
-默认档位 `lite-12gb` 需要 12GB GPU + `LLM_API_KEY`。无 GPU 环境降级到 mock：
+默认档位是 `mock`，无需 GPU 或 API Key。启动真实 12GB GPU 链路：
 
 ```bash
-AVATARLOOM_DEFAULT_PROFILE=mock make dev
+make setup-gpu
+AVATARLOOM_DEFAULT_PROFILE=lite-12gb make dev
 ```
 
 ### 配置真实 Adapter
@@ -93,16 +94,21 @@ cp .env.example .env   # 填入 LLM/STT/TTS/Vision 任一路 API Key
 
 | Profile | 说明 |
 |---|---|
-| `lite-12gb` | 12GB GPU 单机，**默认档位**（真实后端） |
-| `mock` | 纯 Mock，无 GPU/API Key，降级用 |
+| `mock` | **默认档位**，纯 Mock，无 GPU/API Key，适合开发与 CI |
+| `lite-12gb` | 12GB GPU 单机真实链路，需显式启用 |
 | `distributed` | 分布式（CPU STT + Remote LLM + Mac MLX TTS + NVIDIA Avatar） |
 | `full-24gb` | 24GB+ GPU 全量 |
 | `autodl-best` | AutoDL 云 GPU 最佳实践档 |
 
+Control API 数据库是运行时 Profile/Persona 的在线事实源：首次启动从仓库
+`profiles/`、`personas/` 初始化，Studio 修改后 Gateway 通过 Control API 读取；文件仅作为
+本地镜像和控制面离线时的只读回退。Runs/Sessions 由 Gateway Recorder 落盘，Control API
+直接索引同一 `AVATARLOOM_RUNS_ROOT`，因此 Studio 历史页与真实运行记录一致。
+
 ## 配置与安全
 
 - 环境变量模板见 `.env.example`（含全部可选 Key 与说明）；**真实密钥只放本地 `.env`，绝不入库**
-- 鉴权默认 **fail-closed**：未配置 `AVATARLOOM_API_TOKEN` 时所有端点返回 401 / WS 握手拒绝；本地开发可用 `AVATARLOOM_AUTH_DISABLED=1` 显式关闭（`make dev` 已自动设置）
+- 鉴权默认 **fail-closed**：生产必须设置 `AVATARLOOM_API_TOKEN`；Studio 通过服务端代理注入 HTTP Bearer，并签发 60 秒 WS ticket，长期 token 不进入浏览器 bundle。本地开发可用 `AVATARLOOM_AUTH_DISABLED=1` 显式关闭
 - GPU 会话结束后 Gateway 默认自重启（`AVATARLOOM_SELF_RESTART=1`）以清理 CUDA fork 状态；无 supervisor 的部署可设 `0` 关闭
 - 端口约定：Studio `3000`、Control API `8100`、Runtime Gateway `8101`（均可用环境变量覆盖）
 
@@ -119,11 +125,16 @@ make doctor    # 环境自检
 ## 部署
 
 ```bash
-# Docker Compose 一键起三服务（非 root、frozen lockfile 构建）
-docker compose -f deploy/docker/docker-compose.yml up -d --build
+# 默认 Mock：非 root、frozen lockfile、无需 GPU
+docker compose -f deploy/docker-compose.yml up -d --build
+
+# 真实 GPU：安装 gpu-full extras、申请 NVIDIA GPU、默认 lite-12gb
+AVATARLOOM_API_TOKEN='<随机长密钥>' \
+docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.gpu.yml up -d --build
 ```
 
-生产环境必须设置 `AVATARLOOM_API_TOKEN`（或按部署拓扑注入共享密钥），不要依赖默认开发模式。
+生产环境必须设置 `AVATARLOOM_API_TOKEN` 并设 `AVATARLOOM_AUTH_DISABLED=0`。旧入口
+`deploy/docker/docker-compose.yml` 仅保留向后兼容，新部署统一使用上述 canonical 文件。
 
 ## 仓库规范
 

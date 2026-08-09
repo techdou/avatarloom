@@ -40,26 +40,11 @@ def load_pcm16_16k(wav_path: str) -> bytes:
 
 
 async def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--port", type=int, default=8767)
-    ap.add_argument("--image", required=True)
-    ap.add_argument("--audio", default=None, help="16k/任意采样率 wav（不传则喂 5s 静音）")
-    ap.add_argument("--out", default="/tmp/flashhead_probe.mp4")
-    ap.add_argument("--chunk-samples", type=int, default=3200, help="0.2s@16k")
-    ap.add_argument("--inter-chunk-s", type=float, default=0.15)
-    ap.add_argument("--max-frames", type=int, default=300)
-    args = ap.parse_args()
-
-    pcm = (
-        load_pcm16_16k(args.audio)
-        if args.audio
-        else b"\x00\x00" * (16000 * 5)
-    )
+    args = _parse_args()
+    pcm = load_pcm16_16k(args.audio) if args.audio else b"\x00\x00" * (16000 * 5)
     out_path = Path(args.out)
     frame_dir = out_path.parent / "flashhead_frames"
-    frame_dir.mkdir(parents=True, exist_ok=True)
-    for old in frame_dir.glob("*.jpg"):
-        old.unlink()
+    _prepare_frame_dir(frame_dir)
 
     uri = f"ws://127.0.0.1:{args.port}"
     print(f"[1] connect {uri} ...", flush=True)
@@ -69,66 +54,103 @@ async def main() -> int:
         await ws.send(json.dumps({"type": "set_image", "path": args.image}))
         print("[3] feed audio ...", flush=True)
 
-        async def sender():
-            for i in range(0, len(pcm), args.chunk_samples * 2):
-                chunk = pcm[i : i + args.chunk_samples * 2]
-                if not chunk:
-                    break
-                await ws.send(
-                    json.dumps({"type": "audio", "pcm": base64.b64encode(chunk).decode()})
-                )
-                await asyncio.sleep(args.inter_chunk_s)
-            await ws.send(json.dumps({"type": "reset"}))
-
-        send_task = asyncio.create_task(sender())
-        frames = 0
-        t0 = asyncio.get_event_loop().time()
+        send_task = asyncio.create_task(
+            _send_audio(ws, pcm, args.chunk_samples, args.inter_chunk_s)
+        )
         try:
-            while True:
-                try:
-                    message = await asyncio.wait_for(ws.recv(), timeout=3.0)
-                except TimeoutError:
-                    # 空闲超时：音频播完且 idle 帧节流（0.96s）下无新帧——
-                    # 已有足够帧就收工（probe 不是长跑服务）
-                    print(
-                        f"    idle timeout after {frames} frames",
-                        flush=True,
-                    )
-                    break
-                if isinstance(message, (bytes, bytearray)):
-                    data = bytes(message)
-                    # 服务下行协议：首字节 tag（0x00=idle / 0x01=speech）+ JPEG
-                    if data and data[0] in (0x00, 0x01):
-                        data = data[1:]
-                    if not data:
-                        continue
-                    (frame_dir / f"{frames:05d}.jpg").write_bytes(data)
-                    frames += 1
-                    if frames % 25 == 0:
-                        print(f"    frames={frames}", flush=True)
-                    if frames >= args.max_frames:
-                        break
+            frames = await _receive_frames(ws, frame_dir, args.max_frames)
         finally:
             send_task.cancel()
-        dt = asyncio.get_event_loop().time() - t0
-        print(f"[4] got {frames} frames in {dt:.1f}s ({frames / max(dt, 0.001):.1f} fps)", flush=True)
 
     if frames > 0:
-        print("[5] mux mp4 ...", flush=True)
-        cmd = [
-            "ffmpeg", "-y", "-framerate", "25",
-            "-i", str(frame_dir / "%05d.jpg"),
-            "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p",
-            str(out_path),
-        ]
-        r = await asyncio.to_thread(
-            subprocess.run, cmd, capture_output=True, text=True
-        )
-        print("ffmpeg rc:", r.returncode, flush=True)
-        if r.returncode != 0:
-            print(r.stderr[-300:], flush=True)
+        await _mux_mp4(frame_dir, out_path)
     print("OUT:", out_path, flush=True)
     return 0 if frames > 0 else 1
+
+
+def _parse_args() -> argparse.Namespace:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--port", type=int, default=8767)
+    ap.add_argument("--image", required=True)
+    ap.add_argument("--audio", default=None, help="16k/任意采样率 wav（不传则喂 5s 静音）")
+    ap.add_argument("--out", default="/tmp/flashhead_probe.mp4")
+    ap.add_argument("--chunk-samples", type=int, default=3200, help="0.2s@16k")
+    ap.add_argument("--inter-chunk-s", type=float, default=0.15)
+    ap.add_argument("--max-frames", type=int, default=300)
+    return ap.parse_args()
+
+
+def _prepare_frame_dir(frame_dir: Path) -> None:
+    frame_dir.mkdir(parents=True, exist_ok=True)
+    for old in frame_dir.glob("*.jpg"):
+        old.unlink()
+
+
+async def _send_audio(ws, pcm: bytes, chunk_samples: int, inter_chunk_s: float) -> None:
+    for i in range(0, len(pcm), chunk_samples * 2):
+        chunk = pcm[i : i + chunk_samples * 2]
+        if not chunk:
+            break
+        await ws.send(
+            json.dumps({"type": "audio", "pcm": base64.b64encode(chunk).decode()})
+        )
+        await asyncio.sleep(inter_chunk_s)
+    await ws.send(json.dumps({"type": "reset"}))
+
+
+async def _receive_frames(ws, frame_dir: Path, max_frames: int) -> int:
+    frames = 0
+    t0 = asyncio.get_event_loop().time()
+    while True:
+        try:
+            message = await asyncio.wait_for(ws.recv(), timeout=3.0)
+        except TimeoutError:
+            # 空闲超时：音频播完且 idle 帧节流（0.96s）下无新帧——
+            # 已有足够帧就收工（probe 不是长跑服务）
+            print(f"    idle timeout after {frames} frames", flush=True)
+            break
+        if not isinstance(message, (bytes, bytearray)):
+            continue
+        if _save_frame(message, frame_dir, frames):
+            frames += 1
+            if frames % 25 == 0:
+                print(f"    frames={frames}", flush=True)
+            if frames >= max_frames:
+                break
+    dt = asyncio.get_event_loop().time() - t0
+    print(
+        f"[4] got {frames} frames in {dt:.1f}s "
+        f"({frames / max(dt, 0.001):.1f} fps)",
+        flush=True,
+    )
+    return frames
+
+
+def _save_frame(message: bytes | bytearray, frame_dir: Path, frames: int) -> bool:
+    data = bytes(message)
+    # 服务下行协议：首字节 tag（0x00=idle / 0x01=speech）+ JPEG
+    if data and data[0] in (0x00, 0x01):
+        data = data[1:]
+    if not data:
+        return False
+    (frame_dir / f"{frames:05d}.jpg").write_bytes(data)
+    return True
+
+
+async def _mux_mp4(frame_dir: Path, out_path: Path) -> None:
+    print("[5] mux mp4 ...", flush=True)
+    cmd = [
+        "ffmpeg", "-y", "-framerate", "25",
+        "-i", str(frame_dir / "%05d.jpg"),
+        "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p",
+        str(out_path),
+    ]
+    result = await asyncio.to_thread(
+        subprocess.run, cmd, capture_output=True, text=True
+    )
+    print("ffmpeg rc:", result.returncode, flush=True)
+    if result.returncode != 0:
+        print(result.stderr[-300:], flush=True)
 
 
 if __name__ == "__main__":

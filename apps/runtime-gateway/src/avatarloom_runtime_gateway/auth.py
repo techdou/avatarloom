@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
 import logging
 import secrets
+import time
+from typing import Any
 
 from fastapi import Depends, HTTPException, Request, WebSocket, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -36,6 +42,63 @@ def presented_header_token(ws: WebSocket) -> str:
 def token_matches(presented: str, expected: str) -> bool:
     """常量时间比较 token。"""
     return bool(presented) and secrets.compare_digest(presented, expected)
+
+
+def issue_ws_ticket(secret: str, *, ttl_seconds: int = 60, now: int | None = None) -> str:
+    """签发浏览器可见的短期 WS ticket，避免把长期控制面 token 打进 bundle。"""
+    if not secret:
+        raise ValueError("secret must not be empty")
+    issued_at = int(time.time() if now is None else now)
+    payload: dict[str, Any] = {
+        "aud": "avatarloom-ws",
+        "exp": issued_at + max(1, min(ttl_seconds, 300)),
+        "nonce": secrets.token_urlsafe(12),
+    }
+    payload_bytes = json.dumps(
+        payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True
+    ).encode("utf-8")
+    payload_b64 = _b64url_encode(payload_bytes)
+    signature = hmac.new(secret.encode("utf-8"), payload_b64.encode("ascii"), hashlib.sha256)
+    return f"{payload_b64}.{_b64url_encode(signature.digest())}"
+
+
+def verify_ws_ticket(ticket: str, secret: str, *, now: int | None = None) -> bool:
+    """校验短期 WS ticket 的签名、受众和过期时间。任何解析异常均 fail-closed。"""
+    if not ticket or not secret:
+        return False
+    payload_b64, separator, signature_b64 = ticket.partition(".")
+    if not separator or not payload_b64 or not signature_b64:
+        return False
+    expected = hmac.new(secret.encode("utf-8"), payload_b64.encode("ascii"), hashlib.sha256)
+    try:
+        presented = _b64url_decode(signature_b64)
+        payload = json.loads(_b64url_decode(payload_b64))
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    if not hmac.compare_digest(presented, expected.digest()) or not isinstance(payload, dict):
+        return False
+    current = int(time.time() if now is None else now)
+    exp = payload.get("exp")
+    return (
+        payload.get("aud") == "avatarloom-ws"
+        and isinstance(exp, int)
+        and current < exp <= current + 300
+        and isinstance(payload.get("nonce"), str)
+    )
+
+
+def browser_token_authenticated(presented: str, expected: str) -> bool:
+    """浏览器首条 auth 消息支持短期 ticket；保留长期 token 仅供旧客户端兼容。"""
+    return token_matches(presented, expected) or verify_ws_ticket(presented, expected)
+
+
+def _b64url_encode(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
+
+
+def _b64url_decode(value: str) -> bytes:
+    padding = "=" * (-len(value) % 4)
+    return base64.b64decode(value + padding, altchars=b"-_", validate=True)
 
 
 def header_token_authenticated(ws: WebSocket, settings: Settings) -> bool:

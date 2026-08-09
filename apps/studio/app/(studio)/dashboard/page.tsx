@@ -48,7 +48,7 @@ export default async function DashboardPage() {
         <ol className="text-sm space-y-3 text-fg-muted">
           {[
             ["配置人设与形象", "/personas", "创建或查看数字人人设"],
-            ["选择运行时配置", "/profiles", "autodl-best：DeepSeek + VoxCPM2 + MuseTalk"],
+            ["选择运行时配置", "/profiles", "mock：开箱即用；GPU 环境可切换真实档"],
             ["开始语音对话", "/playground", "连接 Gateway，打开麦克风"],
             ["回看运行记录", "/runs", "每轮对话的录制与指标"],
           ].map(([label, href, desc], i) => (

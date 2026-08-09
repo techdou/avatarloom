@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -39,6 +40,21 @@ from avatarloom_sdk import (
 
 # 中文/英文句末标点
 _SENTENCE_END_RE = re.compile(r"[。！？!?\.…\n]")
+_RETRYABLE_HTTP_ERRORS = (
+    httpx.ConnectTimeout,
+    httpx.ConnectError,
+    httpx.ReadTimeout,
+    httpx.ReadError,
+    httpx.RemoteProtocolError,
+)
+
+
+@dataclass
+class _LlmStreamState:
+    full_text: str = ""
+    sentence_buf: str = ""
+    sentence_idx: int = 0
+    interrupted: bool = False
 
 
 class OpenAILlmBlock(Block):
@@ -137,29 +153,12 @@ class OpenAILlmBlock(Block):
     async def process(self, ctx: BlockContext, event: Event) -> None:
         # 只消费 llm.request（Orchestrator 完成 Vision 同轮编排后发出）。
         # 不再兼容 transcript.completed——AL-P1-002 后 transcript 由 Orchestrator 决策。
-        if event.type != LLM_REQUEST:
+        if self._should_skip_request(ctx, event):
             return
 
-        user_text = event.payload.get("text", "")
-        if not user_text.strip():
-            return
-        # 打断后迟到的 request（旧 run）不再生成——新 run 的 request run_id 不同，不受影响
-        if ctx.run_id is not None and ctx.run_id in self._interrupted_run_ids:
-            return
-
-        system_prompt = ctx.persona_instructions or str(ctx.config.get("systemPrompt") or "")
-        # 视觉感知注入：最近一次摄像头帧描述（若有）
-        if ctx.vision_description:
-            system_prompt += (
-                "\n\n【视觉感知】用户刚刚让你看的画面："
-                f"{ctx.vision_description}。请自然地基于此回应。"
-            )
-        messages = _build_messages(system_prompt, user_text)
-
-        full_text = ""
-        sentence_buf = ""
-        sentence_idx = 0
-        interrupted = False
+        user_text = str(event.payload.get("text", ""))
+        messages = _build_messages(_system_prompt(ctx), user_text)
+        state = _LlmStreamState()
         self._active_run_id = ctx.run_id
 
         try:
@@ -168,115 +167,10 @@ class OpenAILlmBlock(Block):
                 headers={"Authorization": f"Bearer {self._api_key}"},
                 timeout=httpx.Timeout(self._timeout, connect=10.0),
             ) as client:
-                payload: dict[str, Any] = {
-                    "model": self._model,
-                    "messages": messages,
-                    "stream": True,
-                    "max_tokens": self._max_tokens,
-                    "temperature": self._temperature,
-                }
-                # DeepSeek 等推理模型：关 thinking。必须是顶层 thinking 字段——
-                # DeepSeek 官方 API 只认顶层（extra_body 嵌套会被忽略，思考照跑，
-                # 思考 token 挤占 max_tokens 时偶发 content 全空 → TTS 零产出）
-                if self._disable_thinking:
-                    payload["thinking"] = {"type": "disabled"}
-
-                # 连接级失败重试（AutoDL 出网抖动：连接超时/重置/无产出断流，最多 3 次退避）
-                for _attempt in range(3):
-                    try:
-                        async with client.stream("POST", "/chat/completions", json=payload) as resp:
-                            resp.raise_for_status()
-                            self._active_resp = resp
-                            try:
-                                async for line in resp.aiter_lines():
-                                    # 打断检查（AL-P1-006）——reset() 已标记本 run
-                                    if ctx.run_id is not None and ctx.run_id in self._interrupted_run_ids:
-                                        interrupted = True
-                                        break
-                                    if not line or not line.startswith("data: "):
-                                        continue
-                                    data = line[6:].strip()
-                                    if data == "[DONE]":
-                                        break
-                                    try:
-                                        chunk = json.loads(data)
-                                    except json.JSONDecodeError:
-                                        continue
-                                    delta = _extract_delta(chunk)
-                                    if not delta:
-                                        continue
-
-                                    full_text += delta
-                                    sentence_buf += delta
-
-                                    # 流式 emit 每个 delta
-                                    await ctx.emit(
-                                        Event(
-                                            type=LLM_TEXT_DELTA,
-                                            session_id=ctx.session_id,
-                                            source="llm.openai-compatible",
-                                            run_id=ctx.run_id,
-                                            payload={
-                                                "text": delta,
-                                                "sentence_index": sentence_idx,
-                                                "is_sentence_end": False,
-                                            },
-                                        )
-                                    )
-
-                                    # 按句切分（sentence 不直接用，TTS 按 sentence_index 累积）
-                                    while _has_sentence_end(sentence_buf):
-                                        _unused, sentence_buf = _split_sentence(sentence_buf)
-                                        sentence_idx += 1
-                                        await ctx.emit(
-                                            Event(
-                                                type=LLM_TEXT_DELTA,
-                                                session_id=ctx.session_id,
-                                                source="llm.openai-compatible",
-                                                run_id=ctx.run_id,
-                                                payload={
-                                                    "text": "",
-                                                    "sentence_index": sentence_idx - 1,
-                                                    "is_sentence_end": True,
-                                                },
-                                            )
-                                        )
-                            except httpx.StreamError:
-                                # reset() 里 resp.aclose() 会让 aiter_lines 抛 StreamError
-                                if ctx.run_id is not None and ctx.run_id in self._interrupted_run_ids:
-                                    interrupted = True
-                                elif not full_text and _attempt < 2:
-                                    # 无产出断流——重试（有产出不重试，避免内容重复）
-                                    await asyncio.sleep(0.5 * (_attempt + 1))
-                                    continue
-                                else:
-                                    # 重试耗尽/已有产出断流——必须补发 DONE(error) 收尾，
-                                    # 否则 TTS 收不到 DONE 不吐 completed，前端永远停在"思考中"
-                                    await self._emit_done(ctx, full_text, "error")
-                                    raise
-                            finally:
-                                self._active_resp = None
-                        if interrupted:
-                            # 已打断（reset 关闭了流）——不重试，跳出
-                            break
-                        if not full_text and _attempt < 2:
-                            # 成功完成但零产出——推理模型偶发空流（DeepSeek v4-flash 实测
-                            # 正常 stop 但 content 全空），直接 stop 会让 TTS 零产出，重试
-                            await asyncio.sleep(0.5 * (_attempt + 1))
-                            continue
-                        break  # 流式正常完成，跳出重试
-                    except (httpx.ConnectTimeout, httpx.ConnectError, httpx.ReadTimeout, httpx.ReadError, httpx.RemoteProtocolError):
-                        # 连接/传输层失败（ConnectTimeout/ConnectError/ReadTimeout/ReadError/
-                        # RemoteProtocolError——AutoDL 出网抖动的全家族），未产出内容才可重试
-                        if _attempt < 2 and not full_text:
-                            await asyncio.sleep(0.5 * (_attempt + 1))
-                            continue
-                        # 重试耗尽/已有产出断流——补发 DONE(error) 收尾（同上）
-                        await self._emit_done(ctx, full_text, "error")
-                        raise
+                await self._stream_with_retries(ctx, client, messages, state)
 
         except httpx.HTTPStatusError as e:
-            await self._emit_done(ctx, full_text, "error")
+            await self._emit_done(ctx, state.full_text, "error")
             raise RuntimeError(
                 # 不拼接上游响应体——可能回显 prompt/密钥，进日志即泄露
                 f"LLM HTTP error {e.response.status_code}"
@@ -285,42 +179,179 @@ class OpenAILlmBlock(Block):
             self._active_run_id = None
 
         # 被打断：不发句尾剩余，直接以 interrupted 收尾（AL-P1-006）
-        if interrupted:
-            await ctx.emit(
-                Event(
-                    type=LLM_TEXT_DONE,
-                    session_id=ctx.session_id,
-                    source="llm.openai-compatible",
-                    run_id=ctx.run_id,
-                    payload={"full_text": full_text, "finish_reason": "interrupted"},
-                )
-            )
+        if state.interrupted:
+            await self._emit_done(ctx, state.full_text, "interrupted")
             return
 
         # 句尾剩余
-        if sentence_buf.strip():
-            sentence_idx += 1
-            await ctx.emit(
-                Event(
-                    type=LLM_TEXT_DELTA,
-                    session_id=ctx.session_id,
-                    source="llm.openai-compatible",
-                    run_id=ctx.run_id,
-                    payload={
-                        "text": "",
-                        "sentence_index": sentence_idx - 1,
-                        "is_sentence_end": True,
-                    },
-                )
-            )
+        if state.sentence_buf.strip():
+            state.sentence_idx += 1
+            await self._emit_sentence_end(ctx, state.sentence_idx - 1)
 
+        await self._emit_done(ctx, state.full_text, "stop")
+
+    def _should_skip_request(self, ctx: BlockContext, event: Event) -> bool:
+        if event.type != LLM_REQUEST:
+            return True
+        user_text = event.payload.get("text", "")
+        if not str(user_text).strip():
+            return True
+        # 打断后迟到的 request（旧 run）不再生成——新 run 的 request run_id 不同，不受影响
+        return ctx.run_id is not None and ctx.run_id in self._interrupted_run_ids
+
+    def _request_payload(self, messages: list[dict[str, str]]) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "model": self._model,
+            "messages": messages,
+            "stream": True,
+            "max_tokens": self._max_tokens,
+            "temperature": self._temperature,
+        }
+        # DeepSeek 等推理模型：关 thinking。必须是顶层 thinking 字段——
+        # DeepSeek 官方 API 只认顶层（extra_body 嵌套会被忽略，思考照跑，
+        # 思考 token 挤占 max_tokens 时偶发 content 全空 → TTS 零产出）
+        if self._disable_thinking:
+            payload["thinking"] = {"type": "disabled"}
+        return payload
+
+    async def _stream_with_retries(
+        self,
+        ctx: BlockContext,
+        client: httpx.AsyncClient,
+        messages: list[dict[str, str]],
+        state: _LlmStreamState,
+    ) -> None:
+        payload = self._request_payload(messages)
+        for attempt in range(3):
+            try:
+                completed = await self._stream_once(ctx, client, payload, state, attempt)
+            except _RETRYABLE_HTTP_ERRORS:
+                if await self._sleep_before_retry(ctx, state.full_text, attempt):
+                    continue
+                await self._emit_done(ctx, state.full_text, "error")
+                raise
+            if not completed and state.interrupted:
+                break
+            if not completed:
+                continue
+            if state.interrupted:
+                break
+            if await self._sleep_before_retry(ctx, state.full_text, attempt):
+                continue
+            break
+
+    async def _stream_once(
+        self,
+        ctx: BlockContext,
+        client: httpx.AsyncClient,
+        payload: dict[str, Any],
+        state: _LlmStreamState,
+        attempt: int,
+    ) -> bool:
+        async with client.stream("POST", "/chat/completions", json=payload) as resp:
+            resp.raise_for_status()
+            self._active_resp = resp
+            try:
+                await self._consume_stream_lines(ctx, resp, state)
+            except httpx.StreamError as exc:
+                if await self._handle_stream_error(ctx, state, attempt):
+                    return False
+                raise exc
+            finally:
+                self._active_resp = None
+        return True
+
+    async def _consume_stream_lines(
+        self,
+        ctx: BlockContext,
+        resp: httpx.Response,
+        state: _LlmStreamState,
+    ) -> None:
+        async for line in resp.aiter_lines():
+            if ctx.run_id is not None and ctx.run_id in self._interrupted_run_ids:
+                state.interrupted = True
+                break
+            data = _sse_data(line)
+            if data is None:
+                continue
+            if data == "[DONE]":
+                break
+            delta = _delta_from_sse_data(data)
+            if not delta:
+                continue
+            await self._emit_text_delta(ctx, delta, state)
+
+    async def _handle_stream_error(
+        self,
+        ctx: BlockContext,
+        state: _LlmStreamState,
+        attempt: int,
+    ) -> bool:
+        # reset() 里 resp.aclose() 会让 aiter_lines 抛 StreamError
+        if ctx.run_id is not None and ctx.run_id in self._interrupted_run_ids:
+            state.interrupted = True
+            return True
+        if not state.full_text and attempt < 2:
+            # 无产出断流——重试（有产出不重试，避免内容重复）
+            await asyncio.sleep(0.5 * (attempt + 1))
+            return True
+        # 重试耗尽/已有产出断流——必须补发 DONE(error) 收尾，
+        # 否则 TTS 收不到 DONE 不吐 completed，前端永远停在"思考中"
+        await self._emit_done(ctx, state.full_text, "error")
+        return False
+
+    async def _sleep_before_retry(
+        self,
+        ctx: BlockContext,
+        full_text: str,
+        attempt: int,
+    ) -> bool:
+        if attempt >= 2 or full_text:
+            return False
+        if ctx.run_id is not None and ctx.run_id in self._interrupted_run_ids:
+            return False
+        # 成功完成但零产出 / 连接层未产出失败：退避后重试。
+        await asyncio.sleep(0.5 * (attempt + 1))
+        return True
+
+    async def _emit_text_delta(
+        self,
+        ctx: BlockContext,
+        delta: str,
+        state: _LlmStreamState,
+    ) -> None:
+        state.full_text += delta
+        state.sentence_buf += delta
         await ctx.emit(
             Event(
-                type=LLM_TEXT_DONE,
+                type=LLM_TEXT_DELTA,
                 session_id=ctx.session_id,
                 source="llm.openai-compatible",
                 run_id=ctx.run_id,
-                payload={"full_text": full_text, "finish_reason": "stop"},
+                payload={
+                    "text": delta,
+                    "sentence_index": state.sentence_idx,
+                    "is_sentence_end": False,
+                },
+            )
+        )
+        while _has_sentence_end(state.sentence_buf):
+            _unused, state.sentence_buf = _split_sentence(state.sentence_buf)
+            state.sentence_idx += 1
+            await self._emit_sentence_end(ctx, state.sentence_idx - 1)
+
+    async def _emit_sentence_end(self, ctx: BlockContext, sentence_idx: int) -> None:
+        await ctx.emit(
+            Event(
+                type=LLM_TEXT_DELTA,
+                session_id=ctx.session_id,
+                source="llm.openai-compatible",
+                run_id=ctx.run_id,
+                payload={
+                    "text": "",
+                    "sentence_index": sentence_idx,
+                    "is_sentence_end": True,
+                },
             )
         )
 
@@ -342,6 +373,31 @@ def _build_messages(system_prompt: str, user_text: str) -> list[dict[str, str]]:
         msgs.append({"role": "system", "content": system_prompt})
     msgs.append({"role": "user", "content": user_text})
     return msgs
+
+
+def _system_prompt(ctx: BlockContext) -> str:
+    system_prompt = ctx.persona_instructions or str(ctx.config.get("systemPrompt") or "")
+    # 视觉感知注入：最近一次摄像头帧描述（若有）
+    if ctx.vision_description:
+        system_prompt += (
+            "\n\n【视觉感知】用户刚刚让你看的画面："
+            f"{ctx.vision_description}。请自然地基于此回应。"
+        )
+    return system_prompt
+
+
+def _sse_data(line: str) -> str | None:
+    if not line or not line.startswith("data: "):
+        return None
+    return line[6:].strip()
+
+
+def _delta_from_sse_data(data: str) -> str:
+    try:
+        chunk = json.loads(data)
+    except json.JSONDecodeError:
+        return ""
+    return _extract_delta(chunk)
 
 
 def _extract_delta(chunk: dict) -> str:

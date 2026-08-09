@@ -35,6 +35,7 @@ from avatarloom_sdk import (
 logger = logging.getLogger(__name__)
 
 MAX_MEMORY_CHARS = 80  # 单条注入截断（防人设正文被稀释）
+MANAGEMENT_MEMORY_LIMIT = 1000  # Mem0 get_all 默认只返回 20 条，管理台提高有界上限
 
 
 def build_memory_block(memories: list[str]) -> str:
@@ -104,9 +105,16 @@ class MemoryStore:
 
     def list_all(self, agent_id: str) -> list[dict[str, Any]]:
         """列出该 persona 的全部记忆条目（管理台用）。"""
-        results = self._m.get_all(user_id=self.user_id, agent_id=agent_id)
+        response = self._m.get_all(
+            filters={"user_id": self.user_id, "agent_id": agent_id},
+            top_k=MANAGEMENT_MEMORY_LIMIT,
+            show_expired=False,
+        )
+        if not isinstance(response, dict) or not isinstance(response.get("results"), list):
+            raise TypeError("Mem0 get_all returned an invalid response")
+        results = response["results"]
         items = []
-        for r in results or []:
+        for r in results:
             text = r.get("memory") if isinstance(r, dict) else None
             if text:
                 items.append(
@@ -209,11 +217,15 @@ class Mem0MemoryBlock(Block):
         self._store = None
         if store is None:
             return
+
         # qdrant client 的 close 是同步阻塞调用——offload 线程
         def _close() -> None:
             try:
-                client = getattr(store._m, "vector_store", None)
-                if client is not None:
+                vector_store = getattr(store._m, "vector_store", None)
+                if vector_store is not None:
+                    # mem0ai 2.0.x 的 Qdrant adapter 本身没有 close()，实际
+                    # QdrantClient 暴露在 adapter.client 上。
+                    client = getattr(vector_store, "client", vector_store)
                     close = getattr(client, "close", None)
                     if callable(close):
                         close()
@@ -249,14 +261,10 @@ class Mem0MemoryBlock(Block):
             logger.warning("memory memorize 失败（静默跳过）: %s", e)
 
     async def list_memories(self, agent_id: str) -> list[dict[str, Any]]:
-        """列出该 persona 的全部记忆（管理台用）。未启用返回 []。"""
+        """列出该 persona 的全部记忆。未启用返回 []，存储错误向管理端传播。"""
         if self._store is None:
             return []
-        try:
-            return await asyncio.to_thread(self._store.list_all, agent_id)
-        except Exception as e:
-            logger.warning("memory list 失败（按空返回）: %s", e)
-            return []
+        return await asyncio.to_thread(self._store.list_all, agent_id)
 
     async def delete_memory(self, memory_id: str) -> bool:
         """删除一条记忆（管理台用）。未启用返回 False。"""

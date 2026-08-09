@@ -1,0 +1,25 @@
+# GPU production override:
+# docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.gpu.yml up --build
+services:
+  control-api:
+    environment:
+      AVATARLOOM_AUTH_DISABLED: "0"
+
+  runtime-gateway:
+    build:
+      args:
+        AVATARLOOM_UV_EXTRAS: "--extra gpu-full"
+    environment:
+      AVATARLOOM_AUTH_DISABLED: "0"
+      AVATARLOOM_DEFAULT_PROFILE: "${AVATARLOOM_DEFAULT_PROFILE:-lite-12gb}"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  studio:
+    environment:
+      AVATARLOOM_AUTH_DISABLED: "0"

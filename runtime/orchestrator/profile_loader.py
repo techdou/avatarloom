@@ -44,7 +44,18 @@ def load_profile(profile_path: str | Path) -> OrchestratorConfig:
     if not p.exists():
         raise ProfileError(f"profile not found: {p}")
 
-    raw = p.read_text(encoding="utf-8")
+    return load_profile_text(p.read_text(encoding="utf-8"), source=p.stem)
+
+
+def load_profile_data(data: dict[str, Any], *, source: str = "control-api") -> OrchestratorConfig:
+    """从 Control API 等结构化事实源加载 RuntimeProfile。"""
+    if not isinstance(data, dict):
+        raise ProfileError("profile root must be a mapping")
+    return load_profile_text(yaml.safe_dump(data, sort_keys=False), source=source)
+
+
+def load_profile_text(raw: str, *, source: str = "inline") -> OrchestratorConfig:
+    """从 YAML 文本加载 profile，统一文件与远端配置的校验语义。"""
     # 未插值版本：${VAR} 是合法 YAML 字符串，可先解析出 blocks 结构做环境变量校验
     try:
         raw_data = yaml.safe_load(raw)
@@ -64,7 +75,7 @@ def load_profile(profile_path: str | Path) -> OrchestratorConfig:
         raise ProfileError(f"unexpected kind: {data.get('kind')}, expected RuntimeProfile")
 
     metadata = data.get("metadata") or {}
-    profile_id = str(metadata.get("id") or p.stem)
+    profile_id = str(metadata.get("id") or source)
 
     blocks_raw = data.get("blocks") or {}
     if not isinstance(blocks_raw, dict):

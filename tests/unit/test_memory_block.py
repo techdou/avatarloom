@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from avatarloom_sdk import BlockContext
 
 
@@ -84,12 +85,23 @@ class TestMemoryStoreOps:
             def __init__(self):
                 self.deleted: list[str] = []
                 self.added: list[dict] = []
+                self.get_all_calls: list[dict] = []
 
-            def get_all(self, user_id=None, agent_id=None):
-                return [
-                    {"id": "m1", "memory": "喜欢喝美式咖啡", "hash": "h1"},
-                    {"id": "m2", "memory": "在准备研究生考试", "hash": "h2"},
-                ]
+            def get_all(self, *, filters=None, top_k=20, show_expired=False):
+                """严格模拟锁定的 mem0ai 2.0.17 契约。"""
+                self.get_all_calls.append(
+                    {
+                        "filters": filters,
+                        "top_k": top_k,
+                        "show_expired": show_expired,
+                    }
+                )
+                return {
+                    "results": [
+                        {"id": "m1", "memory": "喜欢喝美式咖啡", "hash": "h1"},
+                        {"id": "m2", "memory": "在准备研究生考试", "hash": "h2"},
+                    ]
+                }
 
             def delete(self, memory_id=None):
                 self.deleted.append(memory_id)
@@ -102,12 +114,37 @@ class TestMemoryStoreOps:
         return store, fake
 
     def test_list_all_maps_fields(self) -> None:
-        store, _ = self._store_with_fake()
+        store, fake = self._store_with_fake()
         items = store.list_all("demo-assistant")
         assert items == [
             {"id": "m1", "text": "喜欢喝美式咖啡", "hash": "h1"},
             {"id": "m2", "text": "在准备研究生考试", "hash": "h2"},
         ]
+        assert fake.get_all_calls == [
+            {
+                "filters": {
+                    "user_id": "default_user",
+                    "agent_id": "demo-assistant",
+                },
+                "top_k": 1000,
+                "show_expired": False,
+            }
+        ]
+
+    def test_list_all_rejects_malformed_sdk_response(self) -> None:
+        from blocks.memory.mem0_local import MemoryStore
+
+        store = MemoryStore.__new__(MemoryStore)
+        store.user_id = "default_user"
+        store.top_k = 5
+
+        class _BrokenMem0:
+            def get_all(self, **kwargs):
+                return []
+
+        store._m = _BrokenMem0()
+        with pytest.raises(TypeError, match="Mem0 get_all"):
+            store.list_all("demo-assistant")
 
     def test_delete_one_passes_memory_id(self) -> None:
         store, fake = self._store_with_fake()
@@ -120,6 +157,42 @@ class TestMemoryStoreOps:
         assert fake.added[0]["messages"] == [{"role": "user", "content": "用户喜欢编程"}]
         assert fake.added[0]["agent_id"] == "demo-assistant"
         assert fake.added[0]["user_id"] == "default_user"
+
+
+class TestMemoryManagementReliability:
+    async def test_list_failure_is_not_disguised_as_empty(self) -> None:
+        from blocks.memory.mem0_local import Mem0MemoryBlock
+
+        class _FailingStore:
+            def list_all(self, agent_id: str):
+                raise RuntimeError(f"qdrant unavailable for {agent_id}")
+
+        block = Mem0MemoryBlock()
+        block._store = _FailingStore()  # type: ignore[assignment]
+
+        with pytest.raises(RuntimeError, match="qdrant unavailable"):
+            await block.list_memories("demo-assistant")
+
+    async def test_shutdown_closes_underlying_qdrant_client(self) -> None:
+        from blocks.memory.mem0_local import Mem0MemoryBlock
+
+        class _QdrantClient:
+            closed = False
+
+            def close(self) -> None:
+                self.closed = True
+
+        qdrant_client = _QdrantClient()
+        vector_store = type("VectorStore", (), {"client": qdrant_client})()
+        memory = type("Memory", (), {"vector_store": vector_store})()
+        store = type("Store", (), {"_m": memory})()
+
+        block = Mem0MemoryBlock()
+        block._store = store
+        await block.shutdown()
+
+        assert qdrant_client.closed is True
+        assert block.active is False
 
 
 class TestOrchestratorMemoryHooks:
@@ -165,7 +238,7 @@ class TestOrchestratorMemoryHooks:
 
         # memorize 凑对写入
         await orch._memorize_turn("你好", "你好呀", "demo-assistant")
-        assert spy.last == ("你好", "你好呀", "demo-assistant")  # type: ignore[attr-defined]
+        assert spy.last == ("你好", "你好呀", "demo-assistant")
 
     async def test_interrupted_run_not_memorized(self) -> None:
         from avatarloom_protocol import LLM_TEXT_DONE, Event

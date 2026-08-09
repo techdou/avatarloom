@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+import logging
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from avatarloom_control_api.catalog import remove_persona_mirror, write_persona_mirror
 from avatarloom_control_api.deps import get_db
 from avatarloom_control_api.models import Persona
 from avatarloom_control_api.schemas import (
@@ -16,6 +19,14 @@ from avatarloom_control_api.schemas import (
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+
+def _mirror(request: Request, persona: Persona) -> None:
+    try:
+        write_persona_mirror(request.app.state.settings, persona)
+    except OSError:
+        logger.exception("persona mirror write failed: %s", persona.id)
 
 
 @router.get("", response_model=list[PersonaOut])
@@ -39,19 +50,27 @@ async def get_persona(persona_id: str, db: AsyncSession = Depends(get_db)) -> Pe
 
 
 @router.post("", response_model=PersonaOut, status_code=status.HTTP_201_CREATED)
-async def create_persona(payload: PersonaCreate, db: AsyncSession = Depends(get_db)) -> Persona:
+async def create_persona(
+    payload: PersonaCreate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> Persona:
     if await db.get(Persona, payload.id) is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="Persona already exists")
     persona = Persona(**payload.model_dump())
     db.add(persona)
     await db.commit()
     await db.refresh(persona)
+    _mirror(request, persona)
     return persona
 
 
 @router.patch("/{persona_id}", response_model=PersonaOut)
 async def update_persona(
-    persona_id: str, payload: PersonaUpdate, db: AsyncSession = Depends(get_db)
+    persona_id: str,
+    payload: PersonaUpdate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
 ) -> Persona:
     persona = await db.get(Persona, persona_id)
     if persona is None:
@@ -60,14 +79,21 @@ async def update_persona(
         setattr(persona, k, v)
     await db.commit()
     await db.refresh(persona)
+    _mirror(request, persona)
     return persona
 
 
 @router.delete("/{persona_id}", response_model=EmptyResponse)
-async def delete_persona(persona_id: str, db: AsyncSession = Depends(get_db)) -> EmptyResponse:
+async def delete_persona(
+    persona_id: str, request: Request, db: AsyncSession = Depends(get_db)
+) -> EmptyResponse:
     persona = await db.get(Persona, persona_id)
     if persona is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Persona not found")
     await db.delete(persona)
     await db.commit()
+    try:
+        remove_persona_mirror(request.app.state.settings, persona_id)
+    except OSError:
+        logger.exception("persona mirror delete failed: %s", persona_id)
     return EmptyResponse()

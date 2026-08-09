@@ -12,18 +12,12 @@ import {
   type RoundTiming,
   type SessionEvent,
 } from "@/lib/events";
+import { requestWsTicket } from "@/lib/ws-ticket";
 
 export type ConnState = "disconnected" | "connecting" | "connected" | "error";
 
 /** 隧道端口显式映射（README「端口约定」唯一权威）：页面端口 → gateway WS 端口。 */
 const TUNNEL_WS_PORT: Record<string, string> = { "13000": "18101" };
-
-/**
- * 浏览器 WS 鉴权 token。只通过首条 auth 消息传递，不放进 URL。
- * 注意：NEXT_PUBLIC_* 会在构建期打入客户端 bundle——这是共享密钥模型，
- * 仅适用于受控单用户隧道；多用户部署应改为运行时注入（SSR / 独立 auth 接口）。
- */
-const WS_AUTH_TOKEN = process.env.NEXT_PUBLIC_WS_TOKEN ?? "";
 
 /** 推导 WS 地址（纯函数，挂载即算）：
  * 1. URL 参数 ?wsPort=xxxxx；2. NEXT_PUBLIC_WS_PORT env；
@@ -401,6 +395,15 @@ export function useRealtimeSession({
     setError(null);
     reconnectRef.current.intentional = false;
 
+    let authTicket: string | null;
+    try {
+      authTicket = await requestWsTicket();
+    } catch (ticketError) {
+      setConn("error");
+      setError(ticketError instanceof Error ? ticketError.message : String(ticketError));
+      return;
+    }
+
     // 重连前先清理旧资源——自动重连路径（onclose → connect）不经 disconnect，
     // 不清理会泄漏 AudioContext（Chrome ~6 个上限，泄漏几次就无声）
     playerRef.current?.close();
@@ -437,8 +440,8 @@ export function useRealtimeSession({
       if (wsRef.current !== ws) return; // stale socket——旧连接迟到事件，丢弃
       setConn("connected");
       reconnectRef.current.attempts = 0;
-      if (WS_AUTH_TOKEN) {
-        ws.send(JSON.stringify({ type: "auth", token: WS_AUTH_TOKEN }));
+      if (authTicket) {
+        ws.send(JSON.stringify({ type: "auth", token: authTicket }));
       }
       ws.send(
         JSON.stringify({

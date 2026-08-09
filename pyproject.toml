@@ -33,7 +33,7 @@ dependencies = [
     "uvicorn[standard]>=0.32",
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
-    "sqlalchemy>=2.0.36",
+    "sqlalchemy[asyncio]>=2.0.36",
     "alembic>=1.14",
     "aiosqlite>=0.20",
     "httpx>=0.28",
@@ -55,7 +55,9 @@ silero = ["torch>=2.2", "torchaudio>=2.2"]
 sensevoice = ["funasr>=1.1", "torch>=2.2", "torchaudio>=2.2", "modelscope>=1.20"]
 qwen3-tts = ["torch>=2.2", "transformers>=4.46", "soundfile>=0.12"]
 voxcpm2 = ["torch>=2.2", "transformers>=4.46", "soundfile>=0.12", "scipy>=1.13", "voxcpm>=1.0.5"]
-memory = ["mem0ai>=0.1.0", "qdrant-client>=1.9"]
+# Adapter contract is verified against Mem0 2.0.17 (filters/get_all response/close path).
+# Pin exactly so a future API break cannot silently invalidate the runtime adapter.
+memory = ["mem0ai==2.0.17", "qdrant-client>=1.9"]
 musetalk = ["torch>=2.2", "opencv-python>=4.10", "imageio>=2.36", "Pillow>=10"]
 ollama = ["ollama>=0.4"]
 gpu-full = [

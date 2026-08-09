@@ -36,11 +36,11 @@ class Settings(BaseSettings):
 
     # WS 入口鉴权：与 control-api 共用 env 名 AVATARLOOM_API_TOKEN（env_prefix 一致），
     # 一套 token 同时保护 control-api HTTP 与 gateway WS。
-    # 留空（默认）→ /ws/realtime 不校验 token（开发模式）；
-    # 填值 → 浏览器首条 auth 消息带 token；脚本客户端用 Authorization: Bearer <token>。
+    # 留空时必须显式 auth_disabled=True；填值后浏览器使用短期 ticket，
+    # 脚本客户端可用 Authorization: Bearer <token>。
     api_token: str = Field(
         default="",
-        description="Bearer token required on /ws/realtime when set; empty disables auth (dev mode).",
+        description="Bearer token required on /ws/realtime when set; empty remains fail-closed unless auth_disabled.",
     )
     # 显式开发模式开关：api_token 为空且 auth_disabled=False（默认）时 fail-closed
     # （WS 握手直接拒绝），防止生产漏配 token 时任何人可发起 GPU 会话。
@@ -65,9 +65,9 @@ class Settings(BaseSettings):
     artifacts_root: str = "./data/artifacts"
     runs_root: str = "./data/runs"
 
-    # 默认 Profile（未指定时）——lite-12gb 是真实后端（VAD/STT/TTS/Avatar 均用真 adapter），
-    # mock 仅作无 GPU 时的降级，需显式设 AVATARLOOM_DEFAULT_PROFILE=mock 才走假链路。
-    default_profile: str = "lite-12gb"
+    # 默认 Profile 保持 mock，确保无 GPU/API Key 的安装也能可靠启动。
+    # 真实链路必须显式选择 lite-12gb/autodl-best 等 profile。
+    default_profile: str = "mock"
 
     # 日志
     log_level: str = "INFO"
@@ -87,4 +87,3 @@ def control_api_auth_headers(settings: Settings) -> dict[str, str]:
     if token:
         return {"Authorization": f"Bearer {token}"}
     return {}
-

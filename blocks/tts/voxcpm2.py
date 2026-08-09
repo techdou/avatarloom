@@ -156,41 +156,55 @@ class VoxCpm2TtsBlock(Block):
         if self._sync_run_state(ctx):
             return
         if event.type == LLM_TEXT_DELTA:
-            idx = event.payload.get("sentence_index", 0)
-            text = event.payload.get("text", "")
-            is_end = event.payload.get("is_sentence_end", False)
-            if text:
-                self._sentence_buffers[idx] = self._sentence_buffers.get(idx, "") + text
-            if is_end:
-                sentence = self._sentence_buffers.pop(idx, "")
-                if sentence.strip():
-                    await self._synthesize(ctx, sentence, ctx.persona_voice_ref)
+            await self._handle_text_delta(ctx, event)
         elif event.type == LLM_TEXT_DONE:
-            # 句尾剩余合成：回复没有句末标点时（is_sentence_end 始终 False），
-            # 缓冲内容此前被直接丢弃——TTS 零产出（E2E 实测 tts_delta=False 的真因）
-            pending = sorted(self._sentence_buffers.items())
-            self._sentence_buffers = {}
-            # 兜底：非流式/被截断的 LLM 只发 DONE 带 full_text 时缓冲为空，
-            # 直接用 full_text 合成，避免 TTS 零产出
-            if not pending:
-                full_text = (event.payload.get("full_text") or "").strip()
-                if full_text:
-                    pending = [(0, full_text)]
-            for _idx, sentence in pending:
-                if sentence.strip():
-                    await self._synthesize(ctx, sentence, ctx.persona_voice_ref)
-            await ctx.emit(
-                Event(
-                    type=TTS_AUDIO_COMPLETED,
-                    session_id=ctx.session_id,
-                    source="tts.voxcpm2",
-                    run_id=ctx.run_id,
-                    payload={
-                        "total_samples": self._total_samples,
-                        "duration_ms": int(self._total_samples / 16000 * 1000),
-                    },
-                )
+            await self._handle_text_done(ctx, event)
+
+    async def _handle_text_delta(self, ctx: BlockContext, event: Event) -> None:
+        idx = event.payload.get("sentence_index", 0)
+        text = event.payload.get("text", "")
+        is_end = event.payload.get("is_sentence_end", False)
+        if text:
+            self._sentence_buffers[idx] = self._sentence_buffers.get(idx, "") + text
+        if not is_end:
+            return
+        sentence = self._sentence_buffers.pop(idx, "")
+        if sentence.strip():
+            await self._synthesize(ctx, sentence, ctx.persona_voice_ref)
+
+    async def _handle_text_done(self, ctx: BlockContext, event: Event) -> None:
+        for _idx, sentence in self._pending_sentences(event):
+            if sentence.strip():
+                await self._synthesize(ctx, sentence, ctx.persona_voice_ref)
+        await self._emit_completed(ctx)
+
+    def _pending_sentences(self, event: Event) -> list[tuple[int, str]]:
+        # 句尾剩余合成：回复没有句末标点时（is_sentence_end 始终 False），
+        # 缓冲内容此前被直接丢弃——TTS 零产出（E2E 实测 tts_delta=False 的真因）
+        pending = sorted(self._sentence_buffers.items())
+        self._sentence_buffers = {}
+        # 兜底：非流式/被截断的 LLM 只发 DONE 带 full_text 时缓冲为空，
+        # 直接用 full_text 合成，避免 TTS 零产出
+        if pending:
+            return pending
+        full_text = (event.payload.get("full_text") or "").strip()
+        if full_text:
+            return [(0, full_text)]
+        return []
+
+    async def _emit_completed(self, ctx: BlockContext) -> None:
+        await ctx.emit(
+            Event(
+                type=TTS_AUDIO_COMPLETED,
+                session_id=ctx.session_id,
+                source="tts.voxcpm2",
+                run_id=ctx.run_id,
+                payload={
+                    "total_samples": self._total_samples,
+                    "duration_ms": int(self._total_samples / 16000 * 1000),
+                },
             )
+        )
 
     async def _synthesize(self, ctx: BlockContext, text: str, voice_ref: str | None) -> None:
         # persona voice_ref 优先，fallback 到 profile config 的 voiceRef

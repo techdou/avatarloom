@@ -5,6 +5,11 @@ import {
   useRealtimeSession,
 } from "@/hooks/use-realtime-session";
 import type { Persona, RuntimeProfile } from "@/lib/api";
+import {
+  DEFAULT_PERSONA_ID,
+  DEFAULT_PROFILE_ID,
+  RUNTIME_CONTEXT_STORAGE,
+} from "@/lib/runtime-context";
 import { ContextBar } from "@/components/playground/context-bar";
 import { AvatarStage } from "@/components/playground/avatar-stage";
 import { TranscriptPane } from "@/components/playground/transcript-pane";
@@ -21,10 +26,8 @@ import { DebugDrawer } from "@/components/playground/debug-drawer";
  * 音频是主时钟：PcmPlayer 用 AudioContext.currentTime 调度，AVMux 按节奏消费帧。
  */
 export function PlaygroundClient() {
-  // profile / persona：客户端持久化（默认 autodl-best 真实 GPU 链路；
-  // 本地无 GPU 开发可手动切 mock）
-  const [profileId, setProfileId] = useState<string>("autodl-best");
-  const [personaId, setPersonaId] = useState<string>("demo-assistant");
+  const [profileId, setProfileId] = useState<string>(DEFAULT_PROFILE_ID);
+  const [personaId, setPersonaId] = useState<string>(DEFAULT_PERSONA_ID);
   const [showDebug, setShowDebug] = useState(false);
   const [runsOpen, setRunsOpen] = useState(false);
 
@@ -34,8 +37,8 @@ export function PlaygroundClient() {
 
   useEffect(() => {
     try {
-      const p = localStorage.getItem("al.profile");
-      const pe = localStorage.getItem("al.persona");
+      const p = localStorage.getItem(RUNTIME_CONTEXT_STORAGE.profile);
+      const pe = localStorage.getItem(RUNTIME_CONTEXT_STORAGE.persona);
       if (p) setProfileId(p);
       if (pe) setPersonaId(pe);
     } catch {
@@ -84,7 +87,7 @@ export function PlaygroundClient() {
     (id: string) => {
       setProfileId(id);
       try {
-        localStorage.setItem("al.profile", id);
+        localStorage.setItem(RUNTIME_CONTEXT_STORAGE.profile, id);
       } catch {
         /* ignore */
       }
@@ -97,7 +100,7 @@ export function PlaygroundClient() {
     (id: string) => {
       setPersonaId(id);
       try {
-        localStorage.setItem("al.persona", id);
+        localStorage.setItem(RUNTIME_CONTEXT_STORAGE.persona, id);
       } catch {
         /* ignore */
       }

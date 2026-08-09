@@ -22,6 +22,7 @@ import struct
 import subprocess
 import sys
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -89,80 +90,135 @@ def _chunks16(pcm16: bytes, size: int = 512):
         yield pcm16[i * size * 2 : (i + 1) * size * 2]
 
 
-async def main() -> int:
-    with contextlib.suppress(Exception):
-        sys.stdout.reconfigure(line_buffering=True)
-    t_start = time.perf_counter()
-    ts = time.strftime("%Y%m%d-%H%M%S")
-    out_dir = OUT_ROOT / ts
-    out_dir.mkdir(parents=True, exist_ok=True)
-    timeout = float(os.environ.get("E2E_TIMEOUT", "300"))
+@dataclass
+class E2eAssets:
+    user_wav: Path
+    portrait: str
+    voice_ref: str
 
+
+@dataclass
+class E2eState:
+    t_start: float
+    events: list[tuple[float, Event]] = field(default_factory=list)
+    first_event_ts: dict[str, float] = field(default_factory=dict)
+    got: dict[str, bool] = field(
+        default_factory=lambda: {
+            "transcript": False,
+            "llm_delta": False,
+            "tts_delta": False,
+            "tts_done": False,
+            "avatar": False,
+            "video": False,
+        }
+    )
+    video_path: str | None = None
+    transcript_text: str = ""
+    llm_full: str = ""
+    tts_pcm: bytearray = field(default_factory=bytearray)
+    frames: list[bytes] = field(default_factory=list)
+    cursor: int = 0
+
+
+def _configure_stdout() -> None:
+    with contextlib.suppress(Exception):
+        reconfigure = getattr(sys.stdout, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(line_buffering=True)
+
+
+def _resolve_assets() -> E2eAssets:
     user_wav = Path(os.environ.get("E2E_USER_WAV", "data/assets/user_input.wav"))
     if not user_wav.is_absolute():
         user_wav = PROJECT_ROOT / user_wav
-    portrait = os.environ.get("E2E_PORTRAIT", "personas/demo-assistant/avatar/portrait.png")
-    voice_ref = os.environ.get("E2E_VOICE_REF", "personas/demo-assistant/voice/ref.wav")
+    return E2eAssets(
+        user_wav=user_wav,
+        portrait=os.environ.get(
+            "E2E_PORTRAIT", "personas/demo-assistant/avatar/portrait.png"
+        ),
+        voice_ref=os.environ.get("E2E_VOICE_REF", "personas/demo-assistant/voice/ref.wav"),
+    )
 
+
+def _print_header(assets: E2eAssets) -> None:
     print("=" * 64)
     print("AvatarLoom Real E2E (RTX 5090)")
     print("=" * 64)
-    print(f"[env] user_wav={user_wav}")
-    print(f"[env] portrait={portrait}")
-    print(f"[env] voice_ref={voice_ref}")
+    print(f"[env] user_wav={assets.user_wav}")
+    print(f"[env] portrait={assets.portrait}")
+    print(f"[env] voice_ref={assets.voice_ref}")
 
-    # 资产预检：缺文件直接报错（而不是深处 BlockSetupError 难定位）。
-    # persona 三件套不在 git 仓库，需服务器预先生成（generate_asset_matrix.sh）。
-    asset_paths = (user_wav, PROJECT_ROOT / portrait, PROJECT_ROOT / voice_ref)
-    missing_assets = await asyncio.to_thread(
+
+async def _missing_assets(assets: E2eAssets) -> list[str]:
+    asset_paths = (
+        assets.user_wav,
+        PROJECT_ROOT / assets.portrait,
+        PROJECT_ROOT / assets.voice_ref,
+    )
+    return await asyncio.to_thread(
         lambda: [str(path) for path in asset_paths if not path.exists()]
     )
-    if missing_assets:
-        print(
-            "[FATAL] 资产缺失（persona 三件套不在仓库，需先跑 "
-            "scripts/generate_asset_matrix.sh 或手动放置）：",
-            file=sys.stderr,
-        )
-        for m in missing_assets:
-            print(f"  - {m}", file=sys.stderr)
-        return 2
 
-    profile_name = os.environ.get("E2E_PROFILE", "autodl-best")
+
+def _print_missing_assets(missing_assets: list[str]) -> None:
+    print(
+        "[FATAL] 资产缺失（persona 三件套不在仓库，需先跑 "
+        "scripts/generate_asset_matrix.sh 或手动放置）：",
+        file=sys.stderr,
+    )
+    for missing in missing_assets:
+        print(f"  - {missing}", file=sys.stderr)
+
+
+def _load_e2e_profile(profile_name: str, assets: E2eAssets):
     profile_path = PROJECT_ROOT / "profiles" / f"{profile_name}.yaml"
-    is_flashhead = "flashhead" in profile_name
     config = load_profile(profile_path)
     if "avatar" in config.blocks:
-        config.blocks["avatar"].config["portrait"] = portrait
+        config.blocks["avatar"].config["portrait"] = assets.portrait
     if "tts" in config.blocks:
-        config.blocks["tts"].config["voiceRef"] = voice_ref
+        config.blocks["tts"].config["voiceRef"] = assets.voice_ref
     print(f"[1] profile={config.profile_id} blocks={list(config.blocks)}")
+    return config
 
-    events: list[tuple[float, Event]] = []
-    # 首事件时刻（相对 t_start 秒）——落盘到 manifest.metrics.first_event_ts
-    first_event_ts: dict[str, float] = {}
 
+def _make_sink(state: E2eState):
     async def sink(e: Event) -> None:
-        events.append((time.perf_counter() - t_start, e))
+        state.events.append((time.perf_counter() - state.t_start, e))
         # 非高频事件直接打印（排障：状态迁移/finish_reason/打断 一目了然）
-        if e.type not in ("audio.appended", "tts.audio.delta", "avatar.speech_frame", "avatar.idle_frame"):
-            extra = ""
-            if e.type == "llm.text.done":
-                extra = f" finish={e.payload.get('finish_reason')}"
-            elif e.type == "session.state_changed":
-                extra = f" {e.payload.get('from')}→{e.payload.get('to')}"
-            print(f"    [evt] {e.type} @{time.perf_counter() - t_start:.2f}s{extra}", flush=True)
+        if e.type in (
+            "audio.appended",
+            "tts.audio.delta",
+            "avatar.speech_frame",
+            "avatar.idle_frame",
+        ):
+            return
+        extra = ""
+        if e.type == "llm.text.done":
+            extra = f" finish={e.payload.get('finish_reason')}"
+        elif e.type == "session.state_changed":
+            extra = f" {e.payload.get('from')}→{e.payload.get('to')}"
+        print(
+            f"    [evt] {e.type} @{time.perf_counter() - state.t_start:.2f}s{extra}",
+            flush=True,
+        )
 
-    async def sink_quiet(e: Event) -> None:
-        pass
+    return sink
 
-    orch = Orchestrator(config, event_sink=sink)
+
+async def _start_orchestrator(config, state: E2eState):
+    orch = Orchestrator(config, event_sink=_make_sink(state))
     print("[2] orchestrator.setup() ...")
     await orch.setup()
     print(f"    ready blocks: {list(orch.blocks)} degraded={orch.degraded_blocks}")
-
-    session = await orch.start_session(persona_id="demo-assistant", workspace_root=str(PROJECT_ROOT))
+    session = await orch.start_session(
+        persona_id="demo-assistant",
+        workspace_root=str(PROJECT_ROOT),
+    )
     print(f"[3] session={session.session_id}")
+    return orch, session
 
+
+async def _feed_user_audio(orch: Orchestrator, session, user_wav: Path) -> None:
     print(f"[4] load user audio: {user_wav}")
     pcm = _load_pcm16_16k(user_wav)
     print(f"    {len(pcm) / 2 / 16000:.2f}s @16k")
@@ -180,126 +236,146 @@ async def main() -> int:
         await asyncio.sleep(0.032)
     print("    (appended 1.25s silence to trigger speech end)")
 
+
+def _print_heartbeat(state: E2eState) -> None:
+    # 事件类型分布（诊断用：定位链路卡在哪）
+    from collections import Counter
+
+    now = time.perf_counter()
+    type_counts = Counter(e.type for _, e in state.events)
+    top = ", ".join(f"{t}:{c}" for t, c in type_counts.most_common(6))
+    print(
+        f"    [heartbeat] t={now - state.t_start:.0f}s events={len(state.events)} "
+        f"types=[{top}] "
+        f"got={ dict(state.got.items()) }",
+        flush=True,
+    )
+
+
+def _consume_event(state: E2eState, dt: float, e: Event) -> None:
+    if e.type == TRANSCRIPT_COMPLETED and not state.got["transcript"]:
+        state.transcript_text = e.payload.get("text", "")
+        state.got["transcript"] = True
+        state.first_event_ts["transcript"] = dt
+        print(f"    [event] transcript @{dt:.2f}s: {state.transcript_text!r}")
+    elif e.type == LLM_TEXT_DELTA and not state.got["llm_delta"]:
+        state.got["llm_delta"] = True
+        state.first_event_ts["first_llm_delta"] = dt
+        print(f"    [event] first llm delta @{dt:.2f}s: {e.payload.get('text', '')!r}")
+    elif e.type == LLM_TEXT_DONE:
+        state.llm_full = e.payload.get("full_text", state.llm_full)
+    elif e.type == TTS_AUDIO_DELTA and not state.got["tts_delta"] and not e.payload.get("filler"):
+        state.got["tts_delta"] = True
+        state.first_event_ts["first_tts_delta"] = dt
+        print(f"    [event] first tts delta @{dt:.2f}s")
+    _collect_media_event(state, dt, e)
+
+
+def _collect_media_event(state: E2eState, dt: float, e: Event) -> None:
+    # 垫音（filler）不计入验收音频——它是盖等待空白的口头禅，
+    # 混入会让 TTS 时长/音频产物失真（payload.filler 由 orchestrator 标记）
+    if e.type == TTS_AUDIO_DELTA and not e.payload.get("filler"):
+        state.tts_pcm += base64.b64decode(e.payload.get("pcm_b64", ""))
+    elif e.type == TTS_AUDIO_COMPLETED:
+        state.got["tts_done"] = True
+        state.first_event_ts["tts_completed"] = dt
+        print(f"    [event] tts completed @{dt:.2f}s")
+    elif e.type == AVATAR_SPEECH_FRAME and not state.got["avatar"]:
+        state.got["avatar"] = True
+        state.first_event_ts["first_avatar_frame"] = dt
+        print(f"    [event] first avatar frame @{dt:.2f}s")
+    elif e.type == AVATAR_VIDEO_READY:
+        _record_video_ready(state, dt, e)
+    if e.type == AVATAR_SPEECH_FRAME:
+        state.frames.append(base64.b64decode(e.payload.get("frame_b64", "")))
+
+
+def _record_video_ready(state: E2eState, dt: float, e: Event) -> None:
+    if not state.got["video"]:
+        state.first_event_ts["video_ready"] = dt
+    state.got["video"] = True
+    state.video_path = e.payload.get("video_path", "")
+    print(
+        f"    [event] avatar video ready @{dt:.2f}s "
+        f"frames={e.payload.get('frames')} "
+        f"infer_s={e.payload.get('infer_s')} mp4={state.video_path}"
+    )
+
+
+def _consume_new_events(state: E2eState) -> None:
+    new_events = state.events[state.cursor :]
+    state.cursor = len(state.events)
+    for dt, event in new_events:
+        _consume_event(state, dt, event)
+
+
+async def _wait_for_pipeline(state: E2eState, timeout: float) -> None:
     print("[6] wait for pipeline ...")
     deadline = time.perf_counter() + timeout
-    got = {
-        "transcript": False,
-        "llm_delta": False,
-        "tts_delta": False,
-        "tts_done": False,
-        "avatar": False,
-        "video": False,
-    }
-    video_path: str | None = None
-    transcript_text = ""
-    llm_full = ""
-    tts_pcm = bytearray()
-    frames: list[bytes] = []
     last_heartbeat = time.perf_counter()
-    # 消费游标：AL-E2E-001 修复——每轮 poll 只处理新增事件，
-    # 此前全量重扫导致 TTS PCM / Avatar 帧被重复累计，音频时长与帧数全部失真。
-    cursor = 0
-    while time.perf_counter() < deadline and not (got["tts_done"] and got["avatar"]):
+    while time.perf_counter() < deadline and not (
+        state.got["tts_done"] and state.got["avatar"]
+    ):
         now = time.perf_counter()
         if now - last_heartbeat >= 30:
             last_heartbeat = now
-            # 事件类型分布（诊断用：定位链路卡在哪）
-            from collections import Counter
-
-            type_counts = Counter(e.type for _, e in events)
-            top = ", ".join(f"{t}:{c}" for t, c in type_counts.most_common(6))
-            print(
-                f"    [heartbeat] t={now - t_start:.0f}s events={len(events)} "
-                f"types=[{top}] "
-                f"got={ dict(got.items()) }",
-                flush=True,
-            )
+            _print_heartbeat(state)
         await asyncio.sleep(0.2)
-        new_events = events[cursor:]
-        cursor = len(events)
-        for dt, e in new_events:
-            if e.type == TRANSCRIPT_COMPLETED and not got["transcript"]:
-                transcript_text = e.payload.get("text", "")
-                got["transcript"] = True
-                first_event_ts["transcript"] = dt
-                print(f"    [event] transcript @{dt:.2f}s: {transcript_text!r}")
-            elif e.type == LLM_TEXT_DELTA and not got["llm_delta"]:
-                got["llm_delta"] = True
-                first_event_ts["first_llm_delta"] = dt
-                print(f"    [event] first llm delta @{dt:.2f}s: {e.payload.get('text', '')!r}")
-            elif e.type == LLM_TEXT_DONE:
-                llm_full = e.payload.get("full_text", llm_full)
-            elif e.type == TTS_AUDIO_DELTA and not got["tts_delta"] and not e.payload.get("filler"):
-                got["tts_delta"] = True
-                first_event_ts["first_tts_delta"] = dt
-                print(f"    [event] first tts delta @{dt:.2f}s")
-            # 垫音（filler）不计入验收音频——它是盖等待空白的口头禅，
-            # 混入会让 TTS 时长/音频产物失真（payload.filler 由 orchestrator 标记）
-            if e.type == TTS_AUDIO_DELTA and not e.payload.get("filler"):
-                tts_pcm += base64.b64decode(e.payload.get("pcm_b64", ""))
-            elif e.type == TTS_AUDIO_COMPLETED:
-                got["tts_done"] = True
-                first_event_ts["tts_completed"] = dt
-                print(f"    [event] tts completed @{dt:.2f}s")
-            elif e.type == AVATAR_SPEECH_FRAME and not got["avatar"]:
-                got["avatar"] = True
-                first_event_ts["first_avatar_frame"] = dt
-                print(f"    [event] first avatar frame @{dt:.2f}s")
-            elif e.type == AVATAR_VIDEO_READY:
-                if not got["video"]:
-                    first_event_ts["video_ready"] = dt
-                got["video"] = True
-                video_path = e.payload.get("video_path", "")
-                print(
-                    f"    [event] avatar video ready @{dt:.2f}s "
-                    f"frames={e.payload.get('frames')} "
-                    f"infer_s={e.payload.get('infer_s')} mp4={video_path}"
-                )
-            if e.type == AVATAR_SPEECH_FRAME:
-                frames.append(base64.b64decode(e.payload.get("frame_b64", "")))
+        _consume_new_events(state)
 
-    # 真口型视频是异步渲染的——给 avatar.video.ready 留出渲染时间
-    if got["tts_done"] and not got["video"]:
-        # 只有真实渲染型 avatar（musetalk）才产出 reply 级 mp4；
-        # flashhead 流式帧即视频，mock/static 无渲染概念——跳过等待，
-        # 否则 mock 链路本地验证会在此处空等 720s。
-        avatar_block_id = ""
-        with contextlib.suppress(Exception):
-            avatar_block_id = orch.blocks["avatar"].manifest().block_id if "avatar" in orch.blocks else ""
-        if is_flashhead or avatar_block_id in ("avatar.mock", "avatar.static"):
-            print(f"[6.5] {avatar_block_id or 'flashhead'}: frames == video (no reply mp4)")
-            got["video"] = True
-        else:
-            video_deadline = time.perf_counter() + 720
-            print("[6.5] waiting for avatar video render ...")
-            while time.perf_counter() < video_deadline and not got["video"]:
-                await asyncio.sleep(0.2)
-                # 复用主循环游标续扫——同样只处理新增事件
-                new_events = events[cursor:]
-                cursor = len(events)
-                for dt, e in new_events:
-                    if e.type == AVATAR_VIDEO_READY:
-                        got["video"] = True
-                        first_event_ts["video_ready"] = dt
-                        video_path = e.payload.get("video_path", "")
-                        print(
-                            f"    [event] avatar video ready @{dt:.2f}s "
-                            f"frames={e.payload.get('frames')} "
-                            f"infer_s={e.payload.get('infer_s')} mp4={video_path}"
-                        )
 
-    e2e = time.perf_counter() - t_start
-    print("[7] collect outputs ...")
-    tts_wav = out_dir / "tts_reply.wav"
-    tts_wav.write_bytes(_wav_bytes_16k(bytes(tts_pcm)))
-    (out_dir / "transcript.txt").write_text(transcript_text, encoding="utf-8")
-    (out_dir / "llm_reply.txt").write_text(llm_full, encoding="utf-8")
-    # 事件类型分布（验收诊断：定位链路卡点）
+async def _maybe_wait_for_video(
+    orch: Orchestrator,
+    state: E2eState,
+    is_flashhead: bool,
+) -> None:
+    if not state.got["tts_done"] or state.got["video"]:
+        return
+    avatar_block_id = ""
+    with contextlib.suppress(Exception):
+        avatar_block_id = orch.blocks["avatar"].manifest().block_id if "avatar" in orch.blocks else ""
+    if is_flashhead or avatar_block_id in ("avatar.mock", "avatar.static"):
+        print(f"[6.5] {avatar_block_id or 'flashhead'}: frames == video (no reply mp4)")
+        state.got["video"] = True
+        return
+    await _wait_for_rendered_video(state)
+
+
+async def _wait_for_rendered_video(state: E2eState) -> None:
+    video_deadline = time.perf_counter() + 720
+    print("[6.5] waiting for avatar video render ...")
+    while time.perf_counter() < video_deadline and not state.got["video"]:
+        await asyncio.sleep(0.2)
+        _consume_video_ready_events(state)
+
+
+def _consume_video_ready_events(state: E2eState) -> None:
+    # 复用主循环游标续扫——原行为只在渲染等待阶段处理 avatar.video.ready。
+    new_events = state.events[state.cursor :]
+    state.cursor = len(state.events)
+    for dt, event in new_events:
+        if event.type == AVATAR_VIDEO_READY:
+            _record_video_ready(state, dt, event)
+
+
+def _event_type_counts(events: list[tuple[float, Event]]) -> dict[str, int]:
     from collections import Counter
 
-    event_type_counts = dict(Counter(e.type for _, e in events).most_common())
+    return dict(Counter(e.type for _, e in events).most_common())
 
-    manifest = {
+
+def _build_manifest(
+    ts: str,
+    e2e: float,
+    orch: Orchestrator,
+    config,
+    session,
+    profile_name: str,
+    assets: E2eAssets,
+    state: E2eState,
+    tts_wav: Path,
+) -> dict:
+    return {
         "ts": ts,
         "profile": config.profile_id,
         "session_id": session.session_id,
@@ -307,67 +383,120 @@ async def main() -> int:
         "ready_blocks": _ready_block_ids(orch),
         "degraded_blocks": dict(orch.degraded_blocks),
         "inputs": {
-            "user_wav": str(user_wav),
-            "portrait": portrait,
-            "voice_ref": voice_ref,
+            "user_wav": str(assets.user_wav),
+            "portrait": assets.portrait,
+            "voice_ref": assets.voice_ref,
             "profile": profile_name,
             "llm_model": os.environ.get("LLM_MODEL", ""),
             "llm_base_url": os.environ.get("LLM_BASE_URL", ""),
         },
-        "transcript": transcript_text,
-        "llm_reply": llm_full,
-        "events": {k: bool(v) for k, v in got.items()},
-        "event_type_counts": event_type_counts,
+        "transcript": state.transcript_text,
+        "llm_reply": state.llm_full,
+        "events": {k: bool(v) for k, v in state.got.items()},
+        "event_type_counts": _event_type_counts(state.events),
         "metrics": {
             "total_e2e_s": round(e2e, 3),
-            "tts_audio_seconds": round(len(tts_pcm) / 2 / 16000, 3),
-            "frames": len(frames),
-            "first_event_ts": {k: round(v, 3) for k, v in first_event_ts.items()},
+            "tts_audio_seconds": round(len(state.tts_pcm) / 2 / 16000, 3),
+            "frames": len(state.frames),
+            "first_event_ts": {k: round(v, 3) for k, v in state.first_event_ts.items()},
         },
         "gpu": _gpu_snapshot(),
         "outputs": {"tts_wav": str(tts_wav)},
     }
 
-    rendered_video = Path(video_path) if video_path else None
+
+async def _collect_outputs(
+    out_dir: Path,
+    ts: str,
+    e2e: float,
+    orch: Orchestrator,
+    config,
+    session,
+    profile_name: str,
+    assets: E2eAssets,
+    state: E2eState,
+) -> dict:
+    print("[7] collect outputs ...")
+    tts_wav = out_dir / "tts_reply.wav"
+    tts_wav.write_bytes(_wav_bytes_16k(bytes(state.tts_pcm)))
+    (out_dir / "transcript.txt").write_text(state.transcript_text, encoding="utf-8")
+    (out_dir / "llm_reply.txt").write_text(state.llm_full, encoding="utf-8")
+    manifest = _build_manifest(
+        ts,
+        e2e,
+        orch,
+        config,
+        session,
+        profile_name,
+        assets,
+        state,
+        tts_wav,
+    )
+    await _attach_video_output(out_dir, manifest, state, tts_wav)
+    (out_dir / "manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return manifest
+
+
+async def _attach_video_output(
+    out_dir: Path,
+    manifest: dict,
+    state: E2eState,
+    tts_wav: Path,
+) -> None:
+    rendered_video = Path(state.video_path) if state.video_path else None
     video_exists = bool(
         rendered_video and await asyncio.to_thread(rendered_video.exists)
     )
     if video_exists and rendered_video is not None:
-        # 真实 MuseTalk 口型视频：直接复制为最终产物
-        dst_mp4 = out_dir / "avatar_musetalk.mp4"
-        video_bytes = await asyncio.to_thread(rendered_video.read_bytes)
-        await asyncio.to_thread(dst_mp4.write_bytes, video_bytes)
-        manifest["outputs"]["avatar_mp4"] = str(dst_mp4)
-        manifest["metrics"]["video_source"] = "musetalk"
-    elif frames:
-        frame_dir = out_dir / "frames"
-        frame_dir.mkdir(exist_ok=True)
-        for i, jpg in enumerate(frames):
-            (frame_dir / f"{i:05d}.jpg").write_bytes(jpg)
-        mp4 = out_dir / "avatar.mp4"
-        tts_seconds = max(0.1, len(tts_pcm) / 2 / 16000)
-        fps = max(1, min(30, round(len(frames) / tts_seconds)))
-        cmd = [
-            "ffmpeg", "-y", "-framerate", str(fps),
-            "-i", str(frame_dir / "%05d.jpg"),
-            "-i", str(tts_wav),
-            "-c:v", "libx264", "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-shortest",
-            str(mp4),
-        ]
-        manifest["metrics"]["video_fps"] = fps
-        r = await asyncio.to_thread(
-            subprocess.run, cmd, capture_output=True, text=True
-        )
-        manifest["outputs"]["avatar_mp4"] = str(mp4)
-        manifest["ffmpeg_rc"] = r.returncode
-        manifest["metrics"]["video_source"] = "frame-mux"
-        if r.returncode != 0:
-            print(r.stderr[-500:])
-    (out_dir / "manifest.json").write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+        await _copy_rendered_video(out_dir, manifest, rendered_video)
+    elif state.frames:
+        await _mux_frames(out_dir, manifest, state, tts_wav)
 
+
+async def _copy_rendered_video(out_dir: Path, manifest: dict, rendered_video: Path) -> None:
+    dst_mp4 = out_dir / "avatar_musetalk.mp4"
+    video_bytes = await asyncio.to_thread(rendered_video.read_bytes)
+    await asyncio.to_thread(dst_mp4.write_bytes, video_bytes)
+    manifest["outputs"]["avatar_mp4"] = str(dst_mp4)
+    manifest["metrics"]["video_source"] = "musetalk"
+
+
+async def _mux_frames(
+    out_dir: Path,
+    manifest: dict,
+    state: E2eState,
+    tts_wav: Path,
+) -> None:
+    frame_dir = out_dir / "frames"
+    frame_dir.mkdir(exist_ok=True)
+    for i, jpg in enumerate(state.frames):
+        (frame_dir / f"{i:05d}.jpg").write_bytes(jpg)
+    mp4 = out_dir / "avatar.mp4"
+    tts_seconds = max(0.1, len(state.tts_pcm) / 2 / 16000)
+    fps = max(1, min(30, round(len(state.frames) / tts_seconds)))
+    cmd = [
+        "ffmpeg", "-y", "-framerate", str(fps),
+        "-i", str(frame_dir / "%05d.jpg"),
+        "-i", str(tts_wav),
+        "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-shortest",
+        str(mp4),
+    ]
+    manifest["metrics"]["video_fps"] = fps
+    result = await asyncio.to_thread(
+        subprocess.run, cmd, capture_output=True, text=True
+    )
+    manifest["outputs"]["avatar_mp4"] = str(mp4)
+    manifest["ffmpeg_rc"] = result.returncode
+    manifest["metrics"]["video_source"] = "frame-mux"
+    if result.returncode != 0:
+        print(result.stderr[-500:])
+
+
+async def _shutdown_orchestrator(orch: Orchestrator) -> None:
     print("[8] shutdown")
     try:
         await asyncio.wait_for(orch.shutdown(), timeout=30)
@@ -380,15 +509,64 @@ async def main() -> int:
         # 否则 shutdown 阶段的资源泄漏/超时无从排查
         print(f"[warn] shutdown raised, ignored: {type(e).__name__}: {e}", file=sys.stderr)
 
-    ok = all(got.values())
+
+def _print_result(state: E2eState, e2e: float, out_dir: Path) -> bool:
+    ok = all(state.got.values())
     print("=" * 64)
     print(
         f"RESULT: {'PASS' if ok else 'FAIL'} "
-        f"transcript={got['transcript']} llm={got['llm_delta']} "
-        f"tts={got['tts_delta']} avatar={got['avatar']}"
+        f"transcript={state.got['transcript']} llm={state.got['llm_delta']} "
+        f"tts={state.got['tts_delta']} avatar={state.got['avatar']}"
     )
-    print(f"E2E total: {e2e:.2f}s | TTS audio: {len(tts_pcm) / 2 / 16000:.2f}s | frames: {len(frames)}")
+    print(
+        f"E2E total: {e2e:.2f}s | "
+        f"TTS audio: {len(state.tts_pcm) / 2 / 16000:.2f}s | "
+        f"frames: {len(state.frames)}"
+    )
     print(f"OUTPUTS: {out_dir}")
+    return ok
+
+
+async def main() -> int:
+    _configure_stdout()
+    t_start = time.perf_counter()
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    out_dir = OUT_ROOT / ts
+    out_dir.mkdir(parents=True, exist_ok=True)
+    timeout = float(os.environ.get("E2E_TIMEOUT", "300"))
+    state = E2eState(t_start=t_start)
+    assets = _resolve_assets()
+    _print_header(assets)
+
+    # 资产预检：缺文件直接报错（而不是深处 BlockSetupError 难定位）。
+    # persona 三件套不在 git 仓库，需服务器预先生成（generate_asset_matrix.sh）。
+    missing_assets = await _missing_assets(assets)
+    if missing_assets:
+        _print_missing_assets(missing_assets)
+        return 2
+
+    profile_name = os.environ.get("E2E_PROFILE", "autodl-best")
+    is_flashhead = "flashhead" in profile_name
+    config = _load_e2e_profile(profile_name, assets)
+    orch, session = await _start_orchestrator(config, state)
+    await _feed_user_audio(orch, session, assets.user_wav)
+    await _wait_for_pipeline(state, timeout)
+    await _maybe_wait_for_video(orch, state, is_flashhead)
+
+    e2e = time.perf_counter() - t_start
+    await _collect_outputs(
+        out_dir,
+        ts,
+        e2e,
+        orch,
+        config,
+        session,
+        profile_name,
+        assets,
+        state,
+    )
+    await _shutdown_orchestrator(orch)
+    ok = _print_result(state, e2e, out_dir)
     return 0 if ok else 1
 
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { clsx } from "clsx";
 import { RefreshCw } from "lucide-react";
 
@@ -10,17 +10,23 @@ interface ServiceStatus {
 }
 
 /**
- * 服务健康卡——实时探活三个服务（经 Next rewrites 代理，同域无 CORS 问题）。
+ * 服务健康卡——实时探活三个服务（经 Next Route Handler 代理）。
  * 30s 轮询 + 手动刷新。状态点：绿=ok / 红=不可达 / 灰=探测中。
  */
 export function ServiceHealthCard() {
   const [controlApi, setControlApi] = useState<ServiceStatus>({ ok: null, detail: "" });
   const [gateway, setGateway] = useState<ServiceStatus>({ ok: null, detail: "" });
   const [lastCheck, setLastCheck] = useState<Date | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const requestRef = useRef<AbortController | null>(null);
 
   const probe = useCallback(async () => {
-    // control-api：/api/control/* → 8100/api/*
-    fetch("/api/control/health")
+    requestRef.current?.abort();
+    const controller = new AbortController();
+    requestRef.current = controller;
+    setRefreshing(true);
+
+    const controlProbe = fetch("/api/control/health", { signal: controller.signal })
       .then(async (r) => {
         if (!r.ok) throw new Error(String(r.status));
         const j = await r.json();
@@ -29,37 +35,55 @@ export function ServiceHealthCard() {
           detail: j.db_ok ? "db ok" : "db 异常",
         });
       })
-      .catch((e: Error) =>
+      .catch((e: Error) => {
+        if (e.name === "AbortError") return;
         setControlApi({
           ok: false,
           // 网络失败与"可达但响应异常"分开报——后者是契约不符，误导排障
           detail: /fetch failed|Failed to fetch|NetworkError/i.test(e.message)
             ? "不可达"
             : `响应异常（${e.message}）`,
-        })
-      );
-    // gateway：/api/realtime/* → 8101/api/*
-    fetch("/api/realtime/health")
+        });
+      });
+    const gatewayProbe = fetch("/api/realtime/health", { signal: controller.signal })
       .then(async (r) => {
         if (!r.ok) throw new Error(String(r.status));
         const j = await r.json();
         setGateway({ ok: true, detail: "在线" });
       })
-      .catch((e: Error) =>
+      .catch((e: Error) => {
+        if (e.name === "AbortError") return;
         setGateway({
           ok: false,
           detail: /fetch failed|Failed to fetch|NetworkError/i.test(e.message)
             ? "不可达"
             : `响应异常（${e.message}）`,
-        })
-      );
-    setLastCheck(new Date());
+        });
+      });
+
+    await Promise.all([controlProbe, gatewayProbe]);
+    if (requestRef.current === controller) {
+      requestRef.current = null;
+      if (!controller.signal.aborted) {
+        setRefreshing(false);
+        setLastCheck(new Date());
+      }
+    }
   }, []);
 
   useEffect(() => {
-    probe();
-    const t = setInterval(probe, 30000);
-    return () => clearInterval(t);
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
+      await probe();
+      if (!stopped) timer = setTimeout(poll, 30000);
+    };
+    void poll();
+    return () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+      requestRef.current?.abort();
+    };
   }, [probe]);
 
   return (
@@ -69,10 +93,11 @@ export function ServiceHealthCard() {
         <button
           type="button"
           onClick={probe}
+          disabled={refreshing}
           className="btn btn-sm btn-ghost inline-flex items-center gap-1"
           title="立即探测"
         >
-          <RefreshCw className="w-3.5 h-3.5" />
+          <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} />
           <span className="hidden sm:inline">刷新</span>
         </button>
       </div>

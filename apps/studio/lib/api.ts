@@ -1,6 +1,6 @@
 /** Control API 客户端。 */
 
-/** 浏览器走 Next rewrite（/api/control -> 8100/api）；SSR 直连 Control API 绝对地址。 */
+/** 浏览器走 Next Route Handler；SSR 直连 Control API 并在服务端注入 token。 */
 const API_BASE = "/api/control";
 const SERVER_API_BASE =
   process.env.CONTROL_API_BASE ?? "http://127.0.0.1:8100/api";
@@ -10,10 +10,21 @@ function fetchBase(): string {
   return typeof window === "undefined" ? SERVER_API_BASE : API_BASE;
 }
 
+function jsonHeaders(init?: RequestInit): Headers {
+  const headers = new Headers(init?.headers);
+  if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  if (typeof window === "undefined") {
+    const token = process.env.AVATARLOOM_API_TOKEN?.trim();
+    if (token) headers.set("Authorization", `Bearer ${token}`);
+  }
+  return headers;
+}
+
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(`${fetchBase()}${path}`, {
+    cache: "no-store",
     ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
+    headers: jsonHeaders(init),
   });
   if (!r.ok) {
     const detail = await r.text();
@@ -25,8 +36,9 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
 /** Runtime Gateway 客户端（/api/realtime/* → 8101/api/*）。 */
 export async function gatewayFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(`${GATEWAY_API_BASE}${path}`, {
+    cache: "no-store",
     ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
+    headers: jsonHeaders(init),
   });
   if (!r.ok) {
     const detail = await r.text();

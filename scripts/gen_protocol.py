@@ -120,7 +120,7 @@ def pydantic_to_ts(model: type[BaseModel]) -> str:
     lines.append(f"export interface {model.__name__} {{")
     hints = get_type_hints(model)
     for fname, ftype in hints.items():
-        field_info: FieldInfo = model.model_fields[fname]  # type: ignore[assignment]
+        field_info: FieldInfo = model.model_fields[fname]
         required = field_info.is_required()
         ts_type = _py_type_to_ts(ftype)
         opt = "" if required else "?"
@@ -135,41 +135,61 @@ def pydantic_to_ts(model: type[BaseModel]) -> str:
 
 def _py_type_to_ts(py_type: object) -> str:
     """Python 类型 -> TS 类型（简化映射）。"""
-    if py_type is str:
-        return "string"
-    if py_type is int:
-        return "number"
-    if py_type is float:
-        return "number"
-    if py_type is bool:
-        return "boolean"
-    if py_type is Any or py_type is typing.Any:  # type: ignore[arg-type]
-        return "unknown"
+    primitive = _primitive_ts_type(py_type)
+    if primitive is not None:
+        return primitive
 
     origin = get_origin(py_type)
     args = get_args(py_type)
 
     if origin is Union or (hasattr(types, "UnionType") and isinstance(py_type, types.UnionType)):
-        # Optional / Union
-        non_none = [a for a in args if a is not type(None)]
-        ts_parts = [_py_type_to_ts(a) for a in non_none]
-        nullable = len(non_none) < len(args)
-        result = " | ".join(ts_parts)
-        if nullable:
-            result += " | null"
-        return result
+        return _union_ts_type(args)
     if origin is list:
-        if args:
-            return f"Array<{_py_type_to_ts(args[0])}>"
-        return "unknown[]"
+        return _list_ts_type(args)
     if origin is dict:
-        if args and args[1] is not Any:
-            return f"Record<string, {_py_type_to_ts(args[1])}>"
-        return "Record<string, unknown>"
+        return _dict_ts_type(args)
     if origin is Literal:
-        # Literal["a", "b"] -> "a" | "b"
-        return " | ".join(f'"{a}"' if isinstance(a, str) else str(a) for a in args)
+        return _literal_ts_type(args)
     return "unknown"
+
+
+def _primitive_ts_type(py_type: object) -> str | None:
+    if py_type is str:
+        return "string"
+    if py_type is int or py_type is float:
+        return "number"
+    if py_type is bool:
+        return "boolean"
+    if py_type is Any or py_type is typing.Any:
+        return "unknown"
+    return None
+
+
+def _union_ts_type(args: tuple[object, ...]) -> str:
+    # Optional / Union
+    non_none = [arg for arg in args if arg is not type(None)]
+    ts_parts = [_py_type_to_ts(arg) for arg in non_none]
+    result = " | ".join(ts_parts)
+    if len(non_none) < len(args):
+        result += " | null"
+    return result
+
+
+def _list_ts_type(args: tuple[object, ...]) -> str:
+    if args:
+        return f"Array<{_py_type_to_ts(args[0])}>"
+    return "unknown[]"
+
+
+def _dict_ts_type(args: tuple[object, ...]) -> str:
+    if args and args[1] is not Any:
+        return f"Record<string, {_py_type_to_ts(args[1])}>"
+    return "Record<string, unknown>"
+
+
+def _literal_ts_type(args: tuple[object, ...]) -> str:
+    # Literal["a", "b"] -> "a" | "b"
+    return " | ".join(f'"{arg}"' if isinstance(arg, str) else str(arg) for arg in args)
 
 
 def generate_state_ts() -> str:
@@ -242,7 +262,9 @@ def main() -> int:
     # Windows/GBK 控制台下 print("✓") 会抛 UnicodeEncodeError（CI/门禁红），
     # 强制 stdout 使用 UTF-8。
     with contextlib.suppress(Exception):
-        sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+        reconfigure = getattr(sys.stdout, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--check",

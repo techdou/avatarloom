@@ -10,6 +10,7 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from avatarloom_control_api.auth import verify_token
+from avatarloom_control_api.catalog import seed_runtime_catalog
 from avatarloom_control_api.config import Settings, ensure_dirs, load_settings
 from avatarloom_control_api.db import create_engine, create_session_factory, init_db
 from avatarloom_control_api.routers import (
@@ -44,6 +45,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # 启动：建表（开发用；生产用 alembic upgrade head）
         await init_db(engine)
+        await seed_runtime_catalog(session_factory, settings)
         if not settings.api_token and not settings.auth_disabled:
             logger.warning(
                 "AVATARLOOM_API_TOKEN 未设置且未显式 AVATARLOOM_AUTH_DISABLED=1——"

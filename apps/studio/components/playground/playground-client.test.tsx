@@ -9,6 +9,11 @@ import { PlaygroundClient } from "./playground-client";
  * jsdom 环境下 connect() 调用会失败，因此只测试初始 disconnected 态。
  */
 describe("PlaygroundClient (初始未连接态)", () => {
+  it("使用全局统一的默认 profile", () => {
+    render(<PlaygroundClient />);
+    expect((screen.getByLabelText("配置") as HTMLSelectElement).value).toBe("mock");
+  });
+
   it("渲染顶部连接按钮", () => {
     render(<PlaygroundClient />);
     // 顶栏有"连接"按钮；WelcomePane 有"连接并开始"——用精确匹配锁定顶栏那个

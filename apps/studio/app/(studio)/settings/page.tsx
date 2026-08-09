@@ -33,7 +33,7 @@ export default function SettingsPage() {
         <MemoryManager />
 
         <div className="card">
-          <h2 className="mb-3">内置 Profile（YAML 文件）</h2>
+          <h2 className="mb-3">内置 Profile（Control API 初始化模板）</h2>
           <ul className="text-sm text-fg-muted space-y-1.5">
             <li><code className="text-xs">profiles/mock.yaml</code> — 纯 Mock，不依赖任何外部资源</li>
             <li><code className="text-xs">profiles/lite-12gb.yaml</code> — 12GB GPU 单机</li>

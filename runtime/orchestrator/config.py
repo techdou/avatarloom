@@ -37,7 +37,7 @@ class OrchestratorConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    profile_id: str = "lite-12gb"
+    profile_id: str = "mock"
     blocks: dict[str, BlockRef] = Field(
         default_factory=dict,
         description="category -> BlockRef，如 {'vad': BlockRef(id='vad.mock')}",

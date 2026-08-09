@@ -30,6 +30,16 @@ def artifacts_root(tmp_path: Path) -> Path:
 
 
 class TestRunRecorder:
+    async def test_session_manifest_lifecycle(self, runs_root: Path) -> None:
+        recorder = RunRecorder(root=runs_root)
+        await recorder.start_session("ses_manifest", "mock", "demo")
+        path = runs_root / "_sessions" / "ses_manifest.json"
+        assert json.loads(path.read_text(encoding="utf-8"))["status"] == "active"
+        await recorder.end_session("ses_manifest")
+        ended = json.loads(path.read_text(encoding="utf-8"))
+        assert ended["status"] == "closed"
+        assert ended["ended_at_ms"] is not None
+
     async def test_start_and_finalize_creates_files(self, runs_root: Path) -> None:
         recorder = RunRecorder(root=runs_root)
         await recorder.start_run(

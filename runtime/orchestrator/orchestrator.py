@@ -296,6 +296,7 @@ class Orchestrator:
         self,
         *,
         persona_id: str | None = None,
+        persona: Any | None = None,
         workspace_root: str = ".",
     ) -> Session:
         """开始一个新会话。
@@ -313,7 +314,9 @@ class Orchestrator:
         session.set_emit_fn(self._on_event)
         await session.start()
 
-        if persona_id:
+        if persona is not None:
+            await self._apply_persona_context(session, persona)
+        elif persona_id:
             try:
                 from blocks.persona.loader import load_persona
 
@@ -567,63 +570,107 @@ class Orchestrator:
         _visited 防 fallback 链自指/成环：flashhead→musetalk 失败后，
         musetalk 再失败会用同一 block_ref.fallback 无限递归（真实发生过的隐患）。
         """
-        if block_id in _visited:
-            if block_ref.optional:
-                logger.info("optional block %s fallback cycle, skipping", block_id)
-                return
-            raise BlockSetupError(
-                block_id=block_id,
-                message=(
-                    f"fallback 链成环：{' -> '.join(sorted(_visited | {block_id}))}。"
-                    "检查 profile 中 fallback 配置。"
-                ),
-            )
+        if self._fallback_cycle_handled(block_id, block_ref, _visited):
+            return
         visited = _visited | {block_id}
         entrypoint = BLOCK_REGISTRY.get(block_id)
         if entrypoint is None:
-            # 与下方 setup 失败处理保持一致：fallback 降级 / optional 跳过 / 否则报错
-            if block_ref.fallback:
-                logger.warning(
-                    "block %s not in registry, degrading -> %s",
-                    block_id,
-                    block_ref.fallback,
-                )
-                # fallback block 继承原 block 的 config（mock/静态块用 .get 忽略
-                # 多余键；真实块可复用 portrait 等关键配置，避免空 config 必失败）。
-                await self._setup_block(
-                    category, block_ref.fallback, dict(config), block_ref, visited
-                )
-                self.degraded_blocks[category] = block_ref.fallback
-                return
-            if block_ref.optional:
-                logger.info("optional block %s not in registry, continuing", block_id)
-                return
-            raise BlockSetupError(
-                block_id=block_id,
-                message=(
-                    f"block {block_id!r} not in BLOCK_REGISTRY. "
-                    "检查 profile 中是否写错了 id，或通过 register_block() 注册自定义 Block。"
-                ),
-            )
+            await self._handle_missing_block(category, block_id, config, block_ref, visited)
+            return
 
         try:
             from avatarloom_sdk import create_block
 
             block = create_block(entrypoint)
         except BlockSetupError as e:
-            logger.warning("block %s setup import failed: %s", block_id, e)
-            if block_ref.fallback:
-                await self._setup_block(
-                    category, block_ref.fallback, dict(config), block_ref, visited
-                )
-                self.degraded_blocks[category] = block_ref.fallback
-                return
-            if block_ref.optional:
-                logger.info("optional block %s absent, continuing", block_id)
-                return
-            raise
+            await self._handle_block_import_error(
+                category, block_id, config, block_ref, visited, e
+            )
+            return
 
-        ctx = BlockContext(
+        try:
+            await self._setup_block_instance(category, block_id, config, block)
+        except Exception:
+            await self._handle_block_setup_error(category, block_id, config, block_ref, visited)
+
+    def _fallback_cycle_handled(
+        self, block_id: str, block_ref: Any, visited: frozenset[str]
+    ) -> bool:
+        if block_id not in visited:
+            return False
+        if block_ref.optional:
+            logger.info("optional block %s fallback cycle, skipping", block_id)
+            return True
+        raise BlockSetupError(
+            block_id=block_id,
+            message=(
+                f"fallback 链成环：{' -> '.join(sorted(visited | {block_id}))}。"
+                "检查 profile 中 fallback 配置。"
+            ),
+        )
+
+    async def _handle_missing_block(
+        self,
+        category: str,
+        block_id: str,
+        config: dict[str, Any],
+        block_ref: Any,
+        visited: frozenset[str],
+    ) -> None:
+        if block_ref.fallback:
+            logger.warning(
+                "block %s not in registry, degrading -> %s",
+                block_id,
+                block_ref.fallback,
+            )
+            await self._degrade_block(category, config, block_ref, visited)
+            return
+        if block_ref.optional:
+            logger.info("optional block %s not in registry, continuing", block_id)
+            return
+        raise BlockSetupError(
+            block_id=block_id,
+            message=(
+                f"block {block_id!r} not in BLOCK_REGISTRY. "
+                "检查 profile 中是否写错了 id，或通过 register_block() 注册自定义 Block。"
+            ),
+        )
+
+    async def _handle_block_import_error(
+        self,
+        category: str,
+        block_id: str,
+        config: dict[str, Any],
+        block_ref: Any,
+        visited: frozenset[str],
+        error: BlockSetupError,
+    ) -> None:
+        logger.warning("block %s setup import failed: %s", block_id, error)
+        if block_ref.fallback:
+            await self._degrade_block(category, config, block_ref, visited)
+            return
+        if block_ref.optional:
+            logger.info("optional block %s absent, continuing", block_id)
+            return
+        raise error
+
+    async def _setup_block_instance(
+        self,
+        category: str,
+        block_id: str,
+        config: dict[str, Any],
+        block: Block,
+    ) -> None:
+        await block.setup(self._build_setup_context(config))
+        await block.warmup()
+        self.blocks[category] = block
+        # 保存运行期配置——process 阶段注入 BlockContext（AL-P1-009：
+        # 此前只在 setup 注入，LLM 运行期读 systemPrompt 恒为空）
+        self._block_configs[category] = config
+        logger.info("block ready: %s -> %s", category, block_id)
+
+    def _build_setup_context(self, config: dict[str, Any]) -> BlockContext:
+        return BlockContext(
             session_id="(global)",  # setup 阶段无 session
             run_id=None,
             workspace_root=".",
@@ -632,29 +679,34 @@ class Orchestrator:
             # reader task 持续发帧，缺省 _emit_fn 会 RuntimeError（帧全丢）
             _emit_fn=self._on_event,
         )
-        try:
-            await block.setup(ctx)
-            # 预热（warmup）可选
-            await block.warmup()
-            self.blocks[category] = block
-            # 保存运行期配置——process 阶段注入 BlockContext（AL-P1-009：
-            # 此前只在 setup 注入，LLM 运行期读 systemPrompt 恒为空）
-            self._block_configs[category] = config
-            logger.info("block ready: %s -> %s", category, block_id)
-        except Exception:
-            logger.exception("block %s setup failed", block_id)
-            if block_ref.fallback:
-                logger.info("degrading %s -> %s", block_id, block_ref.fallback)
-                # fallback block 继承原 block 的 config（同前两处）
-                await self._setup_block(
-                    category, block_ref.fallback, dict(config), block_ref, visited
-                )
-                self.degraded_blocks[category] = block_ref.fallback
-                return
-            if block_ref.optional:
-                logger.info("optional block %s failed, continuing", block_id)
-                return
-            raise
+
+    async def _handle_block_setup_error(
+        self,
+        category: str,
+        block_id: str,
+        config: dict[str, Any],
+        block_ref: Any,
+        visited: frozenset[str],
+    ) -> None:
+        logger.exception("block %s setup failed", block_id)
+        if block_ref.fallback:
+            logger.info("degrading %s -> %s", block_id, block_ref.fallback)
+            await self._degrade_block(category, config, block_ref, visited)
+            return
+        if block_ref.optional:
+            logger.info("optional block %s failed, continuing", block_id)
+            return
+        raise
+
+    async def _degrade_block(
+        self,
+        category: str,
+        config: dict[str, Any],
+        block_ref: Any,
+        visited: frozenset[str],
+    ) -> None:
+        await self._setup_block(category, block_ref.fallback, dict(config), block_ref, visited)
+        self.degraded_blocks[category] = block_ref.fallback
 
     # ------------------------------------------------------------------
     # 内部：EventBus 连线

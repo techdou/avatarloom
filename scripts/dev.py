@@ -84,7 +84,12 @@ def _services(pnpm: str) -> list[dict]:
             "cmd": [pnpm, "--filter", "@avatarloom/studio", "dev"],
             "port": STUDIO_PORT,
             # next dev 读 PORT 环境变量（package.json 不再硬编码 -p 3000）。
-            "env": {**os.environ, "PORT": str(STUDIO_PORT)},
+            # 显式传开发免鉴权开关，供 Next server routes 区分本地 dev 与生产漏配。
+            "env": {
+                **os.environ,
+                "PORT": str(STUDIO_PORT),
+                "AVATARLOOM_AUTH_DISABLED": "1",
+            },
             "cwd": PROJECT_ROOT,
         },
     ]
@@ -152,39 +157,39 @@ def _normalize_rc(rc: int | None) -> int:
     return rc
 
 
-def main() -> int:
+def _parse_args() -> argparse.Namespace:
     # Windows/GBK 控制台下 print("✓") 会抛 UnicodeEncodeError，强制 UTF-8
     with contextlib.suppress(Exception):
-        sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+        reconfigure = getattr(sys.stdout, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description="AvatarLoom dev launcher")
     parser.add_argument("--check", action="store_true", help="只检查端口")
-    args = parser.parse_args()
+    return parser.parse_args()
 
-    if args.check:
-        print("端口检查：")
-        return 0 if check_ports() == 0 else 1
 
-    # 预检
+def _preflight() -> str | None:
     conflicts = check_ports()
     if conflicts > 0:
         print(f"\n{conflicts} 个端口被占用，请先释放或修改端口。", file=sys.stderr)
-        return 1
+        return None
 
     try:
-        pnpm = _resolve_pnpm()
+        return _resolve_pnpm()
     except FileNotFoundError as e:
         print(f"  ✗ {e}", file=sys.stderr)
-        return 1
-    services = _services(pnpm)
+        return None
 
+
+def _print_banner() -> None:
     print("\n启动 AvatarLoom 三服务...")
     print(f"  Control API:     http://127.0.0.1:{CONTROL_API_PORT}")
     print(f"  Runtime Gateway: ws://127.0.0.1:{RUNTIME_GATEWAY_PORT}/ws/realtime")
     print(f"  Studio:          http://127.0.0.1:{STUDIO_PORT}")
     print("\n按 Ctrl+C 停止所有服务。\n")
 
-    procs: list[subprocess.Popen] = []
 
+def _install_shutdown_handlers(procs: list[subprocess.Popen]) -> None:
     def shutdown(*_: object) -> None:
         print("\n停止服务...")
         _shutdown_all(procs)
@@ -193,7 +198,9 @@ def main() -> int:
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
-    # 拉起全部服务
+
+def _start_services(services: list[dict]) -> list[subprocess.Popen] | None:
+    procs: list[subprocess.Popen] = []
     for svc in services:
         try:
             p = subprocess.Popen(
@@ -206,9 +213,12 @@ def main() -> int:
         except OSError as e:
             print(f"  ✗ 启动 {svc['name']} 失败：{e}", file=sys.stderr)
             _shutdown_all(procs)
-            return 1
+            return None
+    return procs
 
-    # 启动宽限检查——拉起后立刻死掉的（模块缺失、bind 失败等）算启动失败
+
+def _check_startup_grace(services: list[dict], procs: list[subprocess.Popen]) -> int | None:
+    # 拉起后立刻死掉的（模块缺失、bind 失败等）算启动失败
     time.sleep(_STARTUP_GRACE_S)
     for svc, p in zip(services, procs, strict=True):
         rc = p.poll()
@@ -216,24 +226,33 @@ def main() -> int:
             print(f"  ✗ {svc['name']} 启动后立即退出 (code={rc})——启动失败", file=sys.stderr)
             _shutdown_all(procs)
             return _normalize_rc(rc) or 1
+    return None
 
-    # 监控：rc=42 是 gateway 的自重启信号（GPU 会话后清除 CUDA fork 状态），
-    # dev 场景下重启该服务而非灭全栈；其他退出码 → 灭全栈。
-    _RESTART_RC = 42
+
+def _restart_service(
+    services: list[dict],
+    procs: list[subprocess.Popen],
+    idx: int,
+    rc: int,
+) -> None:
+    svc = services[idx]
+    print(
+        f"\n{svc['name']} 自重启 (rc={rc})，重新拉起...",
+        file=sys.stderr,
+    )
+    new_p = subprocess.Popen(svc["cmd"], cwd=str(svc["cwd"]), env=svc["env"])
+    procs[idx] = new_p
+    print(f"  ✓ 重新启动 {svc['name']} (pid={new_p.pid})")
+
+
+def _monitor_services(services: list[dict], procs: list[subprocess.Popen]) -> int:
     while True:
         for idx, (svc, p) in enumerate(zip(services, procs, strict=True)):
             rc = p.poll()
             if rc is not None:
-                if rc == _RESTART_RC:
-                    print(
-                        f"\n{svc['name']} 自重启 (rc={rc})，重新拉起...",
-                        file=sys.stderr,
-                    )
-                    new_p = subprocess.Popen(
-                        svc["cmd"], cwd=str(svc["cwd"]), env=svc["env"]
-                    )
-                    procs[idx] = new_p
-                    print(f"  ✓ 重新启动 {svc['name']} (pid={new_p.pid})")
+                # rc=42 是 gateway 的自重启信号（GPU 会话后清除 CUDA fork 状态）。
+                if rc == 42:
+                    _restart_service(services, procs, idx, rc)
                     break  # 重启后继续监控循环，不灭全栈
                 print(
                     f"\n{svc['name']} 已退出 (code={rc})，正在停止其余服务...",
@@ -242,6 +261,32 @@ def main() -> int:
                 _shutdown_all([q for q in procs if q is not p])
                 return _normalize_rc(rc)
         time.sleep(0.5)
+
+
+def main() -> int:
+    args = _parse_args()
+    if args.check:
+        print("端口检查：")
+        return 0 if check_ports() == 0 else 1
+
+    pnpm = _preflight()
+    if pnpm is None:
+        return 1
+
+    services = _services(pnpm)
+    _print_banner()
+    procs: list[subprocess.Popen] = []
+    _install_shutdown_handlers(procs)
+
+    started = _start_services(services)
+    if started is None:
+        return 1
+    procs.extend(started)
+
+    startup_error = _check_startup_grace(services, procs)
+    if startup_error is not None:
+        return startup_error
+    return _monitor_services(services, procs)
 
 
 if __name__ == "__main__":

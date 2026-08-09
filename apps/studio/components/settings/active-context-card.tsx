@@ -2,6 +2,11 @@
 
 import { useEffect, useState } from "react";
 import type { Persona, RuntimeProfile } from "@/lib/api";
+import {
+  DEFAULT_PERSONA_ID,
+  DEFAULT_PROFILE_ID,
+  RUNTIME_CONTEXT_STORAGE,
+} from "@/lib/runtime-context";
 
 /**
  * 「当前活动」卡——设置页顶部，显示 Playground 实际会用的运行时上下文。
@@ -9,15 +14,15 @@ import type { Persona, RuntimeProfile } from "@/lib/api";
  * + /api/control 拉取名称映射。未连接 API 时降级显示 id。
  */
 export function ActiveContextCard() {
-  const [profileId, setProfileId] = useState("mock");
-  const [personaId, setPersonaId] = useState("demo-assistant");
+  const [profileId, setProfileId] = useState(DEFAULT_PROFILE_ID);
+  const [personaId, setPersonaId] = useState(DEFAULT_PERSONA_ID);
   const [profileName, setProfileName] = useState<string | null>(null);
   const [personaName, setPersonaName] = useState<string | null>(null);
 
   useEffect(() => {
     try {
-      const p = localStorage.getItem("al.profile");
-      const pe = localStorage.getItem("al.persona");
+      const p = localStorage.getItem(RUNTIME_CONTEXT_STORAGE.profile);
+      const pe = localStorage.getItem(RUNTIME_CONTEXT_STORAGE.persona);
       if (p) setProfileId(p);
       if (pe) setPersonaId(pe);
     } catch {

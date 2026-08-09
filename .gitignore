@@ -20,9 +20,14 @@ dist/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.hypothesis/
+.nox/
+.uv-cache/
 .coverage
+.coverage.*
 htmlcov/
 .tox/
+junit.xml
 
 # ---- Node / Next.js ----
 node_modules/
@@ -30,14 +35,28 @@ node_modules/
 .next/
 out/
 .turbo/
+.vercel/
+storybook-static/
+.nyc_output/
+playwright-report/
+test-results/
+blob-report/
 *.tsbuildinfo
 .eslintcache
+.stylelintcache
 next-env.d.ts
 coverage/
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
 # ---- IDE / 编辑器 / OS ----
 .vscode/
 .idea/
+.fleet/
+.history/
+*.code-workspace
 *.swp
 *.swo
 *~
@@ -49,8 +68,10 @@ desktop.ini
 .zcode/
 .omx/
 .agents/
+.codex/
 .claude/
 .cursor/
+.gemini/
 .aider*
 .continue/
 .windsurf/
@@ -61,6 +82,8 @@ prompts/
 # .env 系列：本地配置含真实 API Key，只有 .env.example / .env.*.example 是模板可入库
 .env
 .env.*
+.envrc
+.direnv/
 # 允许 example 模板入库（! 取反）
 !.env.example
 !.env.*.example
@@ -84,8 +107,13 @@ prompts/
 data/
 *.db
 *.db-journal
+*.db-shm
+*.db-wal
 *.sqlite
+*.sqlite3
 *.sqlite-journal
+*.sqlite-shm
+*.sqlite-wal
 alembic_versions_local/
 
 # ---- 文档（不入库，避免内部设计文档和开发状态泄漏）----
@@ -95,6 +123,12 @@ docs/
 
 # ---- 模型与素材（不入库，体积大且含可识别信息）----
 models/
+*.ckpt
+*.gguf
+*.onnx
+*.pt
+*.pth
+*.safetensors
 assets/*/ref.*
 personas/*/voice/ref.wav
 personas/*/avatar/portrait.png
@@ -104,13 +138,20 @@ personas/*/avatar/idle.mp4
 
 # ---- 构建产物 / 打包 ----
 *.zip
+*.7z
+*.tar
 *.tar.gz
 *.tar.bz2
+*.tgz
 avatarloom-v*/
 
 # ---- 调试 / 临时 / 缓存 ----
 *.log
 *.tmp
 *.bak
+*.pid
+*.pid.lock
 .cache/
+tmp/
+temp/
 vendor/

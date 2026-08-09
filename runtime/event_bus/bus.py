@@ -180,51 +180,58 @@ class EventBus:
         永远等不到空位，publisher（往往是另一个订阅的 consumer 任务）会
         静默挂死。用"put_nowait → QueueFull 时短超时等待 + 复查 closed"循环解决。
         """
-        q = sub.queue
         try:
             if sub.policy == BackpressurePolicy.BLOCK:
-                # 先尝试无阻塞入队
-                try:
-                    q.put_nowait(event)
-                    return
-                except asyncio.QueueFull:
-                    pass
-                # 队满——总时限内短超时轮询等待空位，每次复查 sub 是否已关闭；
-                # 超过 _BLOCK_MAX_WAIT_S 丢弃事件（订阅者不消费时不能无限挂起 publisher）。
-                deadline = time.monotonic() + self._block_max_wait_s
-                while not sub._closed:
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        logger.warning(
-                            "EventBus BLOCK queue full for %.1fs——dropping event %s (sub %s)",
-                            self._block_max_wait_s,
-                            event.type,
-                            sub.sub_id,
-                        )
-                        return
-                    try:
-                        await asyncio.wait_for(q.put(event), timeout=min(0.1, remaining))
-                        return
-                    except TimeoutError:
-                        continue
-                    except asyncio.QueueFull:
-                        continue
-                # sub 已关闭——丢弃事件（消费者已不在，入队无意义）
-                return
+                await self._enqueue_blocking(sub, event)
             elif sub.policy == BackpressurePolicy.DROP_OLDEST:
-                if q.full():
-                    # 丢最旧的一个——并发场景下可能已被取走，QueueEmpty 忽略
-                    with contextlib.suppress(asyncio.QueueEmpty):
-                        q.get_nowait()
-                    logger.debug("EventBus drop_oldest for %s", sub.sub_id)
-                await q.put(event)
+                await self._enqueue_drop_oldest(sub, event)
             elif sub.policy == BackpressurePolicy.DROP_NEWEST:
-                if q.full():
-                    logger.debug("EventBus drop_newest for %s", sub.sub_id)
-                    return
-                await q.put(event)
+                await self._enqueue_drop_newest(sub, event)
         except asyncio.CancelledError:
             raise
+
+    async def _enqueue_blocking(self, sub: Subscription, event: Event) -> None:
+        try:
+            sub.queue.put_nowait(event)
+            return
+        except asyncio.QueueFull:
+            pass
+
+        deadline = time.monotonic() + self._block_max_wait_s
+        while not sub._closed:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self._log_blocking_queue_timeout(sub, event)
+                return
+            try:
+                await asyncio.wait_for(sub.queue.put(event), timeout=min(0.1, remaining))
+                return
+            except TimeoutError:
+                continue
+            except asyncio.QueueFull:
+                continue
+
+    def _log_blocking_queue_timeout(self, sub: Subscription, event: Event) -> None:
+        logger.warning(
+            "EventBus BLOCK queue full for %.1fs——dropping event %s (sub %s)",
+            self._block_max_wait_s,
+            event.type,
+            sub.sub_id,
+        )
+
+    async def _enqueue_drop_oldest(self, sub: Subscription, event: Event) -> None:
+        if sub.queue.full():
+            # 丢最旧的一个——并发场景下可能已被取走，QueueEmpty 忽略
+            with contextlib.suppress(asyncio.QueueEmpty):
+                sub.queue.get_nowait()
+            logger.debug("EventBus drop_oldest for %s", sub.sub_id)
+        await sub.queue.put(event)
+
+    async def _enqueue_drop_newest(self, sub: Subscription, event: Event) -> None:
+        if sub.queue.full():
+            logger.debug("EventBus drop_newest for %s", sub.sub_id)
+            return
+        await sub.queue.put(event)
 
     async def _consumer(self, sub: Subscription) -> None:
         """消费循环：从队列取事件调 handler。"""

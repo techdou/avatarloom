@@ -5,13 +5,12 @@
 #   docker compose -f deploy/docker-compose.yml up          # 启动
 #   docker compose -f deploy/docker-compose.yml down        # 停止
 #
-# 默认真实链路（AVATARLOOM_DEFAULT_PROFILE=lite-12gb）——需要 12GB GPU + LLM_API_KEY。
-# 无 GPU 演示：AVATARLOOM_DEFAULT_PROFILE=mock docker compose up
-# 真实档位切换：改 AVATARLOOM_DEFAULT_PROFILE 为 profiles/ 里的其他档位（如 autodl-best）。
+# 默认 Mock 链路保证无 GPU/API Key 也能启动。
+# GPU 真实链路使用 deploy/docker-compose.gpu.yml override。
 #
 # 鉴权（可选）：在 compose 旁的 .env 或 shell 里设 AVATARLOOM_API_TOKEN=<随机串>，
 # control-api 全端点启用 Bearer 校验，gateway 自动带同一 token 调 control-api。
-# 留空 = 鉴权关闭（本机开发默认）。
+# 默认 compose 显式开启开发免鉴权；生产设 AVATARLOOM_AUTH_DISABLED=0 并提供 token。
 
 services:
   control-api:
@@ -20,7 +19,7 @@ services:
       dockerfile: deploy/docker/Dockerfile.control-api
     ports:
       # 宿主侧端口可覆盖：CONTROL_API_PORT=18100 docker compose up
-      # 默认绑 127.0.0.1——未设 AVATARLOOM_API_TOKEN 时无鉴权，公网暴露=裸奔。
+      # 默认绑 127.0.0.1；生产应关闭开发免鉴权并配置 AVATARLOOM_API_TOKEN。
       # 需公网访问时改为 "${CONTROL_API_PORT:-8100}:8100" 并务必设置 token。
       - "127.0.0.1:${CONTROL_API_PORT:-8100}:8100"
     environment:
@@ -29,12 +28,12 @@ services:
       - AVATARLOOM_DB_URL=sqlite+aiosqlite:///./data/avatarloom.db
       - AVATARLOOM_RUNS_ROOT=/app/data/runs
       - AVATARLOOM_ARTIFACTS_ROOT=/app/data/artifacts
-      # Bearer token；留空 = 鉴权关闭。设置后 gateway 用同一值（见下）。
       - AVATARLOOM_API_TOKEN=${AVATARLOOM_API_TOKEN:-}
+      - AVATARLOOM_AUTH_DISABLED=${AVATARLOOM_AUTH_DISABLED:-1}
+      - AVATARLOOM_WORKSPACE_ROOT=/app
     volumes:
       - avatarloom-data:/app/data
     healthcheck:
-      # token 为空时鉴权关闭，带空 Bearer 也放行；token 非空时带真实值才 200。
       test: ["CMD-SHELL", "curl -fsS -H \"Authorization: Bearer $$AVATARLOOM_API_TOKEN\" http://localhost:8100/api/health"]
       interval: 10s
       timeout: 5s
@@ -55,11 +54,11 @@ services:
       - AVATARLOOM_CONTROL_API_URL=http://control-api:8100
       # 与 control-api 的 AVATARLOOM_API_TOKEN 保持一致；control-api 关鉴权时留空。
       - AVATARLOOM_CONTROL_API_TOKEN=${AVATARLOOM_API_TOKEN:-}
-      # WS 入口鉴权（gateway 自身校验 /ws/realtime 用的同一套 token，留空=关闭）。
+      # WS 入口鉴权：gateway 校验同一 token；留空时仅显式开发免鉴权模式放行。
       - AVATARLOOM_API_TOKEN=${AVATARLOOM_API_TOKEN:-}
-      # 默认真实链路（lite-12gb）——需要 12GB GPU + LLM_API_KEY。
-      # 无 GPU 环境降级：AVATARLOOM_DEFAULT_PROFILE=mock docker compose up
-      - AVATARLOOM_DEFAULT_PROFILE=${AVATARLOOM_DEFAULT_PROFILE:-lite-12gb}
+      - AVATARLOOM_AUTH_DISABLED=${AVATARLOOM_AUTH_DISABLED:-1}
+      - AVATARLOOM_WORKSPACE_ROOT=/app
+      - AVATARLOOM_DEFAULT_PROFILE=${AVATARLOOM_DEFAULT_PROFILE:-mock}
       # 真实 Adapter 用——从 compose 旁的 .env 读
       - LLM_API_KEY=${LLM_API_KEY:-}
       - LLM_BASE_URL=${LLM_BASE_URL:-https://api.openai.com/v1}
@@ -89,9 +88,6 @@ services:
     build:
       context: ..
       dockerfile: deploy/docker/Dockerfile.studio
-      args:
-        # NEXT_PUBLIC_* 在构建期内联到浏览器 bundle；仅适合单用户受控隧道。
-        NEXT_PUBLIC_WS_TOKEN: ${AVATARLOOM_API_TOKEN:-}
     ports:
       # 默认绑 127.0.0.1——Studio 的服务端 rewrites 代理 control-api，
       # 无鉴权时公网暴露等于把 API 全端点公开。
@@ -103,6 +99,8 @@ services:
       # （浏览器侧 WS 仍直连宿主 ${RUNTIME_GATEWAY_PORT:-8101}，不经此变量。）
       - CONTROL_API_BASE=http://control-api:8100/api
       - RUNTIME_GATEWAY_BASE=http://runtime-gateway:8101/api
+      - AVATARLOOM_API_TOKEN=${AVATARLOOM_API_TOKEN:-}
+      - AVATARLOOM_AUTH_DISABLED=${AVATARLOOM_AUTH_DISABLED:-1}
     depends_on:
       control-api:
         condition: service_healthy
