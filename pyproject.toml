@@ -82,9 +82,8 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/douxiulu/avatarloom"
-Repository = "https://github.com/douxiulu/avatarloom"
-Documentation = "https://github.com/douxiulu/avatarloom/tree/main/docs"
+Homepage = "https://github.com/techdou/avatarloom"
+Repository = "https://github.com/techdou/avatarloom"
 
 # ---------------------------------------------------------------------------
 # uv workspace：packages/sdk-python、packages/protocol、apps/* 是工作区成员
