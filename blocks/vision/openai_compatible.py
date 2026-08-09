@@ -16,6 +16,8 @@ import httpx
 from avatarloom_protocol import VISION_RESULT, Event
 from avatarloom_sdk import Block, BlockContext, BlockManifest, Capability, ResourceRequirements
 
+from blocks._http_retry import post_with_retry
+
 # 推理模型的思维链段（minimax-m3 等）：<think>...</think>
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
@@ -96,8 +98,7 @@ class OpenAIVisionBlock(Block):
                     ],
                     "max_tokens": 512,  # 推理模型需留 think 余量（minimax-m3）
                 }
-                resp = await client.post("/chat/completions", json=payload)
-                resp.raise_for_status()
+                resp = await post_with_retry(client, "/chat/completions", json=payload)
                 result = resp.json()
                 description = _strip_think(result["choices"][0]["message"]["content"])
         except Exception as e:

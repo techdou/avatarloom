@@ -20,6 +20,8 @@ from avatarloom_protocol import (
 )
 from avatarloom_sdk import Block, BlockContext, BlockManifest, Capability, ResourceRequirements
 
+from blocks._http_retry import post_with_retry
+
 
 class OpenAISttBlock(Block):
     """OpenAI-compatible STT（Whisper）。"""
@@ -100,8 +102,9 @@ class OpenAISttBlock(Block):
                 if self._language:
                     data["language"] = self._language
 
-                resp = await client.post("/audio/transcriptions", files=files, data=data)
-                resp.raise_for_status()
+                resp = await post_with_retry(
+                    client, "/audio/transcriptions", files=files, data=data
+                )
                 result = resp.json()
                 text = result.get("text", "")
         except httpx.HTTPStatusError as e:

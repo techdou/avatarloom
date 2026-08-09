@@ -28,6 +28,7 @@ def transition_avatar_state(
     *,
     has_audio: bool = False,
     is_interrupt: bool = False,
+    allow_interruption: bool = True,
 ) -> AvatarState:
     """按事件类型推导新的 AvatarState。
 
@@ -36,7 +37,9 @@ def transition_avatar_state(
     - "tts.audio.completed": 回复完成 → speech_active=off, idle_mode=calm
     - "speech.detected": 用户开口 → speech_active=off, idle_mode=listening
     - "speech.ended": 用户说完 → idle_mode=thinking（若助手没在说）
-    - "interrupt": 打断 → speech_active=off, idle_mode=calm
+
+    注：此前有 "interrupt" 事件分支，但协议信封（envelope.py）无此事件类型、
+    flashhead 也不传 is_interrupt——属契约漂移死代码，已删除。
     """
     if event_type == "tts.audio.delta" and has_audio:
         # 首个音频块：开始说话（不重复置位）
@@ -54,11 +57,13 @@ def transition_avatar_state(
         # 用户开口：停止说话，进入聆听态
         return AvatarState(speech_active=False, idle_mode="listening")
     if event_type == "speech.ended":
-        # 用户说完：若助手没在说，进入思考态
+        # 用户说完：若助手没在说，进入思考态。
+        # 助手在说（speech_active=True）时：不打断则保留 speech_active=True，
+        # 否则置 False 会让 idle 帧混入说话画面（混帧）
+        if state.speech_active and not allow_interruption:
+            return state  # 助手在说且不允许打断——保持说话状态不变
         return AvatarState(
             speech_active=False,
             idle_mode="thinking" if not state.speech_active else state.idle_mode,
         )
-    if event_type == "interrupt":
-        return AvatarState(speech_active=False, idle_mode="calm")
     return state

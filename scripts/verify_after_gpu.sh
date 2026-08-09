@@ -16,9 +16,9 @@ sleep 2
 
 echo "========== [2] 启动三服务 =========="
 setsid nohup env \
-  HF_ENDPOINT=$HF_ENDPOINT HF_HUB_DISABLE_XET=1 \
-  HF_HOME=$HF_HOME MODELSCOPE_CACHE=$MODELSCOPE_CACHE TORCH_HOME=$TORCH_HOME \
-  PATH=$PATH \
+  HF_ENDPOINT="$HF_ENDPOINT" HF_HUB_DISABLE_XET=1 \
+  HF_HOME="$HF_HOME" MODELSCOPE_CACHE="$MODELSCOPE_CACHE" TORCH_HOME="$TORCH_HOME" \
+  PATH="$PATH" \
   bash scripts/autodl_start.sh start \
   </dev/null >/tmp/avatarloom_start.log 2>&1 &
 echo "等待服务启动..."

@@ -261,6 +261,10 @@ class VoxCpm2TtsBlock(Block):
                 )
         except Exception as e:
             await ctx.logger.aerror("voxcpm2 stream error", error=str(e))
+        finally:
+            # 显式关闭 generator——GPU 推理帧和内部资源仅靠 GC 回收时机不确定，
+            # 打断/异常路径下可能延迟释放显存
+            gen.close()
 
     async def reset(self, session_id: str) -> None:
         # 标记当前 run 已打断（AL-P1-006）——进行中的推理循环检查后丢弃输出

@@ -59,6 +59,20 @@ FACE_OVAL = [
 ]
 
 
+def _out_root_ok(path: Path, root: Path) -> bool:
+    """判断 path 是否在 root 目录之下（含 path == root 的情况）。
+
+    用 os.path.commonpath 而非字符串前缀匹配——避免 ``/foo/bar2`` 被误判为
+    ``/foo/bar`` 的子路径。root 不存在时按字面路径比较。
+    """
+    try:
+        root_resolved = root.resolve()
+    except OSError:
+        root_resolved = root
+    common = os.path.commonpath([str(path), str(root_resolved)])
+    return common == str(root_resolved)
+
+
 def fast_blend(image, face, face_box, mask_array, crop_box):
     """numpy 快速融合：等价于官方 get_image_blending 的软蒙版粘贴（实测 maxdiff<=1）。"""
     x, y, x1, y1 = face_box
@@ -268,7 +282,17 @@ class MuseEngine:
         mask_array, crop_box = get_image_prepare_material(
             frames[0], [x1, y1, x2, y2], fp=fp, mode=mode
         )
-        out_path = Path(out)
+        out_path = Path(out).resolve()
+        # rmtree 防护：out 来自请求参数，校验落在预期输出根下，避免被构造
+        # 任意路径删除（如 out=/ 等）。runs/avatar 是 MuseTalk 输出约定根目录。
+        _OUT_ROOTS = (
+            Path("/root/autodl-tmp/avatarloom/runs/avatar"),
+            Path("/tmp/muse_worker_out"),
+        )
+        if not any(_out_root_ok(out_path, root) for root in _OUT_ROOTS):
+            raise RuntimeError(
+                f"refused: out path not under allowed output roots: {out_path}"
+            )
         out_path.parent.mkdir(parents=True, exist_ok=True)
         frame_dir = out_path.parent / "frames"
         frame_dir.mkdir(parents=True, exist_ok=True)
@@ -317,6 +341,10 @@ class MuseEngine:
         if r.returncode != 0:
             raise RuntimeError(f"ffmpeg failed: {r.stderr[-400:]}")
         if not keep_frames:
+            # frame_dir = out_path.parent/"frames"，out_path 已通过 _OUT_ROOTS 校验，
+            # 这里再断言一次防止后续重构（如改 frame_dir 计算）绕过防护。
+            assert _out_root_ok(frame_dir, out_path.parent), \
+                f"refused: frame_dir escapes out parent: {frame_dir}"
             subprocess.run(["rm", "-rf", str(frame_dir)], check=False)
         meta = {
             "mp4": str(out_path),

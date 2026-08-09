@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import binascii
 import contextlib
 import json
 import logging
@@ -331,7 +332,20 @@ async def _serve(ws, engine: AvatarEngine, jpeg_quality: int) -> None:
                 continue
             etype = event.get("type")
             if etype == "audio":
-                pcm = np.frombuffer(base64.b64decode(event["pcm"]), dtype=np.int16)
+                pcm_b64 = event.get("pcm", "")
+                try:
+                    pcm_raw = base64.b64decode(pcm_b64, validate=True)
+                except (binascii.Error, ValueError) as e:
+                    # 畸形 base64：回 error 让客户端知道原因，再跳过本帧
+                    # （此前裸 b64decode 抛错会冒泡到 _serve 外层直接断连，
+                    # 客户端只看到连接关闭，不知道是数据格式问题）
+                    logger.warning("invalid base64 audio frame, skipped: %s", e)
+                    await ws.send(json.dumps({
+                        "type": "error",
+                        "message": "invalid base64",
+                    }))
+                    continue
+                pcm = np.frombuffer(pcm_raw, dtype=np.int16)
                 engine.feed_audio(pcm.astype(np.float32) / 32768.0)
             elif etype == "reset":
                 engine.reset()

@@ -122,19 +122,23 @@ class RunRecorder:
 
         非 Run 范围内的事件（run_id 为 None）只追加到 session 级 events.jsonl。
         """
+        # 序列化在锁外做（json.dumps 是 CPU、不涉及共享状态）
+        line = json.dumps(event.model_dump(), ensure_ascii=False) + "\n"
         async with self._lock:
             run_id = event.run_id
             if run_id is None or run_id not in self._active:
                 # 非 Run 事件——跳过（session 级事件单独管理，v0.1 简化）
                 return
             state = self._active[run_id]
+            events_file = state.events_file
 
-            # 追加事件到 jsonl
-            state.events_file.write(json.dumps(event.model_dump(), ensure_ascii=False) + "\n")
-            state.events_file.flush()
-
-            # 更新指标
+            # 更新指标（锁内——state 读改写需原子）
             self._update_metrics(state, event)
+
+        # 磁盘 write+flush 移出锁外——此前持锁同步写，慢磁盘会反压生产任务
+        # （含 TTS consumer，整链路卡死）。文件句柄的 write 是线程安全的（单写入者）。
+        await asyncio.to_thread(events_file.write, line)
+        await asyncio.to_thread(events_file.flush)
 
     def is_active(self, run_id: str) -> bool:
         """指定 Run 是否正在被记录（已 start_run，尚未 finalize）。
@@ -240,6 +244,10 @@ class RunRecorder:
             )
 
         elif event.type == TTS_AUDIO_DELTA:
+            # 垫音（filler=True）不计入延迟指标——此前 first_audio_ms≈0、
+            # assistant_audio_samples 虚高，"首音延迟"在垫音开启时恒失真
+            if event.payload.get("filler"):
+                return
             if m.first_audio_ms is None:
                 m.first_audio_ms = max(0, elapsed)
             m.assistant_audio_samples += event.payload.get("samples", 0)

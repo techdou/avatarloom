@@ -195,9 +195,20 @@ class Orchestrator:
             if self._setup_done:
                 return
 
-            # 装配各 Block
-            for category, block_ref in self.config.blocks.items():
-                await self._setup_block(category, block_ref.id, block_ref.config, block_ref)
+            # 装配各 Block——中途失败时先 shutdown 已装配的 block 再 re-raise，
+            # 否则重试 setup 不清理旧实例（GPU 进程/reader task 泄漏）
+            try:
+                for category, block_ref in self.config.blocks.items():
+                    await self._setup_block(category, block_ref.id, block_ref.config, block_ref)
+            except Exception:
+                # 部分装配的 block 必须回收（显存/进程/句柄）
+                for block in list(self.blocks.values()):
+                    try:
+                        await block.shutdown()
+                    except Exception:
+                        logger.exception("partial setup cleanup: block shutdown error")
+                self.blocks.clear()
+                raise
 
             # 装配内部事件订阅（连主链路）
             await self._wire_event_bus()
@@ -474,14 +485,19 @@ class Orchestrator:
                 describe_frame = getattr(vision, "describe_frame", None)
                 if not callable(describe_frame):
                     raise AttributeError("vision block does not implement describe_frame")
-                result = await describe_frame(
-                    ctx,
-                    jpeg_b64,
-                    prompt=(
-                        "描述这张图片里的内容，包括人物外貌特征、穿着、表情、"
-                        "以及周围环境。用中文，2-3 句话。"
+                # 外层超时——block 内部 httpx 超时是传输层兜底，但若 block 实现
+                # 忘了设超时，锁会被永久持有，该 session 后续所有帧被静默丢弃
+                result = await asyncio.wait_for(
+                    describe_frame(
+                        ctx,
+                        jpeg_b64,
+                        prompt=(
+                            "描述这张图片里的内容，包括人物外貌特征、穿着、表情、"
+                            "以及周围环境。用中文，2-3 句话。"
+                        ),
+                        request_id=request_id,
                     ),
-                    request_id=request_id,
+                    timeout=self.config.vision_timeout_s,
                 )
                 description = result.payload.get("description", "")
                 if description and "视觉感知失败" not in description:
@@ -665,6 +681,10 @@ class Orchestrator:
             await self.event_bus.subscribe(
                 SPEECH_ENDED,
                 self._make_block_handler(stt, CATEGORY_STT),
+                # BLOCK 策略 + 与 audio.appended 同队列大小，
+                # 减小 speech.ended 消费快于 audio.appended 导致句尾丢失的概率
+                policy=BackpressurePolicy.BLOCK,
+                queue_size=512,
             )
 
         # LLM 订阅 llm.request（AL-P1-002：不再直接消费 transcript.completed——
@@ -718,10 +738,14 @@ class Orchestrator:
             TTS_AUDIO_COMPLETED,
             self._on_tts_completed,
         )
-        # 真 TTS 首块到达 → 停发垫音余量（filler 机制，VoxEMW 移植）
+        # 真 TTS 首块到达 → 停发垫音余量（filler 机制，VoxEMW 移植）。
+        # 用 DROP_OLDEST——控制面订阅不能因 Avatar 队列满而阻塞（队头阻塞会让
+        # 垫音抢占事件收不到，真假音频叠放）
         await self.event_bus.subscribe(
             TTS_AUDIO_DELTA,
             self._on_tts_delta_preempt,
+            policy=BackpressurePolicy.DROP_OLDEST,
+            queue_size=128,
         )
         # 记忆写入（Mem0 移植）：response.done 后异步抽取，不占语音延迟
         await self.event_bus.subscribe(
@@ -841,6 +865,10 @@ class Orchestrator:
 
         # 新一轮 Run——必须在发下游事件之前
         await session.start_new_run()
+        # 立即取消旧垫音——旧垫音在 vision 等待期（最长 8s）继续带新 run_id 发送，
+        # 会污染延迟指标和 Recorder 归属。此前 _cancel_filler 只在 _start_filler
+        # 内部调（在 vision 等待之后），等待期旧垫音帧带新 run_id 落盘/计指标。
+        self._cancel_filler(session.session_id)
         # 记忆凑对：存本轮用户文本（llm.done 时与 full_text 一起写入 Mem0）
         self._memory_pending_users[session.session_id] = text
         # AL-P1-005：STT 发出的原始 transcript.completed 携带旧 run_id（或 None），
@@ -1055,7 +1083,8 @@ class Orchestrator:
         """记忆写入（Mem0 移植）：一轮 user/assistant 凑对，response.done 后异步抽取。
 
         打断的回复（finish_reason=interrupted）不完整，写入会污染记忆——跳过。
-        to_thread 异步，不占语音延迟；block 未启用时内部 no-op。
+        memory.memorize 内部已用 asyncio.to_thread 包装 Mem0 的同步阻塞调用，
+        不占语音延迟；block 未启用时内部 no-op。
         """
         if event.payload.get("finish_reason") == "interrupted":
             self._memory_pending_users.pop(event.session_id, None)

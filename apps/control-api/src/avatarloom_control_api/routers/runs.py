@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,6 +17,8 @@ router = APIRouter()
 async def list_runs(
     session_id: str | None = None,
     status_filter: str | None = None,
+    limit: int = Query(200, ge=1, le=1000, description="返回数量上限"),
+    offset: int = Query(0, ge=0, description="偏移量"),
     db: AsyncSession = Depends(get_db),
 ) -> list[Run]:
     stmt = select(Run).order_by(Run.started_at.desc())
@@ -24,6 +26,7 @@ async def list_runs(
         stmt = stmt.where(Run.session_id == session_id)
     if status_filter:
         stmt = stmt.where(Run.status == status_filter)
+    stmt = stmt.limit(limit).offset(offset)
     result = await db.execute(stmt)
     return list(result.scalars().all())
 

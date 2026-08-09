@@ -51,7 +51,6 @@ class OpenAILlmBlock(Block):
     _max_tokens: int = 512
     _temperature: float = 0.7
     _disable_thinking: bool = False  # DeepSeek 等推理模型用
-    _batch_sentences: int = 1  # 凑够几句喂 TTS
 
     @classmethod
     def manifest(cls) -> BlockManifest:
@@ -89,8 +88,7 @@ class OpenAILlmBlock(Block):
         self._max_tokens = int(cfg.get("maxTokens", 512))
         self._temperature = float(cfg.get("temperature", 0.7))
         self._disable_thinking = bool(cfg.get("disableThinking", False))
-        self._batch_sentences = int(cfg.get("batchSentences", 1))
-        # 请求超时（秒）——云端 LLM 首 token 可能慢，可配置防误超时
+        # 请求超时（秒）——云端 LLM 首 token 可能慢，可配置防误时
         self._timeout = float(cfg.get("timeoutS", self._timeout))
         # 打断协作状态（AL-P1-006）——实例级，不能放类属性（可变对象跨实例共享）
         self._interrupted_run_ids: set[str] = set()

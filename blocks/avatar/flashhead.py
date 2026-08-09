@@ -210,7 +210,10 @@ class FlashHeadAvatarBlock(Block):
         log_file.close()
 
         self._avatar_state = AvatarState()
-        self._reader_task = asyncio.create_task(self._frame_reader(ctx))
+        # 当前 process 期 ctx——reader task 从这里取 run_id/session_id，
+        # 而非固定使用 setup 期的 ctx（后者 run_id 恒为 None，帧归因失真）
+        self._current_ctx: BlockContext | None = ctx
+        self._reader_task = asyncio.create_task(self._frame_reader())
         self._mark_ready()
         await ctx.logger.ainfo(
             "avatar.flashhead ready",
@@ -219,6 +222,8 @@ class FlashHeadAvatarBlock(Block):
         )
 
     async def process(self, ctx: BlockContext, event: Event) -> None:
+        # 更新当前 ctx——reader task 从这里取 run_id/session_id（非 setup 期的固定 ctx）
+        self._current_ctx = ctx
         # 统一状态机：所有事件走 transition_avatar_state 推导 speech_active/idle_mode
         # （对齐 VoxEMW avatar_state_transition，避免两套状态机漂移）
         ev_type = event.type
@@ -265,9 +270,12 @@ class FlashHeadAvatarBlock(Block):
                     await ctx.logger.aerror("flashhead reset failed", error=str(e))
             await self._emit_idle(ctx)
 
-    async def _frame_reader(self, ctx: BlockContext) -> None:
+    async def _frame_reader(self) -> None:
         try:
             async for message in self._ws:
+                ctx = self._current_ctx  # 取当前 process 期 ctx（run_id 正确归属当前轮）
+                if ctx is None:
+                    continue  # setup 完成但首个 process 未到达——帧暂弃
                 if isinstance(message, (bytes, bytearray)):
                     data = bytes(message)
                     # service 下行协议：首字节 tag（0x00=idle / 0x01=speech）+ JPEG
@@ -306,12 +314,13 @@ class FlashHeadAvatarBlock(Block):
                     except Exception:
                         pass
         except Exception as e:
-            await ctx.logger.aerror("flashhead frame reader ended", error=str(e))
+            if ctx is not None:
+                await ctx.logger.aerror("flashhead frame reader ended", error=str(e))
         finally:
             # reader 退出后置 ws 为 None：process() 的 None 守卫会拦截后续 send，
             # 避免对已死 ws 反复报错刷屏。emit 一帧 idle 做兜底，下游不至于画面卡死。
             self._ws = None
-            if not self._shutdown:
+            if not self._shutdown and ctx is not None:
                 try:
                     await self._emit_idle(ctx)
                 except Exception as e:

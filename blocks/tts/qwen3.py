@@ -39,12 +39,10 @@ class Qwen3TtsBlock(Block):
 
     def __init__(self) -> None:
         super().__init__()
-        # 实例级状态——_voice_cache 此前挂类属性，多实例/重建时共享串扰
         self._model: Any = None
         self._tokenizer: Any = None
         self._device: str = "cuda"
         self._model_name: str = "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
-        self._voice_cache: dict[str, Any] = {}  # persona_id -> 预编码 voice prompt
         self._sentence_buffers: dict[int, str] = {}
         self._total_samples: int = 0
         # 按 run 隔离 + 打断协作（同 voxcpm2 模式，见 AL-P2-003 / AL-P1-006）
@@ -58,7 +56,9 @@ class Qwen3TtsBlock(Block):
             name="Qwen3 TTS",
             category="tts",
             runtime_type="python_inproc",
-            capabilities=Capability(streaming=True, voice_cloning=True, interruption=True),
+            # streaming=False：当前实现是整句 generate 后切块回放（非真流式）。
+            # 诚实声明——此前标 True 但 _infer_stream 不是增量推理，误导调用方。
+            capabilities=Capability(streaming=False, voice_cloning=True, interruption=True),
             inputs=[LLM_TEXT_DELTA, LLM_TEXT_DONE],
             outputs=[TTS_AUDIO_DELTA, TTS_AUDIO_COMPLETED],
             resources=ResourceRequirements(
@@ -198,7 +198,6 @@ class Qwen3TtsBlock(Block):
         tokenizer = self._tokenizer
         self._model = None
         self._tokenizer = None
-        self._voice_cache.clear()
         self._sentence_buffers = {}
         self._total_samples = 0
         self._run_id = None
@@ -214,6 +213,9 @@ class Qwen3TtsBlock(Block):
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
+        # 安全提示：trust_remote_code=True 会执行模型仓库里的自定义 Python 代码。
+        # 生产环境建议固定 model_name 到具体 commit hash（revision=...）锚定版本，
+        # 或全部走本地预置目录（同 voxcpm2 的 local dir 模式）。
         tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
         model = AutoModelForCausalLM.from_pretrained(
             model_name, trust_remote_code=True, torch_dtype=torch.bfloat16

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import { clsx } from "clsx";
 import { ChevronUp, ChevronDown } from "lucide-react";
 import type { DebugInfo, SessionTiming, ConnState } from "@/hooks/use-realtime-session";
@@ -29,8 +29,12 @@ const STAGES = [
  * 收起态：状态徽章 + 水位数字一行。
  * 展开态：阶段进度点 + 左栏本轮实时事件流（terminal 风）+ 右栏里程碑延迟 / 水位 / session。
  * 数据全部来自 useRealtimeSession 的 events/timing（前端本地收集，无后端依赖）。
+ *
+ * React.memo：调试抽屉默认就吃 debugInfo/events 的高频更新（这是它的职责），
+ * 但 PlaygroundClient 在非调试态时不会挂载本组件；memo 主要避免父级其它无关状态
+ * 变化（如 profile/persona 下拉列表加载完成）误触重渲染。
  */
-export function DebugDrawer({
+export const DebugDrawer = memo(function DebugDrawer({
   conn,
   sessionState,
   sessionId,
@@ -162,7 +166,7 @@ export function DebugDrawer({
       )}
     </div>
   );
-}
+});
 
 const STATE_LABELS: Record<string, { label: string; badge: string }> = {
   idle: { label: "待机", badge: "" },

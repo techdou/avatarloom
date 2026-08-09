@@ -26,6 +26,8 @@ from avatarloom_protocol import (
 )
 from avatarloom_sdk import Block, BlockContext, BlockManifest, Capability, ResourceRequirements
 
+from blocks._http_retry import post_with_retry
+
 TARGET_SR = 16000
 
 
@@ -133,8 +135,7 @@ class OpenAITtsBlock(Block):
                     "input": text,
                     "response_format": "pcm",
                 }
-                resp = await client.post("/audio/speech", json=payload)
-                resp.raise_for_status()
+                resp = await post_with_retry(client, "/audio/speech", json=payload)
                 # OpenAI PCM 是 24kHz float32 little-endian
                 raw = resp.content
         except httpx.HTTPStatusError as e:

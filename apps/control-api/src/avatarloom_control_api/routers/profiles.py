@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,8 +19,17 @@ router = APIRouter()
 
 
 @router.get("", response_model=list[RuntimeProfileOut])
-async def list_profiles(db: AsyncSession = Depends(get_db)) -> list[RuntimeProfile]:
-    result = await db.execute(select(RuntimeProfile).order_by(RuntimeProfile.created_at.desc()))
+async def list_profiles(
+    limit: int = Query(200, ge=1, le=1000, description="返回数量上限"),
+    offset: int = Query(0, ge=0, description="偏移量"),
+    db: AsyncSession = Depends(get_db),
+) -> list[RuntimeProfile]:
+    result = await db.execute(
+        select(RuntimeProfile)
+        .order_by(RuntimeProfile.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
     return list(result.scalars().all())
 
 

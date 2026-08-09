@@ -1,11 +1,15 @@
+import { memo } from "react";
 import { clsx } from "clsx";
 import type { RunMetrics } from "@/lib/api";
 
 /**
  * 管道事件流时序——transcript → llm → tts → avatar → done 的里程碑。
  * 从 runs/[id]/page.tsx 抽取，供 Run 详情页和 RunsPanel 复用。
+ *
+ * React.memo：metrics 是来自后端的静态数据，引用稳定；父级 RunsPanel
+ * 的展开/收起等状态变化不应波及已渲染的时序图。
  */
-export function PipelineTimeline({ metrics }: { metrics: RunMetrics }) {
+export const PipelineTimeline = memo(function PipelineTimeline({ metrics }: { metrics: RunMetrics }) {
   const stages = [
     { key: "transcript", label: "用户语音识别", atMs: 0, ready: true },
     { key: "llm", label: "LLM 首字", atMs: metrics.first_text_ms, ready: metrics.first_text_ms != null },
@@ -44,4 +48,4 @@ export function PipelineTimeline({ metrics }: { metrics: RunMetrics }) {
       ))}
     </ol>
   );
-}
+});

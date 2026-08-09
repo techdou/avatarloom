@@ -353,14 +353,12 @@ class TestBlockShutdown:
         block = Qwen3TtsBlock()
         block._model = object()
         block._tokenizer = object()
-        block._voice_cache["p1"] = object()
         block._sentence_buffers = {0: "残留"}
         block._cancelled_run_ids.add("r0")
 
         await asyncio.wait_for(block.shutdown(), timeout=5)
         assert block._model is None
         assert block._tokenizer is None
-        assert block._voice_cache == {}
         assert block._sentence_buffers == {}
         assert block._cancelled_run_ids == set()
 
@@ -420,11 +418,12 @@ class TestInstanceStateIsolation:
         assert b1._render_tasks is not b2._render_tasks
         assert b1._worker_lines is not b2._worker_lines
 
-    def test_qwen3_voice_cache_is_instance_level(self) -> None:
+    def test_qwen3_sentence_buffers_is_instance_level(self) -> None:
+        """qwen3 的可变状态是实例级，不跨实例共享（防类属性串扰回归）。"""
         from blocks.tts.qwen3 import Qwen3TtsBlock
 
         b1, b2 = Qwen3TtsBlock(), Qwen3TtsBlock()
-        assert b1._voice_cache is not b2._voice_cache
+        assert b1._sentence_buffers is not b2._sentence_buffers
 
 
 class TestInferenceOffload:

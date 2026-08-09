@@ -1,12 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { clsx } from "clsx";
 import { Mic, Square } from "lucide-react";
 import { useRealtimeSession } from "@/hooks/use-realtime-session";
-
-/** 连接失败自动重连退避（ms），最多 3 次后转为手动重试。 */
-const RETRY_DELAYS = [500, 1000, 2000];
 
 /**
  * 移动端演示客户端——极简全屏体验：
@@ -15,28 +11,13 @@ const RETRY_DELAYS = [500, 1000, 2000];
  * - 底部半透明字幕条（最近一条助手回复）
  * - 悬浮大圆形麦克风按钮（底部中央）
  * 无 sidebar / 配置 / 调试。autoConnect=true：进入即连。
- * 连接失败自动指数退避重试 3 次，仍失败转为手动"点按重试"。
+ *
+ * 重连机制：完全依赖 useRealtimeSession 的内建指数退避（3 次 500/1000/2000ms）。
+ * hook 重试耗尽后 conn 回到 "disconnected" 且保留 error —— 此处判定为 exhausted，
+ * 显示"点按重试"按钮让用户手动 connect()。
  */
 export function ShowcaseClient({ profileId, personaId }: { profileId: string; personaId: string }) {
   const session = useRealtimeSession({ profileId, personaId, autoConnect: true });
-  const [retryCount, setRetryCount] = useState(0);
-
-  // 连接成功 → 重置重试计数
-  useEffect(() => {
-    if (session.conn === "connected") setRetryCount(0);
-  }, [session.conn]);
-
-  // 连接失败 → 指数退避自动重连（最多 RETRY_DELAYS.length 次）
-  useEffect(() => {
-    if (session.conn !== "error") return;
-    if (retryCount >= RETRY_DELAYS.length) return;
-    const t = setTimeout(() => {
-      setRetryCount((c) => c + 1);
-      void session.connect();
-    }, RETRY_DELAYS[retryCount]);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.conn, retryCount]);
 
   // 取最近一条助手回复作为字幕
   const lastAssistant = [...session.transcript]
@@ -45,7 +26,10 @@ export function ShowcaseClient({ profileId, personaId }: { profileId: string; pe
   // 正在生成时优先显示 delta
   const caption = session.llmDelta || lastAssistant?.text || "";
 
-  const exhausted = session.conn === "error" && retryCount >= RETRY_DELAYS.length;
+  // hook 的 3 次内建重试耗尽后 conn 会回到 "disconnected"，但 error 保留。
+  // 此时首次连接已失败过——展示手动重连入口。
+  const exhausted = session.conn === "disconnected" && !!session.error;
+
   const connDot = {
     connected: "bg-ok",
     connecting: "bg-warn animate-pulse",
@@ -59,9 +43,7 @@ export function ShowcaseClient({ profileId, personaId }: { profileId: string; pe
       : session.conn === "connecting"
         ? "连接中"
         : session.conn === "error"
-          ? exhausted
-            ? "连接失败"
-            : `连接失败，重试 ${retryCount + 1}/${RETRY_DELAYS.length}`
+          ? "连接失败"
           : "未连接";
 
   return (
@@ -99,14 +81,13 @@ export function ShowcaseClient({ profileId, personaId }: { profileId: string; pe
         </div>
       )}
 
-      {/* 错误提示：重试耗尽后变为可点击的手动重试 */}
+      {/* 错误提示：hook 重试耗尽后变为可点击的手动重试 */}
       {session.error && (
         <div className="absolute top-10 inset-x-3 flex justify-center">
           {exhausted ? (
             <button
               type="button"
               onClick={() => {
-                setRetryCount(0);
                 void session.connect();
               }}
               className="rounded-md bg-err/90 text-white text-micro px-3 py-1.5 active:scale-95"

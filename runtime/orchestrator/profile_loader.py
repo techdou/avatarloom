@@ -116,6 +116,9 @@ def load_profile(profile_path: str | Path) -> OrchestratorConfig:
         vision_timeout_s=float(
             session_raw.get("visionTimeoutS", session_raw.get("vision_timeout_s", 8.0))
         ),
+        filler_enabled=bool(
+            session_raw.get("fillerEnabled", session_raw.get("filler_enabled", True))
+        ),
     )
 
 

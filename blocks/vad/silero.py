@@ -49,6 +49,9 @@ class SileroVadBlock(Block):
     _is_speaking: bool = False
     _silence_count: int = 0
     _device: str = "cpu"  # 模型所在设备，_infer 的输入 tensor 需对齐
+    # 跨事件尾部样本结转——此前不足 512 的尾巴直接丢弃，每事件丢最多 32ms 音频，
+    # 词尾可能被切。carry buffer 拼到下个事件的首部再切。
+    _carry: np.ndarray | None = None
 
     @classmethod
     def manifest(cls) -> BlockManifest:
@@ -114,9 +117,14 @@ class SileroVadBlock(Block):
             return
 
         pcm = self._decode_pcm(pcm_b64)
+        # 拼接上事件的尾部 carry，再切 512 chunk——此前不足 512 的尾巴直接丢弃，
+        # 每事件丢最多 32ms 音频，词尾可能被切
+        if self._carry is not None and len(self._carry) > 0:
+            pcm = np.concatenate([self._carry, pcm])
+            self._carry = None
         # Silero 要求 512 samples（16kHz）为一个 chunk；
         # torch 前向 + .item() 同步是阻塞调用——逐 chunk offload，不卡事件循环
-        for chunk in self._chunk(pcm, 512):
+        for chunk in self._chunk_with_carry(pcm, 512):
             prob, self._h = await asyncio.to_thread(self._infer, chunk, self._h)
             await self._update_state(ctx, prob)
 
@@ -180,9 +188,24 @@ class SileroVadBlock(Block):
         arr = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
         return arr
 
+    def _chunk_with_carry(self, arr: np.ndarray, size: int) -> list[np.ndarray]:
+        """按 size 切分，末尾不足 size 的存入 self._carry 结转到下个事件。
+
+        此前是 staticmethod 直接丢弃尾部——每事件最多丢 32ms 音频，词尾被切。
+        """
+        n = len(arr) // size
+        chunks = [arr[i * size : (i + 1) * size] for i in range(n)]
+        remainder = len(arr) % size
+        if remainder > 0:
+            self._carry = arr[n * size :].copy()
+        return chunks
+
     @staticmethod
     def _chunk(arr: np.ndarray, size: int) -> list[np.ndarray]:
-        """按 size 切分（末尾不足 size 的丢弃——Silero 要求固定长度）。"""
+        """按 size 切分（末尾不足 size 的丢弃——Silero 要求固定长度）。
+
+        保留供单测调用（纯函数无状态）；运行时用 _chunk_with_carry 带结转。
+        """
         n = len(arr) // size
         return [arr[i * size : (i + 1) * size] for i in range(n)]
 

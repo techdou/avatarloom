@@ -146,23 +146,26 @@ class Session:
             )
             if payload:
                 state_event.payload.update(payload)
-            await self._emit_event(state_event)
 
-            # 调状态回调
-            for cb in self._state_callbacks:
-                try:
-                    await cb(old_state, result.to_state, trigger, state_event)
-                except Exception:
-                    logger.exception("state callback error: %s + %s", old_state.value, trigger)
+        # emit 和回调移出锁外——持锁期间 publish 遇 BLOCK 满队列会阻塞所有后续
+        # trigger（含打断路径）；回调里再调 try_trigger 会死锁（Lock 不可重入）
+        await self._emit_event(state_event)
 
-            logger.debug(
-                "session %s: %s + %s -> %s",
-                self.session_id[:12],
-                old_state.value,
-                trigger,
-                result.to_state.value,
-            )
-            return self.state
+        # 调状态回调
+        for cb in self._state_callbacks:
+            try:
+                await cb(old_state, result.to_state, trigger, state_event)
+            except Exception:
+                logger.exception("state callback error: %s + %s", old_state.value, trigger)
+
+        logger.debug(
+            "session %s: %s + %s -> %s",
+            self.session_id[:12],
+            old_state.value,
+            trigger,
+            result.to_state.value,
+        )
+        return self.state
 
     async def try_trigger(
         self, trigger: str, payload: dict[str, Any] | None = None

@@ -106,6 +106,9 @@ export function PlaygroundClient() {
     [restartSession, session.conn]
   );
 
+  // 打开运行记录侧滑——useCallback 稳定引用，避免 TranscriptPane.memo 失效
+  const handleOpenRuns = useCallback(() => setRunsOpen(true), []);
+
   // 助手说话人标签：persona label > name > id 兜底
   const currentPersona = personas.find((p) => p.id === personaId);
   const personaLabel = currentPersona?.label || currentPersona?.name || personaId;
@@ -175,7 +178,7 @@ export function PlaygroundClient() {
             sessionState={session.sessionState}
             sessionId={session.sessionId}
             assistantLabel={personaLabel}
-            onOpenRuns={() => setRunsOpen(true)}
+            onOpenRuns={handleOpenRuns}
           />
           <ControlBar
             conn={session.conn}

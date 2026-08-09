@@ -53,6 +53,8 @@ class ArtifactWriter:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self._emit_fn: Any = None
+        # fire-and-forget emit task 的引用——持引用防 GC，定期清理已完成的
+        self._pending_tasks: list[Any] = []
 
     def set_emit_fn(self, emit_fn: Any) -> None:
         """注入事件发射器——写完 artifact 后 emit artifact.created。"""
@@ -167,6 +169,23 @@ class ArtifactWriter:
 
             coro = self._emit_fn(event)
             if asyncio.iscoroutine(coro):
-                # 存引用避免被 GC（RUF006）；任务自管异常
-                task = asyncio.create_task(coro)
-                task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+                try:
+                    loop = asyncio.get_running_loop()
+                    task = loop.create_task(coro)
+
+                    def _log_if_failed(t: asyncio.Task) -> None:
+                        if t.cancelled():
+                            return
+                        exc = t.exception()
+                        if exc is not None:
+                            logging.getLogger(__name__).warning(
+                                "artifact.created emit failed: %s", exc, exc_info=exc
+                            )
+
+                    task.add_done_callback(_log_if_failed)
+                    self._pending_tasks.append(task)  # 持引用防 GC
+                except RuntimeError:
+                    # 无运行中 loop（block 在 to_thread 里调 write）——降级：不 emit
+                    logging.getLogger(__name__).debug(
+                        "artifact emit skipped: no running loop (thread context)"
+                    )

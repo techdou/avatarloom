@@ -4,7 +4,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+    status,
+)
 from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,8 +34,14 @@ router = APIRouter()
 
 
 @router.get("", response_model=list[AvatarOut])
-async def list_avatars(db: AsyncSession = Depends(get_db)) -> list[Avatar]:
-    result = await db.execute(select(Avatar).order_by(Avatar.created_at.desc()))
+async def list_avatars(
+    limit: int = Query(200, ge=1, le=1000, description="返回数量上限"),
+    offset: int = Query(0, ge=0, description="偏移量"),
+    db: AsyncSession = Depends(get_db),
+) -> list[Avatar]:
+    result = await db.execute(
+        select(Avatar).order_by(Avatar.created_at.desc()).limit(limit).offset(offset)
+    )
     return list(result.scalars().all())
 
 
@@ -78,13 +94,22 @@ async def delete_avatar(avatar_id: str, db: AsyncSession = Depends(get_db)) -> E
 
 
 @router.get("/{avatar_id}/assets", response_model=list[AssetOut])
-async def list_avatar_assets(avatar_id: str, db: AsyncSession = Depends(get_db)) -> list[Asset]:
+async def list_avatar_assets(
+    avatar_id: str,
+    limit: int = Query(200, ge=1, le=1000, description="返回数量上限"),
+    offset: int = Query(0, ge=0, description="偏移量"),
+    db: AsyncSession = Depends(get_db),
+) -> list[Asset]:
     """列出某 Avatar 的所有资产。"""
     avatar = await db.get(Avatar, avatar_id)
     if avatar is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Avatar not found")
     result = await db.execute(
-        select(Asset).where(Asset.avatar_id == avatar_id).order_by(Asset.created_at.desc())
+        select(Asset)
+        .where(Asset.avatar_id == avatar_id)
+        .order_by(Asset.created_at.desc())
+        .limit(limit)
+        .offset(offset)
     )
     return list(result.scalars().all())
 

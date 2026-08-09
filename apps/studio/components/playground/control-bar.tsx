@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { memo, useEffect, useRef } from "react";
 import { clsx } from "clsx";
 import { Mic, Square } from "lucide-react";
 import type { ConnState, DebugInfo } from "@/hooks/use-realtime-session";
@@ -20,8 +20,11 @@ interface ControlBarProps {
 /**
  * Playground 底部控制条——麦克风主按钮 + 音量波形 + 打断 + 调试数字（调试模式时）。
  * 移动端：圆形大麦克风（触控优先）；桌面端：文字按钮（空格键切换）。
+ *
+ * React.memo：调试模式开启时仍需 debugInfo 实时刷新数字，但调试关闭时
+ * debugInfo 的 25/s 更新不会触发重渲染（浅比较看 props 是否变化，未变即跳过）。
  */
-export function ControlBar({
+export const ControlBar = memo(function ControlBar({
   conn,
   micActive,
   playing,
@@ -68,7 +71,7 @@ export function ControlBar({
       )}
     </div>
   );
-}
+});
 
 /** 麦克风音量指示——5 根细条按 RMS 阈值点亮。rAF 直改 DOM，不触发 React 重渲染。 */
 function MicLevelBars({ getLevel }: { getLevel: () => number }) {

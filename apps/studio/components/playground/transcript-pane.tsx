@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { memo, useEffect, useRef } from "react";
 import { clsx } from "clsx";
 import { Mic, History } from "lucide-react";
 import {
@@ -27,8 +27,11 @@ interface TranscriptPaneProps {
  * 外层卡片容器由 PlaygroundClient 提供（内含 TranscriptPane + ControlBar），
  * 本组件根元素只做 flex 布局，不自带 card 样式。
  * 气泡渲染委托给 MessageBubble（与 runs/[id] 回放同一实现）。
+ *
+ * React.memo：transcript / llmDelta / error / sessionState / sessionId 变化才需重渲染，
+ * 高频 debugInfo 刷新（每帧 25/s）不会波及本组件。
  */
-export function TranscriptPane({
+export const TranscriptPane = memo(function TranscriptPane({
   transcript,
   llmDelta,
   error,
@@ -122,4 +125,4 @@ export function TranscriptPane({
       </div>
     </div>
   );
-}
+});

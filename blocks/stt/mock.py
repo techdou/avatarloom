@@ -35,9 +35,8 @@ class MockSttBlock(Block):
     """Mock 语音识别。"""
 
     _utterances: list[str] = _DEFAULT_UTTERANCES
-    _mode: str = "random"  # random | echo | fixed
+    _mode: str = "random"  # random | fixed
     _fixed_text: str = "你好"
-    _last_user_input: str = ""
 
     @classmethod
     def manifest(cls) -> BlockManifest:
@@ -54,7 +53,7 @@ class MockSttBlock(Block):
                 "properties": {
                     "mode": {
                         "type": "string",
-                        "enum": ["random", "echo", "fixed"],
+                        "enum": ["random", "fixed"],
                         "default": "random",
                     },
                     "utterances": {"type": "array", "items": {"type": "string"}},
@@ -79,7 +78,6 @@ class MockSttBlock(Block):
             return
         if event.type == SPEECH_ENDED:
             text = self._pick_text()
-            self._last_user_input = text
             await ctx.emit(
                 Event(
                     type=TRANSCRIPT_COMPLETED,
@@ -97,8 +95,6 @@ class MockSttBlock(Block):
     def _pick_text(self) -> str:
         if self._mode == "fixed":
             return self._fixed_text
-        if self._mode == "echo":
-            return self._last_user_input or self._fixed_text
         return random.choice(self._utterances)
 
     async def reset(self, session_id: str) -> None:

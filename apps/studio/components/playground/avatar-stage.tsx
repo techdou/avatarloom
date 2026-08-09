@@ -1,5 +1,6 @@
 "use client";
 
+import { memo } from "react";
 import { UserCircle2 } from "lucide-react";
 import type { ConnState } from "@/hooks/use-realtime-session";
 
@@ -19,8 +20,11 @@ interface AvatarStageProps {
 /**
  * 数字人画面区——帧显示 / 未连接引导 / 等帧占位 三态。
  * 纯展示组件，不参与数据流；画面 blob URL 由 useRealtimeSession 维护。
+ *
+ * React.memo：frameUrl 变化才需重渲染；debugInfo 的高频刷新
+ * 只影响 framesShown，调试浮层才用到，但默认走浅比较即可跳过大量无谓重渲染。
  */
-export function AvatarStage({
+export const AvatarStage = memo(function AvatarStage({
   frameUrl,
   conn,
   error,
@@ -50,7 +54,7 @@ export function AvatarStage({
       </div>
     </div>
   );
-}
+});
 
 /** 未连接引导态：克制占位 + 连接 CTA + 真实 WS 目标地址。 */
 function WelcomePane({

@@ -144,6 +144,9 @@ class SenseVoiceSttBlock(Block):
     def _load_model(self, model_name: str, device: str) -> Any:
         from funasr import AutoModel
 
+        # 安全提示：trust_remote_code=True 执行模型仓库的自定义代码。
+        # FunASR 的 AutoModel 内部会从 ModelScope/HuggingFace 拉取——
+        # 生产环境建议预置模型到本地并用 local path，或固定 revision 锚定版本。
         return AutoModel(
             model=model_name,
             trust_remote_code=True,

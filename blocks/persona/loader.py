@@ -131,22 +131,38 @@ def load_persona(package_dir: str | Path, workspace_root: str | Path = ".") -> P
 
 
 def _resolve_ref(ref: Any, root: Path) -> str | None:
-    """解析文件引用为绝对路径字符串。"""
+    """解析文件引用为绝对路径字符串。
+
+    校验解析后的路径在 root 目录范围内——防止 ../../ 或绝对路径逃逸 persona 包根，
+    读取包外文件进 prompt/引用（路径遍历）。
+    """
     if not ref:
         return None
     p = Path(str(ref))
     if not p.is_absolute():
         p = root / p
+    p = p.resolve()
+    root_resolved = root.resolve()
+    try:
+        p.relative_to(root_resolved)
+    except ValueError:
+        return None  # 逃逸包根——拒绝
     return str(p) if p.exists() else None
 
 
 def _resolve_ref_text(ref: Any, root: Path) -> str | None:
-    """ref.txt 类文本引用——读成内容。"""
+    """ref.txt 类文本引用——读成内容。同样校验路径不逃逸包根。"""
     if not ref:
         return None
     p = Path(str(ref))
     if not p.is_absolute():
         p = root / p
+    p = p.resolve()
+    root_resolved = root.resolve()
+    try:
+        p.relative_to(root_resolved)
+    except ValueError:
+        return None  # 逃逸包根——拒绝
     if not p.exists():
         return None
     try:

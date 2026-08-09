@@ -375,8 +375,10 @@ async def main() -> int:
         # 基类异常，不受 Exception 捕获——musetalk 渲染 task 取消时透传，
         # 此前吞掉了 RESULT 打印（真因排查花了三轮）
         pass
-    except Exception:
-        pass
+    except Exception as e:
+        # shutdown 失败不影响 RESULT 判定（产物已落盘），但不能静默吞掉——
+        # 否则 shutdown 阶段的资源泄漏/超时无从排查
+        print(f"[warn] shutdown raised, ignored: {type(e).__name__}: {e}", file=sys.stderr)
 
     ok = all(got.values())
     print("=" * 64)

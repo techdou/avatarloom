@@ -69,6 +69,7 @@ fi
 # ---------------------------------------------------------------------------
 log "=== 安装 uv（Python 包管理器）==="
 if ! command -v uv &>/dev/null; then
+    # 注意：管道执行远程脚本有供应链风险，AutoDL 场景可接受；生产环境建议固定版本+校验 checksum
     curl -LsSf https://astral.sh/uv/install.sh | sh
     export PATH="$HOME/.local/bin:$PATH"
     # 让后续 shell 也能用
@@ -102,6 +103,7 @@ log "HF_ENDPOINT=$HF_ENDPOINT  HF_HOME=$HF_HOME"
 # ---------------------------------------------------------------------------
 log "=== 安装 Node.js + pnpm ==="
 if ! command -v node &>/dev/null; then
+    # 注意：管道执行远程脚本有供应链风险，AutoDL 场景可接受；生产环境建议固定版本+校验 checksum
     curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
     apt-get install -y -qq nodejs >/dev/null
 fi

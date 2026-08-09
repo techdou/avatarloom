@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback } from "react";
+import { memo, useCallback } from "react";
 import { clsx } from "clsx";
 import { Camera, Link2, Power } from "lucide-react";
 import { ThemeToggle } from "@/components/layout/theme-toggle";
@@ -29,8 +29,11 @@ interface ContextBarProps {
  * Playground 顶部上下文条：连接状态 + profile/persona 选择 + 调试开关 + 主题切换。
  * 纯渲染组件——profiles/personas 选项由调用方拉取传入。
  * 下拉用原生 <select>（不引入 UI 库），样式套 .input。
+ *
+ * React.memo：高频 setDebugInfo 驱动整树重渲染时，本组件的 props（conn / profileId /
+ * 回调引用）大多数时候不变，可跳过重渲染。
  */
-export function ContextBar({
+export const ContextBar = memo(function ContextBar({
   conn,
   profileId,
   personaId,
@@ -177,7 +180,7 @@ export function ContextBar({
       </div>
     </div>
   );
-}
+});
 
 /** 复制文本——clipboard API 优先；非安全上下文（局域网 http 演示场景）降级 execCommand。 */
 async function copyText(text: string): Promise<boolean> {

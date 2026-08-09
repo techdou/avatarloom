@@ -44,7 +44,7 @@ blocks:
     optional: true
     config:
       enabled: false
-      apiKeyEnv: DEEPSEEK_API_KEY
+      apiKeyEnv: LLM_API_KEY
 
 sync:
   audio_delay_ms: 600

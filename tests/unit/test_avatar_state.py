@@ -41,11 +41,12 @@ class TestAvatarStateTransition:
         s2 = transition_avatar_state(s, "speech.ended")
         assert s2.idle_mode == "calm"
 
-    def test_interrupt_resets(self) -> None:
-        s = AvatarState(speech_active=True, idle_mode="listening")
-        s2 = transition_avatar_state(s, "interrupt")
-        assert s2.speech_active is False
-        assert s2.idle_mode == "calm"
+    def test_speech_ended_no_mix_when_interruption_disabled(self) -> None:
+        """allow_interruption=False 时，助手说话期间收到 speech.ended 不应改状态（防混帧）。"""
+        s = AvatarState(speech_active=True, idle_mode="calm")
+        s2 = transition_avatar_state(s, "speech.ended", allow_interruption=False)
+        assert s2.speech_active is True  # 不打断 → 保持说话状态
+        assert s2 is s
 
     def test_unknown_event_is_noop(self) -> None:
         s = AvatarState(speech_active=True)
