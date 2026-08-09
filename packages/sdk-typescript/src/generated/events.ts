@@ -156,7 +156,7 @@ export interface LlmTextDeltaPayload {
 
 export interface LlmTextDonePayload {
   full_text: string;
-  finish_reason?: "stop" | "length" | "cancelled" | "error";
+  finish_reason?: "stop" | "length" | "cancelled" | "interrupted" | "error";
   first_token_ms?: number | null;
   total_tokens?: number | null;
   [key: string]: unknown;

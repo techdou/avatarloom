@@ -127,6 +127,38 @@ class TestRunRecorder:
         assert events[0]["payload"]["i"] == 0
         assert events[4]["payload"]["i"] == 4
 
+    async def test_concurrent_record_no_line_interleaving(self, runs_root: Path) -> None:
+        """并发 record() 回归：JSONL 每行必须是完整可解析的 JSON，且事件不丢失。
+
+        历史缺陷：write 移出锁后用 to_thread 并发写同一文件句柄导致行内容交错；
+        本测试在回退前的代码上必然失败，锁住"锁内串行 + 线程池 I/O"的修复。
+        """
+        recorder = RunRecorder(root=runs_root)
+        await recorder.start_run("run_conc", "ses_1", "mock")
+        n = 50
+        await asyncio.gather(
+            *[
+                recorder.record(
+                    Event(
+                        type="test.event",
+                        session_id="ses_1",
+                        source="x",
+                        run_id="run_conc",
+                        timestamp=i,
+                        payload={"i": i, "pad": "x" * 128},
+                    )
+                )
+                for i in range(n)
+            ]
+        )
+        await recorder.finalize_run("run_conc")
+
+        raw = (runs_root / "run_conc" / "events.jsonl").read_text(encoding="utf-8")
+        lines = [ln for ln in raw.splitlines() if ln.strip()]
+        assert len(lines) == n, f"expected {n} lines, got {len(lines)}"
+        parsed = [json.loads(ln) for ln in lines]  # 任一行解析失败即证明行交错
+        assert sorted(e["payload"]["i"] for e in parsed) == list(range(n))
+
     async def test_transcript_records_user_and_assistant(self, runs_root: Path) -> None:
         recorder = RunRecorder(root=runs_root)
         await recorder.start_run("run_t", "ses_1", "mock")

@@ -184,6 +184,15 @@ class ArtifactWriter:
 
                     task.add_done_callback(_log_if_failed)
                     self._pending_tasks.append(task)  # 持引用防 GC
+
+                    def _discard(t: asyncio.Task) -> None:
+                        # 完成后从引用列表移除，防只增不减的内存泄漏
+                        try:
+                            self._pending_tasks.remove(t)
+                        except ValueError:
+                            pass
+
+                    task.add_done_callback(_discard)
                 except RuntimeError:
                     # 无运行中 loop（block 在 to_thread 里调 write）——降级：不 emit
                     logging.getLogger(__name__).debug(

@@ -15,6 +15,7 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import struct
 import time
 from collections import deque
@@ -51,7 +52,8 @@ class MuseTalkAvatarBlock(Block):
         self._worker_proc: Any = None
         self._worker_stdin: Any = None
         self._worker_lock = asyncio.Lock()
-        self._worker_lines: deque[str] = deque()
+        # 有界 deque：worker 高频输出时只保留最近 N 行，防长会话内存增长
+        self._worker_lines: deque[str] = deque(maxlen=512)
         self._bufs: dict[str, bytearray] = {}
         self._last_activity: dict[str, float] = {}
         self._frame_indexes: dict[str, int] = {}
@@ -123,16 +125,22 @@ class MuseTalkAvatarBlock(Block):
         self._portrait_bytes = p.read_bytes()
         self._portrait_jpeg = self._to_jpeg(self._portrait_bytes)
 
-        musetalk_root = str(cfg.get("musetalkRoot", "/root/autodl-tmp/musetalk"))
+        # 默认路径可用环境变量覆盖（AVATARLOOM_MUSETALK_*），降低非 AutoDL 环境启动成本
+        musetalk_root = str(
+            cfg.get("musetalkRoot")
+            or os.environ.get("AVATARLOOM_MUSETALK_ROOT")
+            or "/root/autodl-tmp/musetalk"
+        )
         model_dir = str(
-            cfg.get("modelDir", str(Path(musetalk_root) / "models"))
+            cfg.get("modelDir")
+            or os.environ.get("AVATARLOOM_MUSETALK_MODEL_DIR")
+            or str(Path(musetalk_root) / "models")
         )
         version = str(cfg.get("version", "v1"))
         worker_python = str(
-            cfg.get(
-                "workerPython",
-                "/root/autodl-tmp/musetalk-venv/bin/python",
-            )
+            cfg.get("workerPython")
+            or os.environ.get("AVATARLOOM_MUSETALK_WORKER_PYTHON")
+            or "/root/autodl-tmp/musetalk-venv/bin/python"
         )
         worker_script = str(
             cfg.get("workerScript", str(workspace / "scripts" / "muse_worker.py"))
@@ -560,12 +568,13 @@ class MuseTalkAvatarBlock(Block):
 
             from PIL import Image
 
-            img = Image.open(io.BytesIO(data))
-            if img.mode != "RGB":
-                img = img.convert("RGB")
-            buf = io.BytesIO()
-            img.save(buf, format="JPEG", quality=88)
-            return buf.getvalue()
+            # 用独立变量名避免与 cv2 分支的 ndarray 复用（mypy 类型推断串扰）
+            pil_img = Image.open(io.BytesIO(data))
+            if pil_img.mode != "RGB":
+                pil_img = pil_img.convert("RGB")  # type: ignore[assignment]  # PIL stub 返回 Image
+            pil_buf = io.BytesIO()
+            pil_img.save(pil_buf, format="JPEG", quality=88)
+            return pil_buf.getvalue()
         except Exception:
             return data
 

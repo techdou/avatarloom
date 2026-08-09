@@ -60,6 +60,23 @@ _BLOCKED_OTHER_EXT = frozenset(
 _MAX_EXT_LEN = 16
 
 
+def _looks_like_image(content: bytes) -> bool:
+    """轻量魔数校验：图片类上传不得只是扩展名/Content-Type 伪装。
+
+    只覆盖确定性强的图片容器（PNG/JPEG/GIF/WebP/BMP）；视频/音频容器
+    （MP4/WebM/WAV 等）起始原子不唯一，硬校验会误伤合法文件，保持现状。
+    """
+    if content.startswith(b"\x89PNG\r\n\x1a\n"):
+        return True
+    if content.startswith(b"\xff\xd8\xff"):
+        return True
+    if content.startswith((b"GIF87a", b"GIF89a")):
+        return True
+    if content.startswith(b"RIFF") and content[8:12] == b"WEBP":
+        return True
+    return content.startswith(b"BM")
+
+
 def resolve_asset_path(assets_root: Path, rel_path: str) -> Path:
     """把 DB 里的相对路径 resolve 成绝对路径，防目录穿越。
 
@@ -194,6 +211,13 @@ async def save_upload(
         raise HTTPException(
             status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             f"File too large (max {_MAX_SIZE} bytes)",
+        )
+
+    # 图片类按魔数校验真实内容——防 polyglot（扩展名 .png、内容是 HTML/JS）入库
+    if kind in ("portrait", "image") and not _looks_like_image(content):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"File content does not match kind={kind} (expected a known image format)",
         )
 
     # 写文件：assets_root/avatars/{avatar_id}/{kind}/{uuid}{ext}

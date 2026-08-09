@@ -355,6 +355,7 @@
           "stop",
           "length",
           "cancelled",
+          "interrupted",
           "error"
         ],
         "title": "Finish Reason",

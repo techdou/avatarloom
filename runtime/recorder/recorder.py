@@ -120,7 +120,8 @@ class RunRecorder:
     async def record(self, event: Event) -> None:
         """记录一个事件。
 
-        非 Run 范围内的事件（run_id 为 None）只追加到 session 级 events.jsonl。
+        仅记录当前活跃 Run 的事件；非 Run 范围（run_id 为 None 或已 finalize）
+        直接跳过（session 级事件单独管理，v0.1 简化）。
         """
         # 序列化在锁外做（json.dumps 是 CPU、不涉及共享状态）
         line = json.dumps(event.model_dump(), ensure_ascii=False) + "\n"
@@ -132,11 +133,10 @@ class RunRecorder:
             state = self._active[run_id]
 
             # 追加事件到 jsonl + 更新指标，都在锁内。
-            # 此前尝试把 write 移出锁外用 to_thread——但多个协程可能并发拿到同一
-            # events_file 句柄，to_thread 在不同线程并发 write 会导致行内容交错。
-            # 磁盘反压是性能问题（可接受），数据损坏是正确性问题（不可接受）。
-            state.events_file.write(line)
-            state.events_file.flush()
+            # 锁保证串行（杜绝并发写同一句柄导致行交错）；I/O 经 to_thread 移出
+            # 事件循环（慢盘不再卡住整条 gateway 协程链路）。两者可兼得。
+            await asyncio.to_thread(state.events_file.write, line)
+            await asyncio.to_thread(state.events_file.flush)
 
             # 更新指标（锁内——state 读改写需原子）
             self._update_metrics(state, event)

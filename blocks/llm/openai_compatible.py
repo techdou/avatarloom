@@ -278,7 +278,8 @@ class OpenAILlmBlock(Block):
         except httpx.HTTPStatusError as e:
             await self._emit_done(ctx, full_text, "error")
             raise RuntimeError(
-                f"LLM HTTP error {e.response.status_code}: {e.response.text[:200]}"
+                # 不拼接上游响应体——可能回显 prompt/密钥，进日志即泄露
+                f"LLM HTTP error {e.response.status_code}"
             ) from e
         finally:
             self._active_run_id = None

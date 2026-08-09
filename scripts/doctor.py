@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 import os
 import socket
@@ -144,6 +145,9 @@ def check_workspace() -> list[tuple[str, bool, str]]:
 
 
 def main() -> int:
+    # Windows/GBK 控制台下 print("✓") 会抛 UnicodeEncodeError，强制 UTF-8
+    with contextlib.suppress(Exception):
+        sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
     print("=" * 60)
     print("AvatarLoom Doctor — 环境自检")
     print("=" * 60)

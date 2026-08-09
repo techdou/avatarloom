@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import sys
 from pathlib import Path
 
@@ -118,6 +119,9 @@ async def run_smoke() -> int:
 
 
 def main() -> int:
+    # Windows/GBK 控制台下 print("✓") 会抛 UnicodeEncodeError，强制 UTF-8
+    with contextlib.suppress(Exception):
+        sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
     return asyncio.run(run_smoke())
 
 

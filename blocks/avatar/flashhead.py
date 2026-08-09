@@ -15,6 +15,7 @@ import asyncio
 import base64
 import json
 import logging
+import os
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -45,15 +46,20 @@ logger = logging.getLogger("avatar.flashhead")
 class FlashHeadAvatarBlock(Block):
     """FlashHead——TTS 音频流驱动的实时说话头。"""
 
-    _proc: Any = None
-    _ws: Any = None
-    _reader_task: asyncio.Task[None] | None = None
-    _frame_index: int = 0
-    _avatar_state: Any = None  # AvatarState 实例（transition_avatar_state 推导）
-    _portrait_bytes: bytes = b""
-    _portrait_path: str = ""
-    _fps: int = 25
-    _shutdown: bool = False  # shutdown() 置位——reader 退出后不再 emit（防 unwired ctx 报错）
+    def __init__(self) -> None:
+        super().__init__()
+        # 全部运行期状态放实例级——类属性会让多实例（fallback 重建/单测）互相串扰，
+        # 与 musetalk 的实例级修复保持一致。
+        self._proc: Any = None
+        self._ws: Any = None
+        self._reader_task: asyncio.Task[None] | None = None
+        self._frame_index: int = 0
+        self._avatar_state: Any = None  # AvatarState 实例（transition_avatar_state 推导）
+        self._portrait_bytes: bytes = b""
+        self._portrait_path: str = ""
+        self._fps: int = 25
+        self._shutdown: bool = False  # shutdown() 置位——reader 退出后不再 emit
+        self._current_ctx: BlockContext | None = None
 
     @classmethod
     def manifest(cls) -> BlockManifest:
@@ -103,11 +109,11 @@ class FlashHeadAvatarBlock(Block):
         self._portrait_path = str(p)
         self._portrait_bytes = p.read_bytes()
 
+        # 默认路径可用环境变量覆盖（AVATARLOOM_FLASHHEAD_*），降低非 AutoDL 环境启动成本
         service_python = str(
-            cfg.get(
-                "servicePython",
-                "/root/autodl-tmp/avatarloom-avatar-venv/bin/python",
-            )
+            cfg.get("servicePython")
+            or os.environ.get("AVATARLOOM_FLASHHEAD_SERVICE_PYTHON")
+            or "/root/autodl-tmp/avatarloom-avatar-venv/bin/python"
         )
         service_script = str(
             cfg.get("serviceScript", str(workspace / "scripts" / "flashhead_service.py"))
@@ -120,10 +126,14 @@ class FlashHeadAvatarBlock(Block):
             )
 
         model_dir = str(
-            cfg.get("modelDir", "/root/autodl-tmp/models/SoulX-FlashHead-1_3B")
+            cfg.get("modelDir")
+            or os.environ.get("AVATARLOOM_FLASHHEAD_MODEL_DIR")
+            or "/root/autodl-tmp/models/SoulX-FlashHead-1_3B"
         )
         wav2vec_dir = str(
-            cfg.get("wav2vecDir", "/root/autodl-tmp/models/wav2vec2-base-960h")
+            cfg.get("wav2vecDir")
+            or os.environ.get("AVATARLOOM_FLASHHEAD_WAV2VEC_DIR")
+            or "/root/autodl-tmp/models/wav2vec2-base-960h"
         )
         port = int(cfg.get("servicePort", 8767))
         jpeg_quality = int(cfg.get("jpegQuality", 85))
@@ -212,7 +222,7 @@ class FlashHeadAvatarBlock(Block):
         self._avatar_state = AvatarState()
         # 当前 process 期 ctx——reader task 从这里取 run_id/session_id，
         # 而非固定使用 setup 期的 ctx（后者 run_id 恒为 None，帧归因失真）
-        self._current_ctx: BlockContext | None = ctx
+        self._current_ctx = ctx
         self._reader_task = asyncio.create_task(self._frame_reader())
         self._mark_ready()
         await ctx.logger.ainfo(

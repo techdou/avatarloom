@@ -131,7 +131,9 @@ class LlmTextDeltaPayload(_BasePayload):
 
 class LlmTextDonePayload(_BasePayload):
     full_text: str
-    finish_reason: Literal["stop", "length", "cancelled", "error"] = "stop"
+    # "interrupted" 是打断链路的实际取值（LLM block reset 路径），
+    # "cancelled" 保留为历史兼容别名。
+    finish_reason: Literal["stop", "length", "cancelled", "interrupted", "error"] = "stop"
     # 性能指标（由 LLM Block 自报）
     first_token_ms: int | None = None
     total_tokens: int | None = None

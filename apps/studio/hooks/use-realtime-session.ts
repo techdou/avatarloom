@@ -18,7 +18,11 @@ export type ConnState = "disconnected" | "connecting" | "connected" | "error";
 /** 隧道端口显式映射（README「端口约定」唯一权威）：页面端口 → gateway WS 端口。 */
 const TUNNEL_WS_PORT: Record<string, string> = { "13000": "18101" };
 
-/** 浏览器 WS 鉴权 token。只通过子协议握手传递，不放进 URL；未配置时保持 Mock 开发模式。 */
+/**
+ * 浏览器 WS 鉴权 token。只通过首条 auth 消息传递，不放进 URL。
+ * 注意：NEXT_PUBLIC_* 会在构建期打入客户端 bundle——这是共享密钥模型，
+ * 仅适用于受控单用户隧道；多用户部署应改为运行时注入（SSR / 独立 auth 接口）。
+ */
 const WS_AUTH_TOKEN = process.env.NEXT_PUBLIC_WS_TOKEN ?? "";
 
 /** 推导 WS 地址（纯函数，挂载即算）：

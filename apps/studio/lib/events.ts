@@ -9,6 +9,8 @@
  * - "本轮"窗口：transcript.completed 到达时重置 timing 并以它为 t0；
  *   首个 llm delta / PCM / 视频帧各自只记首次，下一轮自动解锁。
  * - 二进制下行（0x01 帧 / 0x03 PCM）不进事件流——首包时刻由 milestone action 记录。
+ * - 下行 JSON 经网关控制队列 FIFO 送达，当前未实现按 envelope.sequence 重排；
+ *   若未来出现多路 emit 乱序，消费方需先按 sequence 排序再归约。
  */
 
 export interface SessionEvent {

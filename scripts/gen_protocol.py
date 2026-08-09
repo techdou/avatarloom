@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import sys
 import types
@@ -157,11 +158,11 @@ def _py_type_to_ts(py_type: object) -> str:
         if nullable:
             result += " | null"
         return result
-    if origin is list or origin is list:  # type: ignore[attr-defined]
+    if origin is list:
         if args:
             return f"Array<{_py_type_to_ts(args[0])}>"
         return "unknown[]"
-    if origin is dict or origin is dict:  # type: ignore[attr-defined]
+    if origin is dict:
         if args and args[1] is not Any:
             return f"Record<string, {_py_type_to_ts(args[1])}>"
         return "Record<string, unknown>"
@@ -238,6 +239,10 @@ def _generated_files() -> dict[str, str]:
 
 
 def main() -> int:
+    # Windows/GBK 控制台下 print("✓") 会抛 UnicodeEncodeError（CI/门禁红），
+    # 强制 stdout 使用 UTF-8。
+    with contextlib.suppress(Exception):
+        sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--check",

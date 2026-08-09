@@ -219,7 +219,7 @@ class Qwen3TtsBlock(Block):
         tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
         model = AutoModelForCausalLM.from_pretrained(
             model_name, trust_remote_code=True, torch_dtype=torch.bfloat16
-        ).to(device)
+        ).to(device)  # type: ignore[arg-type]  # transformers stub 重载解析噪音
         model.eval()
         return tokenizer, model
 

@@ -588,8 +588,11 @@ class Orchestrator:
                     block_id,
                     block_ref.fallback,
                 )
-                # fallback block 用空 config（走 manifest 默认值），不传原 block 的 config
-                await self._setup_block(category, block_ref.fallback, {}, block_ref, visited)
+                # fallback block 继承原 block 的 config（mock/静态块用 .get 忽略
+                # 多余键；真实块可复用 portrait 等关键配置，避免空 config 必失败）。
+                await self._setup_block(
+                    category, block_ref.fallback, dict(config), block_ref, visited
+                )
                 self.degraded_blocks[category] = block_ref.fallback
                 return
             if block_ref.optional:
@@ -610,7 +613,9 @@ class Orchestrator:
         except BlockSetupError as e:
             logger.warning("block %s setup import failed: %s", block_id, e)
             if block_ref.fallback:
-                await self._setup_block(category, block_ref.fallback, {}, block_ref, visited)
+                await self._setup_block(
+                    category, block_ref.fallback, dict(config), block_ref, visited
+                )
                 self.degraded_blocks[category] = block_ref.fallback
                 return
             if block_ref.optional:
@@ -640,8 +645,10 @@ class Orchestrator:
             logger.exception("block %s setup failed", block_id)
             if block_ref.fallback:
                 logger.info("degrading %s -> %s", block_id, block_ref.fallback)
-                # fallback block 用空 config（走 manifest 默认值），不传原 block 的 config
-                await self._setup_block(category, block_ref.fallback, {}, block_ref, visited)
+                # fallback block 继承原 block 的 config（同前两处）
+                await self._setup_block(
+                    category, block_ref.fallback, dict(config), block_ref, visited
+                )
                 self.degraded_blocks[category] = block_ref.fallback
                 return
             if block_ref.optional:

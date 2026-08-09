@@ -23,6 +23,7 @@ from avatarloom_protocol.envelope import event_category, make_event, make_state_
 from avatarloom_protocol.payloads import (
     AudioAppendedPayload,
     LlmTextDeltaPayload,
+    LlmTextDonePayload,
     SpeechDetectedPayload,
     TtsAudioDeltaPayload,
 )
@@ -134,6 +135,13 @@ class TestPayloads:
         assert d["text"] == "你好"
         assert d["is_sentence_end"] is False
 
+    def test_llm_done_finish_reason_accepts_interrupted(self) -> None:
+        """打断链路实际 emit "interrupted"——协议 Literal 必须覆盖（契约回归）。"""
+        p = LlmTextDonePayload(full_text="部分文本", finish_reason="interrupted")
+        assert p.finish_reason == "interrupted"
+        with pytest.raises(ValidationError):
+            LlmTextDonePayload(full_text="x", finish_reason="unknown")  # type: ignore[arg-type]
+
     def test_tts_audio_delta_requires_samples_ge_zero(self) -> None:
         p = TtsAudioDeltaPayload(pcm_b64="A", samples=0)
         assert p.samples == 0
@@ -200,6 +208,8 @@ def test_generated_protocol_is_in_sync() -> None:
         cwd=root,
         capture_output=True,
         text=True,
+        # 子进程 stdout 已强制 UTF-8；GBK 控制台下若不指定编码会解码失败
+        encoding="utf-8",
         check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr

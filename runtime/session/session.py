@@ -167,7 +167,9 @@ class Session:
             trigger,
             result.to_state.value,
         )
-        return self.state
+        # 返回本次迁移的目标状态（锁内快照）——锁外 self.state 可能已被并发
+        # trigger 推进，调用方不应拿到"超前"状态。
+        return result.to_state
 
     async def try_trigger(
         self, trigger: str, payload: dict[str, Any] | None = None
