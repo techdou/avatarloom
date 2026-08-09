@@ -42,6 +42,12 @@ class Settings(BaseSettings):
         default="",
         description="Bearer token required on /ws/realtime when set; empty disables auth (dev mode).",
     )
+    # 显式开发模式开关：api_token 为空且 auth_disabled=False（默认）时 fail-closed
+    # （WS 握手直接拒绝），防止生产漏配 token 时任何人可发起 GPU 会话。
+    auth_disabled: bool = Field(
+        default=False,
+        description="Explicit dev-mode switch: allow unauthenticated WS when api_token is empty.",
+    )
 
     # CORS 白名单（allow_credentials=True 时不能用通配符）
     cors_origins: list[str] = Field(

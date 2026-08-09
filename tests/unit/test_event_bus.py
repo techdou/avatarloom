@@ -153,6 +153,30 @@ class TestBackpressure:
         await bus.unsubscribe(sub)
         await bus.close()
 
+    async def test_block_policy_times_out_and_drops(self) -> None:
+        """block 策略有总超时：订阅者不消费时 publish 不无限挂起，超时丢事件。"""
+        bus = EventBus(block_max_wait_s=0.2)
+        received: list[Event] = []
+
+        async def stalled_handler(e: Event) -> None:
+            await asyncio.sleep(10)  # 模拟不消费
+            received.append(e)
+
+        sub = await bus.subscribe(
+            "*",
+            stalled_handler,
+            queue_size=1,
+            policy=BackpressurePolicy.BLOCK,
+        )
+        # 首事件填满队列（handler 卡住），第二个事件应在 ~0.2s 后超时丢弃而非挂起
+        await bus.publish(Event(type="x", session_id="s", source="b", sequence=1))
+        await asyncio.wait_for(
+            bus.publish(Event(type="x", session_id="s", source="b", sequence=2)),
+            timeout=2.0,
+        )
+        await bus.unsubscribe(sub)
+        await bus.close()
+
 
 class TestEventBusLifecycle:
     async def test_close_cancels_subscriptions(self) -> None:

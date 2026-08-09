@@ -14,6 +14,7 @@ import asyncio
 import contextlib
 import fnmatch
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
@@ -22,6 +23,10 @@ from avatarloom_protocol import Event
 from runtime.event_bus.policy import BackpressurePolicy
 
 logger = logging.getLogger(__name__)
+
+# BLOCK 策略单次入队的最长等待：订阅者长期不消费时，publish 不应无限挂起
+# 整条事件链——超时后丢弃事件并告警（保活优先于保数据）。
+_BLOCK_MAX_WAIT_S = 5.0
 
 EventHandler = Callable[[Event], Awaitable[None]]
 
@@ -58,10 +63,12 @@ class EventBus:
         *,
         default_queue_size: int = 256,
         default_policy: BackpressurePolicy = BackpressurePolicy.BLOCK,
+        block_max_wait_s: float = _BLOCK_MAX_WAIT_S,
     ) -> None:
         self._subs: dict[str, Subscription] = {}
         self._default_queue_size = default_queue_size
         self._default_policy = default_policy
+        self._block_max_wait_s = block_max_wait_s
         self._sub_counter = 0
         self._lock = asyncio.Lock()
         self._closed = False
@@ -182,10 +189,21 @@ class EventBus:
                     return
                 except asyncio.QueueFull:
                     pass
-                # 队满——短超时轮询等待空位，每次复查 sub 是否已关闭
+                # 队满——总时限内短超时轮询等待空位，每次复查 sub 是否已关闭；
+                # 超过 _BLOCK_MAX_WAIT_S 丢弃事件（订阅者不消费时不能无限挂起 publisher）。
+                deadline = time.monotonic() + self._block_max_wait_s
                 while not sub._closed:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        logger.warning(
+                            "EventBus BLOCK queue full for %.1fs——dropping event %s (sub %s)",
+                            self._block_max_wait_s,
+                            event.type,
+                            sub.sub_id,
+                        )
+                        return
                     try:
-                        await asyncio.wait_for(q.put(event), timeout=0.1)
+                        await asyncio.wait_for(q.put(event), timeout=min(0.1, remaining))
                         return
                     except TimeoutError:
                         continue

@@ -60,14 +60,23 @@ def _services(pnpm: str) -> list[dict]:
             "cmd": [sys.executable, "-m", "avatarloom_control_api"],
             "port": CONTROL_API_PORT,
             # 只传独立别名——AVATARLOOM_PORT 是两个服务共享的旧名，传了会撞车。
-            "env": {**os.environ, "AVATARLOOM_CONTROL_API_PORT": str(CONTROL_API_PORT)},
+            # 本地 dev 显式关闭鉴权（fail-closed 默认下无 token 不再裸奔放行）。
+            "env": {
+                **os.environ,
+                "AVATARLOOM_CONTROL_API_PORT": str(CONTROL_API_PORT),
+                "AVATARLOOM_AUTH_DISABLED": "1",
+            },
             "cwd": PROJECT_ROOT,
         },
         {
             "name": "runtime-gateway",
             "cmd": [sys.executable, "-m", "avatarloom_runtime_gateway"],
             "port": RUNTIME_GATEWAY_PORT,
-            "env": {**os.environ, "AVATARLOOM_RUNTIME_GATEWAY_PORT": str(RUNTIME_GATEWAY_PORT)},
+            "env": {
+                **os.environ,
+                "AVATARLOOM_RUNTIME_GATEWAY_PORT": str(RUNTIME_GATEWAY_PORT),
+                "AVATARLOOM_AUTH_DISABLED": "1",
+            },
             "cwd": PROJECT_ROOT,
         },
         {
@@ -144,6 +153,9 @@ def _normalize_rc(rc: int | None) -> int:
 
 
 def main() -> int:
+    # Windows/GBK 控制台下 print("✓") 会抛 UnicodeEncodeError，强制 UTF-8
+    with contextlib.suppress(Exception):
+        sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
     parser = argparse.ArgumentParser(description="AvatarLoom dev launcher")
     parser.add_argument("--check", action="store_true", help="只检查端口")
     args = parser.parse_args()

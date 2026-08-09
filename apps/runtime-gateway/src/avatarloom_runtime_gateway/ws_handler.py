@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import re
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -71,6 +72,14 @@ _GPU_DEPLOYMENTS = frozenset({"cuda-local", "nvidia-cuda"})
 
 # WS 上行消息大小上限——单条 JSON/二进制超此即拒绝，防内存 DoS
 _MAX_MSG_SIZE = 2 * 1024 * 1024  # 2MB
+
+# GPU 会话结束后是否自重启（rc=42）：默认开启，依赖 supervisor/dev.py 拉起；
+# 无 supervisor 的部署可设 AVATARLOOM_SELF_RESTART=0 关闭（需手动重启清 CUDA 状态）。
+_SELF_RESTART = os.environ.get("AVATARLOOM_SELF_RESTART", "1").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+)
 
 # 进程级活跃会话锁（HIGH-4）：GPU profile 每套模型占 ~10-16G，多标签/重复连接
 # 并存会直接 OOM。session.mode=single 只在 profile 里声明，这里强制执行——
@@ -143,6 +152,8 @@ class WebSocketSession:
         self._downlink_task: asyncio.Task[None] | None = None
         self._closed = False
         self._warned_unknown_tag = False
+        # 下行最近一次成功发送时间——90s idle 超时按下行活动顺延（AL-P2-007 修正）
+        self._last_downlink_at = time.monotonic()
         # 是否装配了 GPU block——决定会话结束后是否需要自重启（rc=42）。
         # mock profile 全是 deployment="mock"，不触发；GPU profile 才触发。
         self._had_gpu_block: bool = False
@@ -165,6 +176,9 @@ class WebSocketSession:
                 try:
                     msg = await asyncio.wait_for(self.ws.receive(), timeout=90)
                 except TimeoutError:
+                    # 下行仍在持续（客户端在听/看但没上行）时不算 idle
+                    if time.monotonic() - self._last_downlink_at < 90:
+                        continue
                     logger.info("ws idle timeout (90s)——主动断开半开连接")
                     break
                 if msg["type"] == "websocket.disconnect":
@@ -179,10 +193,13 @@ class WebSocketSession:
             await self.cleanup()
 
     async def _authenticate(self) -> bool:
-        """完成浏览器首条 auth 消息鉴权；空 token 或握手 Bearer 直接放行。"""
+        """完成浏览器首条 auth 消息鉴权；仅显式开发模式放行空 token。"""
         expected = self.settings.api_token.strip()
         if not expected:
-            return True
+            if self.settings.auth_disabled:
+                return True
+            await self.ws.close(code=1008)
+            return False
         # 握手 Bearer 必须真验值（纵深防御：即使入口未走 verify_ws_access 也成立）
         if header_token_authenticated(self.ws, self.settings):
             return True
@@ -294,9 +311,19 @@ class WebSocketSession:
         if not self.session or not self.orchestrator:
             return
         pcm_b64 = payload.get("pcm_b64", "")
-        samples = payload.get("samples", 0)
-        if pcm_b64:
-            await self.orchestrator.ingest_audio(self.session, pcm_b64, samples)
+        if not pcm_b64:
+            return
+        # samples 由服务端按解码长度计算，不信任客户端上报（防指标/时长误导）
+        try:
+            pcm = base64.b64decode(pcm_b64, validate=True)
+        except Exception:
+            await self._send_error("audio.chunk: invalid base64 pcm_b64")
+            return
+        if len(pcm) < 2 or len(pcm) % 2 != 0:
+            await self._send_error("audio.chunk: PCM must be even-length int16")
+            return
+        samples = len(pcm) // 2
+        await self.orchestrator.ingest_audio(self.session, pcm_b64, samples)
 
     async def _handle_interrupt(self) -> None:
         """显式打断。"""
@@ -582,6 +609,7 @@ class WebSocketSession:
 
                     await self.ws.send_text(json.dumps(ctrl, ensure_ascii=False))
                     sent = True
+                    self._last_downlink_at = time.monotonic()
                 except asyncio.QueueEmpty:
                     pass
                 # 音频队列
@@ -592,6 +620,7 @@ class WebSocketSession:
                             break
                         await self.ws.send_bytes(audio)
                         sent = True
+                        self._last_downlink_at = time.monotonic()
                     except asyncio.QueueEmpty:
                         pass
                 # 视频队列
@@ -602,6 +631,7 @@ class WebSocketSession:
                             break
                         await self.ws.send_bytes(video)
                         sent = True
+                        self._last_downlink_at = time.monotonic()
                     except asyncio.QueueEmpty:
                         pass
                 if not sent:
@@ -612,12 +642,22 @@ class WebSocketSession:
             logger.exception("downlink send error")
 
     async def _enqueue_json(self, data: dict[str, Any]) -> None:
-        """入队 JSON 控制消息——不丢（AL-P2-006）。
+        """入队 JSON 控制消息（AL-P2-006）。
 
         控制事件量小（状态/错误/边界），512 深度几乎不会满；
-        真满说明客户端已不消费——await 反压比静默丢 error/response.done 安全。
+        真满说明客户端已不消费——短等待（2s）后丢弃并告警，
+        避免慢客户端反压整个 Orchestrator 事件出口（含 recorder/TTS 链路）。
         """
-        await self._control_queue.put(data)
+        try:
+            self._control_queue.put_nowait(data)
+        except asyncio.QueueFull:
+            try:
+                await asyncio.wait_for(self._control_queue.put(data), timeout=2.0)
+            except TimeoutError:
+                logger.warning(
+                    "control queue full for 2s——dropping JSON message %s",
+                    data.get("type"),
+                )
 
     async def _send_error(self, message: str) -> None:
         await self._enqueue_json({"type": "error", "payload": {"message": message}})
@@ -673,7 +713,7 @@ class WebSocketSession:
         self.recorder = None
         self._had_gpu_block = False
 
-        if had_gpu_session and not os.environ.get("AVATARLOOM_TESTING"):
+        if had_gpu_session and not os.environ.get("AVATARLOOM_TESTING") and _SELF_RESTART:
             # 真实会话结束 → 本进程自重启（退出码 42，supervisor 拉起）。
             # 根因：gateway 进程一旦初始化 CUDA context（加载过任何 GPU 模型），
             # 之后 fork 任何子进程（MuseTalk worker）都会 SIGSEGV——NV 驱动在
@@ -682,3 +722,8 @@ class WebSocketSession:
             # 模型与显存已在上面 shutdown 释放；os._exit 跳过 uvicorn 收尾直接退出。
             logger.info("ws session cleaned, self-restarting (rc=42) for clean CUDA state")
             os._exit(42)
+        if had_gpu_session and not os.environ.get("AVATARLOOM_TESTING"):
+            logger.warning(
+                "GPU session cleaned but AVATARLOOM_SELF_RESTART=0——"
+                "CUDA state may be stale; restart gateway manually before next GPU session"
+            )

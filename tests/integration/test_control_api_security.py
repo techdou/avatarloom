@@ -36,6 +36,8 @@ async def _client(tmp_path: Path, **overrides) -> AsyncIterator[tuple[AsyncClien
         "workspace_root": str(tmp_path),
         "artifacts_root": str(tmp_path / "artifacts"),
         "runs_root": str(tmp_path / "runs"),
+        # 非鉴权测试默认走显式开发模式；鉴权契约由 TestTokenAuth 单独覆盖。
+        "auth_disabled": True,
     }
     base.update(overrides)
     app = create_app(Settings(**base))
@@ -83,15 +85,20 @@ class TestTokenAuth:
             ).status_code == 200
 
     async def test_empty_token_is_dev_mode(self, tmp_path: Path) -> None:
-        """空 token（默认）→ 鉴权关闭。"""
-        async with _client(tmp_path) as (c, _):
+        """空 token + 显式 auth_disabled=True → 开发模式放行。"""
+        async with _client(tmp_path, auth_disabled=True) as (c, _):
             assert (await c.get("/api/health")).status_code == 200
 
     async def test_explicit_empty_overrides_env(self, tmp_path: Path, monkeypatch) -> None:
-        """显式 Settings(api_token="") 优先于 env——Settings 是权威来源。"""
+        """显式 Settings(api_token="", auth_disabled=True) 优先于 env——Settings 是权威来源。"""
         monkeypatch.setenv("AVATARLOOM_API_TOKEN", "env-token")
-        async with _client(tmp_path, api_token="") as (c, _):
+        async with _client(tmp_path, api_token="", auth_disabled=True) as (c, _):
             assert (await c.get("/api/health")).status_code == 200
+
+    async def test_empty_token_fail_closed_by_default(self, tmp_path: Path) -> None:
+        """空 token 且未显式关闭鉴权（默认）→ 401（fail-closed，生产漏配不再裸奔）。"""
+        async with _client(tmp_path, auth_disabled=False) as (c, _):
+            assert (await c.get("/api/health")).status_code == 401
 
 
 # ---------------------------------------------------------------------------

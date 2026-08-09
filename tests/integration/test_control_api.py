@@ -22,6 +22,7 @@ async def client(tmp_path) -> AsyncIterator[AsyncClient]:
         workspace_root=str(tmp_path),
         artifacts_root=str(tmp_path / "artifacts"),
         runs_root=str(tmp_path / "runs"),
+        auth_disabled=True,
     )
     app = create_app(settings)
     # lifespan 会建表

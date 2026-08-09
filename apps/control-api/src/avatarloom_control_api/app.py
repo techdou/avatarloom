@@ -44,10 +44,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # 启动：建表（开发用；生产用 alembic upgrade head）
         await init_db(engine)
-        if not settings.api_token:
+        if not settings.api_token and not settings.auth_disabled:
             logger.warning(
-                "AVATARLOOM_API_TOKEN 未设置——鉴权关闭，所有端点无密码可访问。"
-                "生产环境务必设置 token。"
+                "AVATARLOOM_API_TOKEN 未设置且未显式 AVATARLOOM_AUTH_DISABLED=1——"
+                "所有端点返回 401（fail-closed）。生产环境必须设置 token。"
             )
         app.state.engine = engine
         app.state.session_factory = session_factory
@@ -63,8 +63,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         description="Composable Digital Human Runtime — Control Plane",
         version="0.1.0",
         lifespan=lifespan,
-        # 全局鉴权：token 未配置时 verify_token 直接放行（开发模式）；
-        # 配置后所有 router 自动受保护。
+        # 全局鉴权：token 未配置且未显式关闭鉴权时 fail-closed（401）；
+        # 显式开发模式或配置 token 后，所有 router 自动受保护。
         dependencies=[Depends(verify_token)],
     )
 

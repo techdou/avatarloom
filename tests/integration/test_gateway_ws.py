@@ -39,6 +39,7 @@ def gateway_server(tmp_path) -> Iterator[tuple[str, int]]:
         artifacts_root=str(tmp_path / "artifacts"),
         runs_root=str(tmp_path / "runs"),
         default_profile="mock",
+        auth_disabled=True,
     )
     app = create_app(settings)
     config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
@@ -80,6 +81,7 @@ def gateway_server_vision(tmp_path) -> Iterator[tuple[str, int]]:
         artifacts_root=str(tmp_path / "artifacts"),
         runs_root=str(tmp_path / "runs"),
         default_profile="mock",
+        auth_disabled=True,
     )
     app = create_app(settings)
     config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
@@ -398,6 +400,7 @@ def gateway_server_persona(tmp_path) -> Iterator[tuple[str, int]]:
         artifacts_root=str(tmp_path / "artifacts"),
         runs_root=str(tmp_path / "runs"),
         default_profile="mock",
+        auth_disabled=True,
     )
     app = create_app(settings)
     config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")

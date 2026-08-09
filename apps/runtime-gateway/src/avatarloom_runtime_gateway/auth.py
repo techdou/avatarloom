@@ -35,16 +35,22 @@ def token_matches(presented: str, expected: str) -> bool:
 
 
 def header_token_authenticated(ws: WebSocket, settings: Settings) -> bool:
-    """握手 Authorization 是否已经完成鉴权。"""
+    """握手 Authorization 是否已经完成鉴权。
+
+    token 未配置时仅显式开发模式（auth_disabled=True）视为已鉴权。
+    """
     expected = settings.api_token.strip()
-    return not expected or token_matches(presented_header_token(ws), expected)
+    if not expected:
+        return settings.auth_disabled
+    return token_matches(presented_header_token(ws), expected)
 
 
 async def verify_ws_access(ws: WebSocket, settings: Settings) -> bool:
     """校验握手 Origin 和可选的服务端 Bearer token。
 
     浏览器无法设置 Authorization，因此 token 配置时由 ``WebSocketSession``
-    在握手后读取一次 auth 消息完成浏览器鉴权。未配置 token 时保持 Mock 开发模式。
+    在握手后读取一次 auth 消息完成浏览器鉴权。token 未配置且未显式关闭鉴权
+    （auth_disabled=False）时 fail-closed：accept 前拒绝（HTTP 403）。
     """
     origin = ws.headers.get("origin")
     if not origin_allowed(origin, settings):
@@ -53,6 +59,10 @@ async def verify_ws_access(ws: WebSocket, settings: Settings) -> bool:
         return False
 
     expected = settings.api_token.strip()
+    if not expected and not settings.auth_disabled:
+        logger.warning("ws rejected: no api_token configured and auth not disabled (origin=%r)", origin)
+        await ws.close(code=status.WS_1008_POLICY_VIOLATION)
+        return False
     if expected:
         header_token = presented_header_token(ws)
         if header_token and not token_matches(header_token, expected):

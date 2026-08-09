@@ -41,6 +41,8 @@ def _gateway(tmp_path: Path, **overrides) -> Iterator[tuple[str, int]]:
         "artifacts_root": str(tmp_path / "artifacts"),
         "runs_root": str(tmp_path / "runs"),
         "default_profile": "mock",
+        # 非鉴权测试默认走显式开发模式；鉴权契约由 TestWsTokenAuth 单独覆盖。
+        "auth_disabled": True,
     }
     base.update(overrides)
     app = create_app(Settings(**base))
@@ -96,11 +98,16 @@ async def _assert_rejected_403(connect_coro) -> None:
 
 class TestWsTokenAuth:
     async def test_empty_token_dev_mode_allows(self, tmp_path: Path) -> None:
-        """空 token（默认）= 开发模式：无凭证也能连。"""
-        with _gateway(tmp_path) as (host, port):
+        """空 token + 显式 auth_disabled=True = 开发模式：无凭证也能连。"""
+        with _gateway(tmp_path, auth_disabled=True) as (host, port):
             async with websockets.connect(_url(host, port)) as ws:
                 await ws.send(json.dumps({"type": "ping"}))
                 assert await _recv_until(ws, "pong") is not None
+
+    async def test_empty_token_fail_closed_by_default(self, tmp_path: Path) -> None:
+        """空 token 且未显式关闭鉴权（默认）→ 握手被拒（HTTP 403，fail-closed）。"""
+        with _gateway(tmp_path, auth_disabled=False) as (host, port):
+            await _assert_rejected_403(websockets.connect(_url(host, port)))
 
     async def test_missing_token_rejected_after_handshake(self, tmp_path: Path) -> None:
         """浏览器连接先握手，未发送 auth 消息时由应用以 1008 关闭。"""

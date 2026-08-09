@@ -61,10 +61,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.settings = settings
-        if not settings.api_token:
+        if not settings.api_token and not settings.auth_disabled:
             logger.warning(
-                "AVATARLOOM_API_TOKEN 未设置——WS 鉴权关闭，任何人可发起 GPU 会话。"
-                "生产环境务必设置 token。"
+                "AVATARLOOM_API_TOKEN 未设置且未显式 AVATARLOOM_AUTH_DISABLED=1——"
+                "WS 握手 fail-closed（拒绝连接）。生产环境必须设置 token。"
             )
         logger.info("Runtime Gateway started on %s:%d", settings.host, settings.port)
         yield
@@ -110,7 +110,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.websocket("/ws/realtime")
     async def ws_realtime(ws: WebSocket) -> None:
-        """主 WS 通道。先过 Origin + token 校验（空 token 即开发模式直接放行）。"""
+        """主 WS 通道。先过 Origin + token 校验（仅显式开发模式放行空 token）。"""
         if not await verify_ws_access(ws, settings):
             return  # 已拒绝：accept 前 close，握手失败（HTTP 403），零资源分配
         await ws.accept()

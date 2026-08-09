@@ -1,7 +1,8 @@
 """轻量 Bearer token 鉴权依赖。
 
-行为：
-- token 未配置（空）→ 鉴权关闭（开发模式），直接放行。
+行为（fail-closed）：
+- token 未配置（空）且未显式 ``AVATARLOOM_AUTH_DISABLED=1`` → 一律 401（生产漏配不再裸奔）。
+- token 未配置但显式 ``auth_disabled=True`` → 开发模式放行。
 - 已配置 → 请求必须带 ``Authorization: Bearer <token>``，且与配置一致；否则 401。
 
 token 来源（统一入口，优先级从高到低）：
@@ -42,12 +43,24 @@ def _expected_token(request: Request) -> str:
 
     优先取 app.state.settings.api_token（Settings 为权威来源——含 env/.env/显式注入）；
     app.state 没有 settings 时回退环境变量，保持旧的纯 env 行为。
-    返回空串 → 鉴权关闭（开发模式）。
+    返回空串 → 是否放行由 auth_disabled 显式开关决定。
     """
     settings: Settings | None = getattr(request.app.state, "settings", None)
     if settings is not None:
         return (settings.api_token or "").strip()
     return os.environ.get(_EXPECTED_TOKEN_ENV, "").strip()
+
+
+def _auth_disabled(request: Request) -> bool:
+    """读取显式开发模式开关（与 token 来源一致：Settings 优先，env 兜底）。"""
+    settings: Settings | None = getattr(request.app.state, "settings", None)
+    if settings is not None:
+        return bool(settings.auth_disabled)
+    return os.environ.get("AVATARLOOM_AUTH_DISABLED", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
 
 
 async def verify_token(
@@ -56,14 +69,21 @@ async def verify_token(
 ) -> bool:
     """全局鉴权依赖。
 
-    - 配置未设 token → 视为开发模式，直接放行。
+    - 配置未设 token 且未显式关闭鉴权 → 401（fail-closed）。
+    - 配置未设 token 且显式 auth_disabled=True → 开发模式放行。
     - 配置设了 token 但请求未带 / scheme 错 / token 不匹配 → 401。
     - token 匹配 → 返回 True。
     """
     expected = _expected_token(request)
     if not expected:
-        # 鉴权关闭：token 未配置。
-        return True
+        # fail-closed：仅显式开发模式放行；否则必须抛 401（依赖返回值不生效）。
+        if _auth_disabled(request):
+            return True
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication is not configured. Set AVATARLOOM_API_TOKEN or AVATARLOOM_AUTH_DISABLED=1.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     if credentials is None or credentials.scheme.lower() != "bearer":
         raise HTTPException(
