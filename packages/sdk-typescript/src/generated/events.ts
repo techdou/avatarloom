@@ -53,22 +53,22 @@ export interface EventEnvelope {
 export type Event = EventEnvelope;
 
 export interface ArtifactPayload {
-  artifactId: string;
-  runId: string;
+  artifact_id: string;
+  run_id: string;
   kind: "audio" | "video" | "image" | "text" | "json" | "config";
   path: string;
-  mimeType?: string | null;
-  sizeBytes?: number | null;
+  mime_type?: string | null;
+  size_bytes?: number | null;
   metadata?: Record<string, unknown>;
   [key: string]: unknown;
 }
 
 export interface AudioAppendedPayload {
-  pcmB64: string;
-  sampleRate?: number;
+  pcm_b64: string;
+  sample_rate?: number;
   channels?: number;
   samples: number;
-  timestampMs?: number;
+  timestamp_ms?: number;
   [key: string]: unknown;
 }
 
@@ -78,20 +78,20 @@ export interface AudioInterruptedPayload {
 }
 
 export interface AvatarDegradedPayload {
-  fromBlock: string;
-  toBlock: string;
+  from_block: string;
+  to_block: string;
   reason: string;
   [key: string]: unknown;
 }
 
 export interface AvatarFramePayload {
-  frameB64: string;
+  frame_b64: string;
   width?: number;
   height?: number;
   format?: "jpeg" | "png";
-  frameIndex: number;
-  audioTimestampMs?: number | null;
-  isSpeech?: boolean;
+  frame_index: number;
+  audio_timestamp_ms?: number | null;
+  is_speech?: boolean;
   [key: string]: unknown;
 }
 
@@ -101,110 +101,110 @@ export interface AvatarResetPayload {
 }
 
 export interface AvatarVideoReadyPayload {
-  videoPath: string;
+  video_path: string;
   frames?: number;
-  audioS?: number;
-  inferS?: number;
-  fpsActual?: number;
+  audio_s?: number;
+  infer_s?: number;
+  fps_actual?: number;
   fps?: number;
   [key: string]: unknown;
 }
 
 export interface BlockErrorPayload {
-  blockId: string;
+  block_id: string;
   code: string;
   message: string;
   degraded?: boolean;
-  fallbackBlockId?: string | null;
+  fallback_block_id?: string | null;
   [key: string]: unknown;
 }
 
 export interface BlockHealthPayload {
-  blockId: string;
+  block_id: string;
   status: "healthy" | "degraded" | "unhealthy";
-  latencyMs?: number | null;
+  latency_ms?: number | null;
   details?: Record<string, unknown>;
   [key: string]: unknown;
 }
 
 export interface BlockReadyPayload {
-  blockId: string;
-  warmupMs: number;
+  block_id: string;
+  warmup_ms: number;
   [key: string]: unknown;
 }
 
 export interface BlockSetupPayload {
-  blockId: string;
-  blockType: string;
+  block_id: string;
+  block_type: string;
   [key: string]: unknown;
 }
 
 export interface LlmRequestPayload {
   text: string;
   language?: string;
-  transcriptEventId?: string | null;
-  visionContext?: string | null;
+  transcript_event_id?: string | null;
+  vision_context?: string | null;
   [key: string]: unknown;
 }
 
 export interface LlmTextDeltaPayload {
   text: string;
-  sentenceIndex?: number;
-  isSentenceEnd?: boolean;
+  sentence_index?: number;
+  is_sentence_end?: boolean;
   [key: string]: unknown;
 }
 
 export interface LlmTextDonePayload {
-  fullText: string;
-  finishReason?: "stop" | "length" | "cancelled" | "error";
-  firstTokenMs?: number | null;
-  totalTokens?: number | null;
+  full_text: string;
+  finish_reason?: "stop" | "length" | "cancelled" | "error";
+  first_token_ms?: number | null;
+  total_tokens?: number | null;
   [key: string]: unknown;
 }
 
 export interface PersonaChangedPayload {
-  personaId: string;
-  llmInstructionsChanged?: boolean;
-  ttsVoiceChanged?: boolean;
-  avatarAssetChanged?: boolean;
-  memoryNamespace?: string | null;
+  persona_id: string;
+  llm_instructions_changed?: boolean;
+  tts_voice_changed?: boolean;
+  avatar_asset_changed?: boolean;
+  memory_namespace?: string | null;
   [key: string]: unknown;
 }
 
 export interface ResponseDonePayload {
-  runId: string;
-  fullText: string;
-  durationMs: number;
+  run_id: string;
+  full_text: string;
+  duration_ms: number;
   interrupted?: boolean;
   [key: string]: unknown;
 }
 
 export interface ResponseInterruptedPayload {
-  runId: string;
+  run_id: string;
   reason?: "user_speech" | "cancel" | "error" | "session_closed";
-  partialText?: string;
+  partial_text?: string;
   [key: string]: unknown;
 }
 
 export interface ResponseStartedPayload {
-  runId: string;
+  run_id: string;
   transcript: string;
   [key: string]: unknown;
 }
 
 export interface RunCompletedPayload {
-  runId: string;
+  run_id: string;
   status?: "completed" | "interrupted" | "error" | "cancelled";
   metrics: unknown;
   [key: string]: unknown;
 }
 
 export interface RunMetricsPayload {
-  runId: string;
-  firstTextMs?: number | null;
-  firstAudioMs?: number | null;
-  firstFrameMs?: number | null;
-  totalDurationMs?: number | null;
+  run_id: string;
+  first_text_ms?: number | null;
+  first_audio_ms?: number | null;
+  first_frame_ms?: number | null;
+  total_duration_ms?: number | null;
   interruptions?: number;
   degradations?: number;
   errors?: number;
@@ -212,16 +212,16 @@ export interface RunMetricsPayload {
 }
 
 export interface RunStartedPayload {
-  runId: string;
-  sessionId: string;
-  profileId: string;
-  personaId?: string | null;
-  runtimeConfig?: Record<string, unknown>;
+  run_id: string;
+  session_id: string;
+  profile_id: string;
+  persona_id?: string | null;
+  runtime_config?: Record<string, unknown>;
   [key: string]: unknown;
 }
 
 export interface SessionClosedPayload {
-  sessionId: string;
+  session_id: string;
   reason?: "normal" | "error" | "interrupted" | "timeout";
   [key: string]: unknown;
 }
@@ -229,23 +229,23 @@ export interface SessionClosedPayload {
 export interface SessionErrorPayload {
   code: string;
   message: string;
-  blockId?: string | null;
+  block_id?: string | null;
   recoverable?: boolean;
   [key: string]: unknown;
 }
 
 export interface SessionStartedPayload {
-  sessionId: string;
-  profileId: string;
-  personaId?: string | null;
-  workspaceRoot?: string;
+  session_id: string;
+  profile_id: string;
+  persona_id?: string | null;
+  workspace_root?: string;
   [key: string]: unknown;
 }
 
 export interface SessionStateChangedPayload {
-  fromState: string;
-  toState: string;
-  trigger: string;
+  from: string;
+  to: string;
+  trigger?: string | null;
   [key: string]: unknown;
 }
 
@@ -255,7 +255,7 @@ export interface SpeechDetectedPayload {
 }
 
 export interface SpeechEndedPayload {
-  durationMs?: number;
+  duration_ms?: number;
   [key: string]: unknown;
 }
 
@@ -269,20 +269,20 @@ export interface TranscriptCompletedPayload {
 
 export interface TranscriptPartialPayload {
   text: string;
-  isFinal?: boolean;
+  is_final?: boolean;
   [key: string]: unknown;
 }
 
 export interface TtsAudioCompletedPayload {
-  totalSamples: number;
-  durationMs?: number;
-  firstAudioMs?: number | null;
+  total_samples: number;
+  duration_ms?: number;
+  first_audio_ms?: number | null;
   [key: string]: unknown;
 }
 
 export interface TtsAudioDeltaPayload {
-  pcmB64: string;
-  sampleRate?: number;
+  pcm_b64: string;
+  sample_rate?: number;
   samples: number;
   text?: string | null;
   [key: string]: unknown;
@@ -290,7 +290,7 @@ export interface TtsAudioDeltaPayload {
 
 export interface VisionRequestPayload {
   keyword: string;
-  requestId: string;
+  request_id: string;
   [key: string]: unknown;
 }
 

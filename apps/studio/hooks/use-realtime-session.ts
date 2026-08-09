@@ -397,6 +397,11 @@ export function useRealtimeSession({
     setError(null);
     reconnectRef.current.intentional = false;
 
+    // 重连前先清理旧资源——自动重连路径（onclose → connect）不经 disconnect，
+    // 不清理会泄漏 AudioContext（Chrome ~6 个上限，泄漏几次就无声）
+    playerRef.current?.close();
+    avmuxRef.current?.interrupt();
+
     // 同步参数 URL 可调（对齐 VoxEMW ?adelay=/?vlag= 现场调优做法）：
     // /playground?adelay=450&vlag=-3 ——AutoDL 调音画同步不改代码直接试值
     const syncParams = new URLSearchParams(window.location.search);
@@ -425,6 +430,7 @@ export function useRealtimeSession({
     wsRef.current = ws;
 
     ws.onopen = () => {
+      if (wsRef.current !== ws) return; // stale socket——旧连接迟到事件，丢弃
       setConn("connected");
       reconnectRef.current.attempts = 0;
       if (WS_AUTH_TOKEN) {
@@ -448,6 +454,7 @@ export function useRealtimeSession({
       }, 20000);
     };
     ws.onmessage = (ev) => {
+      if (wsRef.current !== ws) return; // stale socket 防护
       if (typeof ev.data === "string") {
         try {
           handleMessage(JSON.parse(ev.data));
@@ -459,10 +466,12 @@ export function useRealtimeSession({
       }
     };
     ws.onerror = () => {
+      if (wsRef.current !== ws) return; // stale socket 防护
       setConn("error");
       setError("WebSocket 连接失败——确认 Runtime Gateway 已启动（端口 8101）");
     };
     ws.onclose = () => {
+      if (wsRef.current !== ws) return; // stale socket——旧连接的 close 不污染新会话
       window.clearInterval(pingTimerRef.current);
       setConn("disconnected");
       dispatch({ kind: "disconnected" });
@@ -529,13 +538,22 @@ export function useRealtimeSession({
         onError: (e) => setError(`麦克风错误：${e.message}`),
       });
       void playerRef.current?.resume();
-      await recorderRef.current.start();
-      setMicActive(true);
+      try {
+        await recorderRef.current.start();
+        setMicActive(true);
+      } catch {
+        // 授权被拒/设备不可用——recorder.start 已 rethrow，
+        // 不 setMicActive(true)，清掉实例引用避免 stop 空转
+        recorderRef.current = null;
+      }
     }
   }, [micActive, conn]);
 
   const interrupt = useCallback(() => {
-    wsRef.current?.send(JSON.stringify({ type: "audio.interrupt" }));
+    const ws = wsRef.current;
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "audio.interrupt" }));
+    }
     playerRef.current?.interrupt();
     avmuxRef.current?.interrupt();
   }, []);

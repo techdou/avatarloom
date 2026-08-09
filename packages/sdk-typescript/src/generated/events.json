@@ -63,24 +63,32 @@
   },
   "session.state_changed": {
     "additionalProperties": true,
+    "description": "状态变更 payload。实际 WS 发送的字段是 from/to（见 envelope.make_state_event），\n不是 from_state/to_state——保持与线上 JSON 一致。trigger 未实际发送，保留可选。",
     "properties": {
-      "from_state": {
-        "title": "From State",
+      "from": {
+        "title": "From",
         "type": "string"
       },
-      "to_state": {
-        "title": "To State",
+      "to": {
+        "title": "To",
         "type": "string"
       },
       "trigger": {
-        "title": "Trigger",
-        "type": "string"
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Trigger"
       }
     },
     "required": [
-      "from_state",
-      "to_state",
-      "trigger"
+      "from",
+      "to"
     ],
     "title": "SessionStateChangedPayload",
     "type": "object"

@@ -38,9 +38,12 @@ class SessionClosedPayload(_BasePayload):
 
 
 class SessionStateChangedPayload(_BasePayload):
-    from_state: str
-    to_state: str
-    trigger: str
+    """状态变更 payload。实际 WS 发送的字段是 from/to（见 envelope.make_state_event），
+    不是 from_state/to_state——保持与线上 JSON 一致。trigger 未实际发送，保留可选。"""
+
+    from_: str = Field(alias="from")
+    to: str
+    trigger: str | None = None
 
 
 class SessionErrorPayload(_BasePayload):

@@ -27,6 +27,10 @@ export class MicrophoneRecorder {
   private onChunk: (pcm: Int16Array) => void;
   private onError?: (e: Error) => void;
   private _active = false;
+  // start/stop 竞态标记：stop() 置位后，pending 的 getUserMedia 回调检查此标记，
+  // 若已取消则停 track 直接退出——否则 stream/node/ctx 全部赋值但实例已无引用，
+  // 麦克风硬件常开、指示灯常亮（隐私敏感泄漏）
+  private _cancelled = false;
 
   constructor(opts: RecorderOptions) {
     this.targetRate = opts.targetSampleRate ?? 16000;
@@ -40,8 +44,10 @@ export class MicrophoneRecorder {
 
   async start() {
     if (this._active) return;
+    this._cancelled = false;
+    let stream: MediaStream | null = null;
     try {
-      this.stream = await navigator.mediaDevices.getUserMedia({
+      stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
           echoCancellation: true,
@@ -49,6 +55,12 @@ export class MicrophoneRecorder {
           autoGainControl: true,
         },
       });
+      // 竞态检查：getUserMedia 授权弹窗可能挂起数秒，期间 hook 可能已 disconnect→stop
+      if (this._cancelled) {
+        stream.getTracks().forEach((t) => t.stop());
+        return;
+      }
+      this.stream = stream;
       // 用原始采样率创建 context（避免双重重采样）
       const track = this.stream.getAudioTracks()[0];
       const settings = track.getSettings();
@@ -56,6 +68,12 @@ export class MicrophoneRecorder {
 
       this.ctx = new AudioContext({ sampleRate: sourceRate });
       await this.ctx.audioWorklet.addModule("/worklets/recorder-worklet.js");
+
+      // 竞态检查：addModule 期间也可能被 stop
+      if (this._cancelled) {
+        this.stop();
+        return;
+      }
 
       this.source = this.ctx.createMediaStreamSource(this.stream);
       this.node = new AudioWorkletNode(this.ctx, "avatarloom-recorder");
@@ -102,6 +120,9 @@ export class MicrophoneRecorder {
     } catch (e) {
       this.onError?.(e instanceof Error ? e : new Error(String(e)));
       this.stop();
+      // rethrow——hook 侧据此决定是否 setMicActive(true)。
+      // 此前 catch 吞错不 rethrow，授权被拒后 UI 仍显示"录音中"，说了白说。
+      throw e instanceof Error ? e : new Error(String(e));
     }
   }
 
@@ -123,6 +144,7 @@ export class MicrophoneRecorder {
   }
 
   stop() {
+    this._cancelled = true;
     this._active = false;
     if (this.node) {
       this.node.port.close();

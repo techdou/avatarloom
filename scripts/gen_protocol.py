@@ -111,12 +111,6 @@ EVENT_PAYLOAD_MAP: dict[str, type[BaseModel]] = {
 }
 
 
-def to_camel_case(snake: str) -> str:
-    """snake_case -> camelCase。"""
-    parts = snake.split("_")
-    return parts[0] + "".join(p.title() for p in parts[1:])
-
-
 def pydantic_to_ts(model: type[BaseModel]) -> str:
     """把单个 Pydantic 模型转成 TS interface（简化版，手写规则）。"""
     from pydantic.fields import FieldInfo
@@ -129,7 +123,10 @@ def pydantic_to_ts(model: type[BaseModel]) -> str:
         required = field_info.is_required()
         ts_type = _py_type_to_ts(ftype)
         opt = "" if required else "?"
-        lines.append(f"  {to_camel_case(fname)}{opt}: {ts_type};")
+        # 字段名：优先用 pydantic alias（如 from_ 字段 alias="from" → TS 用 from），
+        # 否则用原始 snake_case 字段名——与线上 WS JSON 完全一致。
+        json_name = field_info.alias or fname
+        lines.append(f"  {json_name}{opt}: {ts_type};")
     lines.append("  [key: string]: unknown;")  # extra=allow
     lines.append("}")
     return "\n".join(lines)

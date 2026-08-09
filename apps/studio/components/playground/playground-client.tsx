@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import {
   useRealtimeSession,
 } from "@/hooks/use-realtime-session";
@@ -63,12 +63,22 @@ export function PlaygroundClient() {
   }, []);
 
   const session = useRealtimeSession({ profileId, personaId });
+  // restartSession 的定时器句柄——卸载时清理，避免组件销毁后 connect() 还在 fire
+  const restartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const restartSession = useCallback(() => {
     // 已连接时切换 profile/persona：重启会话让新配置生效
     session.disconnect();
-    setTimeout(() => session.connect(), 100);
+    if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+    restartTimerRef.current = setTimeout(() => session.connect(), 100);
   }, [session]);
+
+  // 卸载清理：清掉 pending 的 restart 定时器
+  useEffect(() => {
+    return () => {
+      if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+    };
+  }, []);
 
   const handleProfileChange = useCallback(
     (id: string) => {
