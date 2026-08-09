@@ -205,12 +205,28 @@ def main() -> int:
             _shutdown_all(procs)
             return _normalize_rc(rc) or 1
 
-    # 监控：任何一个服务退出 → 停掉其余服务，透传其退出码
+    # 监控：rc=42 是 gateway 的自重启信号（GPU 会话后清除 CUDA fork 状态），
+    # dev 场景下重启该服务而非灭全栈；其他退出码 → 灭全栈。
+    _RESTART_RC = 42
     while True:
-        for svc, p in zip(services, procs, strict=True):
+        for idx, (svc, p) in enumerate(zip(services, procs, strict=True)):
             rc = p.poll()
             if rc is not None:
-                print(f"\n{svc['name']} 已退出 (code={rc})，正在停止其余服务...", file=sys.stderr)
+                if rc == _RESTART_RC:
+                    print(
+                        f"\n{svc['name']} 自重启 (rc={rc})，重新拉起...",
+                        file=sys.stderr,
+                    )
+                    new_p = subprocess.Popen(
+                        svc["cmd"], cwd=str(svc["cwd"]), env=svc["env"]
+                    )
+                    procs[idx] = new_p
+                    print(f"  ✓ 重新启动 {svc['name']} (pid={new_p.pid})")
+                    break  # 重启后继续监控循环，不灭全栈
+                print(
+                    f"\n{svc['name']} 已退出 (code={rc})，正在停止其余服务...",
+                    file=sys.stderr,
+                )
                 _shutdown_all([q for q in procs if q is not p])
                 return _normalize_rc(rc)
         time.sleep(0.5)

@@ -48,6 +48,7 @@ class SileroVadBlock(Block):
     _forward_has_state: bool = True  # 探测 forward 签名（见 _load_model）
     _is_speaking: bool = False
     _silence_count: int = 0
+    _device: str = "cpu"  # 模型所在设备，_infer 的输入 tensor 需对齐
 
     @classmethod
     def manifest(cls) -> BlockManifest:
@@ -82,6 +83,7 @@ class SileroVadBlock(Block):
         self._min_silence_samples = int(_SAMPLE_RATE * silence_ms / 1000)
 
         device = str(cfg.get("device", "cpu"))
+        self._device = device
         try:
             # torch.hub 加载 + JIT 编译是重阻塞（首次还含网络下载）——offload 线程
             self._model, _utils = await asyncio.to_thread(self._load_model, device)
@@ -226,12 +228,12 @@ class SileroVadBlock(Block):
         # 用 try/except TypeError 区分——JIT 版本缺参/多参都会抛 RuntimeError。
         import torch as _t
 
-        probe = _t.zeros(1, 512)
+        probe = _t.zeros(1, 512, device=device)
         try:
             with _t.no_grad():
                 model(probe, _SAMPLE_RATE)  # 2 参：新版 JIT（状态内部管理）
             self._forward_has_state = False
-        except Exception:
+        except (TypeError, RuntimeError):
             self._forward_has_state = True  # 3 参：旧版（返回 (out, h)）
         return model, utils
 
@@ -245,9 +247,11 @@ class SileroVadBlock(Block):
         """
         import torch
 
-        t = torch.from_numpy(chunk).unsqueeze(0)
+        t = torch.from_numpy(chunk).unsqueeze(0).to(self._device)
         with torch.no_grad():
             if self._forward_has_state:
+                # 旧版的 hidden state 是上一次推理的返回值，设备已对齐；
+                # 但首帧 h=None，模型内部会按 t 的设备初始化，无需手动搬。
                 out, h = self._model(t, _SAMPLE_RATE, h)
             else:
                 out = self._model(t, _SAMPLE_RATE)

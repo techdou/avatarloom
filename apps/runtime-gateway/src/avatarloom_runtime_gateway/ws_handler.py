@@ -65,6 +65,10 @@ logger = logging.getLogger(__name__)
 # （profiles/{id}.yaml、personas/{id}/），客户端可控，必须防路径穿越。
 _ID_PATTERN = re.compile(r"[a-zA-Z0-9_-]{1,64}")
 
+# GPU deployment 标识——这些 deployment 会初始化 CUDA context，会话结束后
+# 需要自重启（rc=42）清除 fork-unsafe 的 CUDA 状态。mock/cpu 不触发。
+_GPU_DEPLOYMENTS = frozenset({"cuda-local", "nvidia-cuda"})
+
 # 进程级活跃会话锁（HIGH-4）：GPU profile 每套模型占 ~10-16G，多标签/重复连接
 # 并存会直接 OOM。session.mode=single 只在 profile 里声明，这里强制执行——
 # 已有活跃 orchestrator 时拒绝新会话，前端刷新会先断开旧连接（cleanup 释放）。
@@ -136,6 +140,9 @@ class WebSocketSession:
         self._downlink_task: asyncio.Task[None] | None = None
         self._closed = False
         self._warned_unknown_tag = False
+        # 是否装配了 GPU block——决定会话结束后是否需要自重启（rc=42）。
+        # mock profile 全是 deployment="mock"，不触发；GPU profile 才触发。
+        self._had_gpu_block: bool = False
 
     async def run(self) -> None:
         """主循环：接收上行消息，处理控制 + 音频。
@@ -385,6 +392,13 @@ class WebSocketSession:
             self.recorder = recorder
             self.orchestrator = orchestrator
             self.session = session
+            # 标记是否装配了 GPU block——用于会话结束后判定是否自重启。
+            # fallback 降级后的 deployment 也算（如 flashhead→musetalk 仍 cuda-local），
+            # 但 orchestrator.blocks 存的是实例不含 deployment；这里看 config 的原始声明，
+            # 若任一 block 的 deployment 标记为 GPU，保守视为 GPU 会话。
+            self._had_gpu_block = any(
+                ref.deployment in _GPU_DEPLOYMENTS for ref in config.blocks.values()
+            )
         finally:
             async with _session_lock:
                 _orchestrator_starting = False
@@ -642,10 +656,11 @@ class WebSocketSession:
             except asyncio.CancelledError:
                 pass
 
-        had_gpu_session = self.orchestrator is not None
+        had_gpu_session = self._had_gpu_block
         self.orchestrator = None
         self.session = None
         self.recorder = None
+        self._had_gpu_block = False
 
         if had_gpu_session and not os.environ.get("AVATARLOOM_TESTING"):
             # 真实会话结束 → 本进程自重启（退出码 42，supervisor 拉起）。

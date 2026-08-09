@@ -148,7 +148,10 @@ class Mem0MemoryBlock(Block):
             await ctx.logger.awarning("memory 启用但缺 API key，降级关闭")
             return
         try:
-            self._store = MemoryStore(
+            # MemoryStore.__init__ 是同步重操作（qdrant 初始化 + bge-m3 加载，
+            # 首次还要下载 ~2GB 模型）——必须 offload 线程，否则阻塞事件循环。
+            self._store = await asyncio.to_thread(
+                MemoryStore,
                 cfg,
                 {"model": cfg.get("model"), "baseUrl": cfg.get("baseUrl")},
                 api_key,
@@ -167,6 +170,29 @@ class Mem0MemoryBlock(Block):
     @property
     def active(self) -> bool:
         return self._store is not None
+
+    async def shutdown(self) -> None:
+        """释放 qdrant client + embedder 模型。
+
+        qdrant local 模式对 storeDir 持有文件锁，不释放会导致同进程重 setup
+        （fallback 重建）撞锁。clear 引用让 GC 回收 embedder 模型。
+        """
+        store = self._store
+        self._store = None
+        if store is None:
+            return
+        # qdrant client 的 close 是同步阻塞调用——offload 线程
+        def _close() -> None:
+            try:
+                client = getattr(store._m, "vector_store", None)
+                if client is not None:
+                    close = getattr(client, "close", None)
+                    if callable(close):
+                        close()
+            except Exception:
+                logger.debug("mem0 vector_store close 失败（忽略）", exc_info=True)
+
+        await asyncio.to_thread(_close)
 
     async def process(self, ctx: BlockContext, event) -> None:
         """不订阅任何事件——recall/memorize 由 orchestrator 鸭子调用（同 vision 模式）。"""
