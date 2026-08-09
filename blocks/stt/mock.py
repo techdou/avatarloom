@@ -3,11 +3,9 @@
 收到 speech.ended 后 emit transcript.completed。
 
 策略：
-- 累积 speech 期间收到的音频（这里简化：从 speech.detected 到 speech.ended 收集"已识别文本"）
 - v0.1 Mock 不真做 ASR——从配置的回复模板池里选一句作为"识别结果"
+- random 模式轮转选择（避免连续两轮出现同一句），fixed 模式固定返回 fixed_text
 - 这样 Mock 链路能演示 STT→LLM 完整数据流
-
-如果配置 `mode: echo`，把最近一段用户输入文本原样回（用于纯文本测试模式）。
 """
 
 from __future__ import annotations
@@ -37,6 +35,8 @@ class MockSttBlock(Block):
     _utterances: list[str] = _DEFAULT_UTTERANCES
     _mode: str = "random"  # random | fixed
     _fixed_text: str = "你好"
+    # session -> 上一次选中的索引（random 轮转去重）
+    _last_pick_idx: dict[str, int] = {}
 
     @classmethod
     def manifest(cls) -> BlockManifest:
@@ -68,6 +68,7 @@ class MockSttBlock(Block):
         if custom := cfg.get("utterances"):
             self._utterances = list(custom)
         self._fixed_text = str(cfg.get("fixed_text", "你好"))
+        self._last_pick_idx = {}
         self._mark_ready()
         await ctx.logger.ainfo("stt.mock ready", mode=self._mode)
 
@@ -77,7 +78,7 @@ class MockSttBlock(Block):
             # 记录潜在用户输入的"开头"——Mock 不真识别，这里仅记状态
             return
         if event.type == SPEECH_ENDED:
-            text = self._pick_text()
+            text = self._pick_text(ctx.session_id)
             await ctx.emit(
                 Event(
                     type=TRANSCRIPT_COMPLETED,
@@ -92,10 +93,21 @@ class MockSttBlock(Block):
                 )
             )
 
-    def _pick_text(self) -> str:
+    def _pick_text(self, session_id: str) -> str:
         if self._mode == "fixed":
             return self._fixed_text
-        return random.choice(self._utterances)
+        if not self._utterances:
+            return ""
+        pool = self._utterances
+        last = self._last_pick_idx.get(session_id, -1)
+        if len(pool) > 1:
+            candidates = [i for i in range(len(pool)) if i != last]
+            idx = random.choice(candidates)
+        else:
+            idx = 0
+        self._last_pick_idx[session_id] = idx
+        return pool[idx]
 
     async def reset(self, session_id: str) -> None:
-        self._last_user_input = ""
+        # 打断时清除轮转记忆，下一轮重新从池中选
+        self._last_pick_idx.pop(session_id, None)

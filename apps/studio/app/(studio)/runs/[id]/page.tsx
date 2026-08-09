@@ -136,18 +136,6 @@ export default async function RunDetailPage({ params }: PageProps) {
                 </div>
               </div>
             )}
-            {metrics.block_versions && Object.keys(metrics.block_versions).length > 0 && (
-              <div className="mt-4 pt-3 border-t border-border dark:border-border">
-                <div className="text-xs text-fg-muted mb-2 dark:text-fg-muted">模块版本</div>
-                <div className="flex flex-wrap gap-1.5">
-                  {Object.entries(metrics.block_versions).map(([name, ver]) => (
-                    <span key={name} className="badge font-mono text-micro">
-                      {name}@{String(ver)}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
           </section>
 
           {/* 产物 */}

@@ -260,6 +260,13 @@ class SessionManager:
     def active_count(self) -> int:
         return sum(1 for s in self._sessions.values() if not s.closed)
 
+    def first_active_persona_id(self) -> str | None:
+        """返回第一个活跃会话的 persona_id（管理端点取默认记忆命名空间用）。"""
+        for s in self._sessions.values():
+            if not s.closed and s.persona_id:
+                return s.persona_id
+        return None
+
     async def close_all(self) -> None:
         for session in list(self._sessions.values()):
             await session.close()

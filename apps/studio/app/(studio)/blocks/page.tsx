@@ -54,7 +54,6 @@ export default async function BlocksPage() {
                       {b.capabilities && "streaming" in b.capabilities && Boolean(b.capabilities.streaming) && (
                         <span className="badge badge-ok">streaming</span>
                       )}
-                      <span className="text-fg-subtle">v{b.version}</span>
                     </div>
                   </div>
                 ))}

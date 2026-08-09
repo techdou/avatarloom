@@ -87,6 +87,10 @@ class MockLlmBlock(Block):
 
         user_text: str = event.payload.get("text", "")
         sentences = self._pick_reply(user_text)
+        # 回显用户输入作为第一句——mock 无真实语义，回显让多轮对话不重复
+        # （"你说的是：xxx。" 之后接模板回复，像真对话）
+        if user_text.strip():
+            sentences = [f"你说的是：{user_text.strip()}。", *sentences]
 
         full_text = ""
         self._first_token_emitted = False

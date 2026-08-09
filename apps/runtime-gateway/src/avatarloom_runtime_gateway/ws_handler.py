@@ -92,6 +92,11 @@ _orchestrator_starting: bool = False
 _session_lock = asyncio.Lock()
 
 
+def get_active_orchestrator() -> Orchestrator | None:
+    """返回当前活跃的 Orchestrator（供 HTTP 管理端点读取运行时状态）。"""
+    return _active_orchestrator
+
+
 # Mock Profile 默认配置（无 GPU/API Key 也能跑）
 def _mock_profile_config() -> OrchestratorConfig:
     return OrchestratorConfig(

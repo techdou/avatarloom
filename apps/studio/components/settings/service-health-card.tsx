@@ -26,7 +26,7 @@ export function ServiceHealthCard() {
         const j = await r.json();
         setControlApi({
           ok: true,
-          detail: j.db_ok ? `v${j.version} · db ok` : `v${j.version} · db 异常`,
+          detail: j.db_ok ? "db ok" : "db 异常",
         });
       })
       .catch((e: Error) =>
@@ -43,7 +43,7 @@ export function ServiceHealthCard() {
       .then(async (r) => {
         if (!r.ok) throw new Error(String(r.status));
         const j = await r.json();
-        setGateway({ ok: true, detail: `v${j.version}` });
+        setGateway({ ok: true, detail: "在线" });
       })
       .catch((e: Error) =>
         setGateway({

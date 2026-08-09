@@ -49,7 +49,6 @@ export default async function PersonasPage() {
                     <div className="font-medium">{p.name}</div>
                     <div className="text-xs text-fg-muted mt-0.5">
                       {p.label && <span className="badge mr-1.5">{p.label}</span>}
-                      v{p.version}
                     </div>
                   </div>
                 </div>

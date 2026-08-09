@@ -102,6 +102,34 @@ class MemoryStore:
         if messages:
             self._m.add(messages, user_id=self.user_id, agent_id=agent_id)
 
+    def list_all(self, agent_id: str) -> list[dict[str, Any]]:
+        """列出该 persona 的全部记忆条目（管理台用）。"""
+        results = self._m.get_all(user_id=self.user_id, agent_id=agent_id)
+        items = []
+        for r in results or []:
+            text = r.get("memory") if isinstance(r, dict) else None
+            if text:
+                items.append(
+                    {
+                        "id": r.get("id") if isinstance(r, dict) else None,
+                        "text": text,
+                        "hash": r.get("hash") if isinstance(r, dict) else None,
+                    }
+                )
+        return items
+
+    def delete_one(self, memory_id: str) -> None:
+        """删除一条记忆（按 Mem0 memory id）。"""
+        self._m.delete(memory_id=memory_id)
+
+    def add_one(self, text: str, agent_id: str) -> None:
+        """手动写入一条记忆（管理台用）。"""
+        self._m.add(
+            [{"role": "user", "content": text}],
+            user_id=self.user_id,
+            agent_id=agent_id,
+        )
+
 
 class Mem0MemoryBlock(Block):
     """Mem0 内嵌记忆 Block。orchestrator 鸭子调用 recall/memorize（同 vision 模式）。"""
@@ -219,3 +247,35 @@ class Mem0MemoryBlock(Block):
             )
         except Exception as e:
             logger.warning("memory memorize 失败（静默跳过）: %s", e)
+
+    async def list_memories(self, agent_id: str) -> list[dict[str, Any]]:
+        """列出该 persona 的全部记忆（管理台用）。未启用返回 []。"""
+        if self._store is None:
+            return []
+        try:
+            return await asyncio.to_thread(self._store.list_all, agent_id)
+        except Exception as e:
+            logger.warning("memory list 失败（按空返回）: %s", e)
+            return []
+
+    async def delete_memory(self, memory_id: str) -> bool:
+        """删除一条记忆（管理台用）。未启用返回 False。"""
+        if self._store is None:
+            return False
+        try:
+            await asyncio.to_thread(self._store.delete_one, memory_id)
+            return True
+        except Exception as e:
+            logger.warning("memory delete 失败: %s", e)
+            return False
+
+    async def add_memory(self, text: str, agent_id: str) -> bool:
+        """手动写入一条记忆（管理台用）。未启用返回 False。"""
+        if self._store is None or not text.strip():
+            return False
+        try:
+            await asyncio.to_thread(self._store.add_one, text.strip(), agent_id)
+            return True
+        except Exception as e:
+            logger.warning("memory add 失败: %s", e)
+            return False

@@ -5,11 +5,15 @@ from __future__ import annotations
 import logging
 import secrets
 
-from fastapi import WebSocket, status
+from fastapi import Depends, HTTPException, Request, WebSocket, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from avatarloom_runtime_gateway.config import Settings
 
 logger = logging.getLogger(__name__)
+
+# HTTP 端点 Bearer 依赖（不 auto_error，便于 fail-closed 分支自行抛 401）
+_http_bearer = HTTPBearer(auto_error=False)
 
 
 def origin_allowed(origin: str | None, settings: Settings) -> bool:
@@ -43,6 +47,41 @@ def header_token_authenticated(ws: WebSocket, settings: Settings) -> bool:
     if not expected:
         return settings.auth_disabled
     return token_matches(presented_header_token(ws), expected)
+
+
+def verify_http_token(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(_http_bearer),
+) -> bool:
+    """HTTP 端点鉴权依赖（fail-closed，与 control-api 同语义）。
+
+    - api_token 为空且 auth_disabled=True → 开发模式放行
+    - api_token 为空且 auth_disabled=False → 401（生产漏配不裸奔）
+    - api_token 非空 → 校验 Authorization: Bearer <token>
+    """
+    settings: Settings | None = getattr(request.app.state, "settings", None)
+    expected = (settings.api_token if settings is not None else "").strip()
+    if not expected:
+        if settings is not None and settings.auth_disabled:
+            return True
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication is not configured. Set AVATARLOOM_API_TOKEN or AVATARLOOM_AUTH_DISABLED=1.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing or invalid Authorization header. Expected: Bearer <token>.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    if not token_matches(credentials.credentials, expected):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid bearer token.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return True
 
 
 async def verify_ws_access(ws: WebSocket, settings: Settings) -> bool:

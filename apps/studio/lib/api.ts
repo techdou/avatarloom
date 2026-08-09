@@ -4,6 +4,7 @@
 const API_BASE = "/api/control";
 const SERVER_API_BASE =
   process.env.CONTROL_API_BASE ?? "http://127.0.0.1:8100/api";
+const GATEWAY_API_BASE = "/api/realtime";
 
 function fetchBase(): string {
   return typeof window === "undefined" ? SERVER_API_BASE : API_BASE;
@@ -17,6 +18,19 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
   if (!r.ok) {
     const detail = await r.text();
     throw new Error(`API ${r.status}: ${detail}`);
+  }
+  return r.json() as Promise<T>;
+}
+
+/** Runtime Gateway 客户端（/api/realtime/* → 8101/api/*）。 */
+export async function gatewayFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const r = await fetch(`${GATEWAY_API_BASE}${path}`, {
+    ...init,
+    headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
+  });
+  if (!r.ok) {
+    const detail = await r.text();
+    throw new Error(`Gateway ${r.status}: ${detail}`);
   }
   return r.json() as Promise<T>;
 }
@@ -200,4 +214,34 @@ export interface Artifact {
   size_bytes: number | null;
   extra_metadata: Record<string, unknown> | null;
   created_at: string;
+}
+
+/** Block 健康明细（gateway /api/health/blocks）。 */
+export interface BlockHealth {
+  category: string;
+  block_id: string | null;
+  deployment: string | null;
+  status: "healthy" | "degraded" | "unhealthy" | "not_ready" | "absent" | string;
+  detail: string;
+  latency_ms: number | null;
+}
+
+export interface BlockHealthReport {
+  active: boolean;
+  profile_id: string | null;
+  degraded: Record<string, string>;
+  blocks: BlockHealth[];
+}
+
+/** 记忆条目（gateway /api/memory）。 */
+export interface MemoryEntry {
+  id: string | null;
+  text: string;
+  hash?: string | null;
+}
+
+export interface MemoryListResponse {
+  active: boolean;
+  persona_id: string | null;
+  items: MemoryEntry[];
 }

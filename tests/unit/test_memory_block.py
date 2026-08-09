@@ -59,6 +59,68 @@ class TestMemoryBlockDegradation:
         assert await block.recall("demo-assistant") == ""
         await block.memorize("你好", "你好呀", "demo-assistant")
 
+    async def test_management_hooks_safe_when_disabled(self) -> None:
+        """管理台方法在未启用时安全返回（不抛、不写）。"""
+        from blocks.memory.mem0_local import Mem0MemoryBlock
+
+        block = Mem0MemoryBlock()
+        await block.setup(_ctx({}))
+        assert await block.list_memories("demo-assistant") == []
+        assert await block.delete_memory("mem_xxx") is False
+        assert await block.add_memory("一条记忆", "demo-assistant") is False
+
+
+class TestMemoryStoreOps:
+    """MemoryStore 管理方法（用 fake mem0 client，不依赖 mem0 安装）。"""
+
+    def _store_with_fake(self):
+        from blocks.memory.mem0_local import MemoryStore
+
+        store = MemoryStore.__new__(MemoryStore)
+        store.user_id = "default_user"
+        store.top_k = 5
+
+        class _FakeMem0:
+            def __init__(self):
+                self.deleted: list[str] = []
+                self.added: list[dict] = []
+
+            def get_all(self, user_id=None, agent_id=None):
+                return [
+                    {"id": "m1", "memory": "喜欢喝美式咖啡", "hash": "h1"},
+                    {"id": "m2", "memory": "在准备研究生考试", "hash": "h2"},
+                ]
+
+            def delete(self, memory_id=None):
+                self.deleted.append(memory_id)
+
+            def add(self, messages, user_id=None, agent_id=None):
+                self.added.append({"messages": messages, "user_id": user_id, "agent_id": agent_id})
+
+        fake = _FakeMem0()
+        store._m = fake
+        return store, fake
+
+    def test_list_all_maps_fields(self) -> None:
+        store, _ = self._store_with_fake()
+        items = store.list_all("demo-assistant")
+        assert items == [
+            {"id": "m1", "text": "喜欢喝美式咖啡", "hash": "h1"},
+            {"id": "m2", "text": "在准备研究生考试", "hash": "h2"},
+        ]
+
+    def test_delete_one_passes_memory_id(self) -> None:
+        store, fake = self._store_with_fake()
+        store.delete_one("m1")
+        assert fake.deleted == ["m1"]
+
+    def test_add_one_writes_user_turn(self) -> None:
+        store, fake = self._store_with_fake()
+        store.add_one("用户喜欢编程", "demo-assistant")
+        assert fake.added[0]["messages"] == [{"role": "user", "content": "用户喜欢编程"}]
+        assert fake.added[0]["agent_id"] == "demo-assistant"
+        assert fake.added[0]["user_id"] == "default_user"
+
 
 class TestOrchestratorMemoryHooks:
     """orchestrator 挂钩：无 memory block 时 recall/memorize 静默；有替身时正确调用。"""

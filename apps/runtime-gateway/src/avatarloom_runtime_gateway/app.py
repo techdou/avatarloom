@@ -17,6 +17,7 @@ WS 生命周期：
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import sys
 from collections.abc import AsyncIterator
@@ -38,12 +39,15 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(_PROJECT_ROOT / ".env", override=False)
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect  # noqa: E402
+from fastapi import Depends, FastAPI, WebSocket, WebSocketDisconnect  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 
-from avatarloom_runtime_gateway.auth import verify_ws_access  # noqa: E402
+from avatarloom_runtime_gateway.auth import verify_http_token, verify_ws_access  # noqa: E402
 from avatarloom_runtime_gateway.config import Settings, load_settings  # noqa: E402
-from avatarloom_runtime_gateway.ws_handler import WebSocketSession  # noqa: E402
+from avatarloom_runtime_gateway.ws_handler import (  # noqa: E402
+    WebSocketSession,
+    get_active_orchestrator,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +111,94 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             for f in sorted(profiles_dir.glob("*.yaml")):
                 profiles.append(f.stem)
         return {"profiles": profiles, "default": settings.default_profile}
+
+    # ------------------------------------------------------------------
+    # 管理端点：组件健康看板 + 记忆管理（均走 fail-closed HTTP 鉴权）
+    # ------------------------------------------------------------------
+
+    @app.get("/api/health/blocks", dependencies=[Depends(verify_http_token)])
+    async def blocks_health() -> dict[str, Any]:
+        """当前 Orchestrator 的 Block 健康明细（积木看板数据源）。"""
+        orch = get_active_orchestrator()
+        if orch is None:
+            return {"active": False, "profile_id": None, "degraded": {}, "blocks": []}
+
+        blocks_out: list[dict[str, Any]] = []
+        for category, block_ref in orch.config.blocks.items():
+            entry: dict[str, Any] = {
+                "category": category,
+                "block_id": None,
+                "deployment": block_ref.deployment,
+                "status": "absent",
+                "detail": "未装配（optional 跳过或装配失败）",
+                "latency_ms": None,
+            }
+            block = orch.blocks.get(category)
+            if block is None:
+                blocks_out.append(entry)
+                continue
+            entry["block_id"] = block.manifest().block_id
+            try:
+                hs = await asyncio.wait_for(block.health(), timeout=2.0)
+                entry["status"] = hs.status
+                entry["latency_ms"] = hs.latency_ms
+                entry["detail"] = hs.message or ""
+            except TimeoutError:
+                entry["status"] = "unhealthy"
+                entry["detail"] = "health() 超时（>2s）"
+            except Exception as e:
+                entry["status"] = "unhealthy"
+                entry["detail"] = str(e)[:200]
+            blocks_out.append(entry)
+
+        return {
+            "active": True,
+            "profile_id": orch.config.profile_id,
+            "degraded": orch.degraded_blocks,
+            "blocks": blocks_out,
+        }
+
+    @app.get("/api/memory", dependencies=[Depends(verify_http_token)])
+    async def list_memory(persona_id: str | None = None) -> dict[str, Any]:
+        """列出指定 persona（默认当前会话 persona）的记忆条目。"""
+        orch = get_active_orchestrator()
+        mem = orch.blocks.get("memory") if orch else None
+        agent = persona_id or (orch.sessions.first_active_persona_id() if orch else None)
+        if mem is None or not bool(getattr(mem, "active", False)):
+            return {"active": False, "persona_id": agent, "items": []}
+        list_fn = getattr(mem, "list_memories", None)
+        items = await list_fn(agent) if (list_fn and agent) else []
+        return {"active": True, "persona_id": agent, "items": items}
+
+    @app.post("/api/memory", dependencies=[Depends(verify_http_token)])
+    async def add_memory(payload: dict[str, Any]) -> dict[str, Any]:
+        """手动写入一条记忆（记忆管理页）。body: {"text": "...", "persona_id": "..."}。"""
+        orch = get_active_orchestrator()
+        mem = orch.blocks.get("memory") if orch else None
+        text = str(payload.get("text") or "").strip()
+        agent = str(payload.get("persona_id") or "") or (
+            orch.sessions.first_active_persona_id() if orch else None
+        )
+        if mem is None or not bool(getattr(mem, "active", False)):
+            return {"ok": False, "error": "memory block 未启用"}
+        if not text:
+            return {"ok": False, "error": "text 不能为空"}
+        if not agent:
+            return {"ok": False, "error": "缺少 persona_id"}
+        add_fn = getattr(mem, "add_memory", None)
+        ok = await add_fn(text, agent) if add_fn else False
+        return {"ok": ok, "error": None if ok else "写入失败（见 gateway 日志）"}
+
+    @app.delete("/api/memory/{memory_id}", dependencies=[Depends(verify_http_token)])
+    async def delete_memory(memory_id: str) -> dict[str, Any]:
+        """删除一条记忆（按 Mem0 memory id）。"""
+        orch = get_active_orchestrator()
+        mem = orch.blocks.get("memory") if orch else None
+        if mem is None or not bool(getattr(mem, "active", False)):
+            return {"ok": False, "error": "memory block 未启用"}
+        delete_fn = getattr(mem, "delete_memory", None)
+        ok = await delete_fn(memory_id) if delete_fn else False
+        return {"ok": ok, "error": None if ok else "删除失败（见 gateway 日志）"}
 
     @app.websocket("/ws/realtime")
     async def ws_realtime(ws: WebSocket) -> None:
