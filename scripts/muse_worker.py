@@ -357,9 +357,12 @@ def main() -> int:
             _reply({"ok": False, "error": f"bad json: {e}"})
             continue
         cmd = req.get("cmd")
+        # 请求 id 原样回带——block 侧按 id 匹配响应，避免取消后残留响应被
+        # 下一轮误收（off-by-one 毒化）
+        rid = req.get("id")
         try:
             if cmd == "ping":
-                _reply({"ok": True, "cmd": "ping", "version": args.version})
+                _reply({"ok": True, "cmd": "ping", "version": args.version, "id": rid})
             elif cmd == "warm":
                 t0 = time.perf_counter()
                 engine._ensure_loaded()
@@ -367,6 +370,7 @@ def main() -> int:
                     {
                         "ok": True,
                         "cmd": "warm",
+                        "id": rid,
                         "load_s": engine._models["load_s"],
                         "warm_s": round(time.perf_counter() - t0, 2),
                     }
@@ -388,17 +392,19 @@ def main() -> int:
                 meta.update(
                     ok=True,
                     cmd="render",
+                    id=rid,
                     version=args.version,
                     total_s=round(time.perf_counter() - t0, 2),
                 )
                 _reply(meta)
             else:
-                _reply({"ok": False, "error": f"unknown cmd: {cmd}"})
+                _reply({"ok": False, "error": f"unknown cmd: {cmd}", "id": rid})
         except Exception as e:
             _reply(
                 {
                     "ok": False,
                     "cmd": cmd,
+                    "id": rid,
                     "error": f"{type(e).__name__}: {e}",
                 }
             )

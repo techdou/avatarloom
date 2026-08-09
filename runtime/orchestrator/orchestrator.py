@@ -35,6 +35,8 @@ from avatarloom_protocol import (
     LLM_REQUEST,
     LLM_TEXT_DELTA,
     LLM_TEXT_DONE,
+    RESPONSE_DONE,
+    RESPONSE_INTERRUPTED,
     SPEECH_DETECTED,
     SPEECH_ENDED,
     TRANSCRIPT_COMPLETED,
@@ -964,6 +966,17 @@ class Orchestrator:
         if session is None:
             return
         await session.try_trigger("response_done")
+        # emit response.done 让 recorder finalize（写 metrics/transcript、关 events.jsonl）。
+        # 此前缺失此事件 → recorder 永不 finalize → 文件句柄累积、跨 run 串数据。
+        await self._on_event(
+            Event(
+                type=RESPONSE_DONE,
+                session_id=session.session_id,
+                source="orchestrator",
+                run_id=session.current_run_id,
+                payload={"interrupted": False},
+            )
+        )
 
     # ------------------------------------------------------------------
     # Filler 垫音（移植自 VoxEMW voxemw/avatar/orchestrator.py）
@@ -1107,7 +1120,8 @@ class Orchestrator:
         1. 取消挂起的同轮 Vision 等待（跳过本轮 LLM）
         2. 取消垫音（filler 余量不再发）
         3. 重置所有 Block（清缓冲 + 协作式取消标记，AL-P1-006）
-        4. 等用户是否继续说话决定转 LISTENING 或 IDLE
+        4. emit response.interrupted 让 recorder finalize
+        5. 按 user_speaking 选 trigger：用户在说话 → LISTENING，否则 → IDLE
         """
         pending = self._vision_pending.pop(session.session_id, None)
         if pending is not None and not pending[1].done():
@@ -1118,6 +1132,20 @@ class Orchestrator:
                 await block.reset(session.session_id)
             except Exception:
                 logger.exception("block reset error during interrupt")
-        # 这里简化：直接转 IDLE（用户已停）。
-        # 真实场景：VAD 检测用户仍在说话 → interrupt_done_speaking -> LISTENING
-        await session.try_trigger("interrupt_done_silent")
+        # emit response.interrupted 让 recorder finalize 当前 run
+        await self._on_event(
+            Event(
+                type=RESPONSE_INTERRUPTED,
+                session_id=session.session_id,
+                source="orchestrator",
+                run_id=session.current_run_id,
+                payload={"interrupted": True},
+            )
+        )
+        # 打断由 speech_started 触发——此时用户必然在说话。
+        # 协议要求 INTERRUPTING → LISTENING（state.py:14）；此前恒转 IDLE 导致
+        # 本轮回复无法再被打断（IDLE + speech_started 不走 interrupt 路径）。
+        if session.user_speaking:
+            await session.try_trigger("interrupt_done_speaking")
+        else:
+            await session.try_trigger("interrupt_done_silent")

@@ -280,3 +280,85 @@ class TestMockAvatar:
         await _capture_emits(block, ctx, event)
         out2 = await _capture_emits(block, ctx, event)
         assert out2[0].payload["frame_index"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Mock 打断语义（generation 机制）
+# ---------------------------------------------------------------------------
+
+
+class TestMockInterruption:
+    """验证 mock LLM/TTS 的打断真正生效——此前只清标志位，流式循环照跑到底，
+    用 mock 做打断回归给出假绿。"""
+
+    async def test_llm_reset_stops_token_stream(self) -> None:
+        """reset() 后进行中的 LLM process 应停止 emit delta。"""
+        import asyncio
+
+        block = MockLlmBlock()
+        ctx = _make_ctx()
+        ctx.config = {"chunk_delay_ms": 50}  # 慢一点保证打断窗口
+        await _setup_block(block, ctx)
+
+        emitted: list[Event] = []
+
+        async def cap(e: Event) -> None:
+            emitted.append(e)
+
+        ctx._emit_fn = cap  # type: ignore[attr-defined]
+        ctx._logger = None  # type: ignore[attr-defined]
+
+        # 启动 process（非阻塞）
+        event = Event(type=LLM_REQUEST, session_id="s1", source="t", payload={"text": "测试"})
+        task = asyncio.create_task(block.process(ctx, event))
+        await asyncio.sleep(0.02)  # 让它吐几个 token
+
+        # 打断
+        await block.reset("s1")
+        await asyncio.sleep(0.3)  # 等够完整回复的时间
+
+        # task 应已完成（return 退出，不是被 cancel）
+        assert task.done()
+        # 打断后不应继续 emit——检查没有 llm.text.done（正常完成才有）
+        types_emitted = [e.type for e in emitted]
+        assert "llm.text.done" not in types_emitted, "打断后 mock LLM 不应 emit done"
+
+    async def test_tts_reset_stops_audio_synthesis(self) -> None:
+        """reset() 后进行中的 TTS 合成应停止 emit audio delta。"""
+        import asyncio
+
+        from avatarloom_protocol import LLM_TEXT_DELTA
+
+        block = MockTtsBlock()
+        ctx = _make_ctx()
+        ctx.config = {"ms_per_char": 500}  # 长音频保证打断窗口
+        await _setup_block(block, ctx)
+
+        emitted: list[Event] = []
+
+        async def cap(e: Event) -> None:
+            emitted.append(e)
+
+        ctx._emit_fn = cap  # type: ignore[attr-defined]
+        ctx._logger = None  # type: ignore[attr-defined]
+
+        # 喂一段长文本触发合成
+        event = Event(
+            type=LLM_TEXT_DELTA,
+            session_id="s1",
+            source="llm",
+            payload={"text": "这是一段很长的测试文本用于验证打断", "sentence_index": 0},
+        )
+        task = asyncio.create_task(block.process(ctx, event))
+        await asyncio.sleep(0.02)
+
+        # 打断
+        await block.reset("s1")
+        count_at_interrupt = len(emitted)
+        await asyncio.sleep(0.3)
+
+        # 打断后不再有新 audio delta
+        audio_deltas_after = [
+            e for e in emitted[count_at_interrupt:] if e.type == TTS_AUDIO_DELTA
+        ]
+        assert len(audio_deltas_after) == 0, "打断后 mock TTS 不应继续 emit audio delta"

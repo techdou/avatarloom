@@ -49,6 +49,9 @@ class MockLlmBlock(Block):
     _default_reply: list[str] = _DEFAULT_REPLIES["default"]
     _chunk_delay_ms: int = 80
     _first_token_emitted: bool = False
+    # session -> generation 计数。reset 时递增，process 记住进入时的 generation，
+    # 循环内若发现不一致说明被 reset 了（用户打断），立即停止吐 token。
+    _interrupt_gen: dict[str, int] = {}
 
     @classmethod
     def manifest(cls) -> BlockManifest:
@@ -87,11 +90,18 @@ class MockLlmBlock(Block):
 
         full_text = ""
         self._first_token_emitted = False
+        # 记住进入时的 generation——reset 会递增它，循环内不一致即被中断
+        my_gen = self._interrupt_gen.get(ctx.session_id, 0)
 
         for idx, sentence in enumerate(sentences):
+            # 打断检查：reset() 递增了 generation → 不一致即被中断，立即停止
+            if self._interrupt_gen.get(ctx.session_id, 0) != my_gen:
+                return
             # 切分成更小的 delta chunk，模拟流式 token
             chunks = self._split_to_chunks(sentence)
             for chunk in chunks:
+                if self._interrupt_gen.get(ctx.session_id, 0) != my_gen:
+                    return
                 full_text += chunk
                 await ctx.emit(
                     Event(
@@ -156,4 +166,9 @@ class MockLlmBlock(Block):
         return [sentence[i : i + 3] for i in range(0, len(sentence), 3)]
 
     async def reset(self, session_id: str) -> None:
+        """打断时调用——递增 generation，让进行中的 process 循环检测到不一致并退出。
+
+        此前只清标志位，流式循环照跑到底——用 mock 做打断回归会给出假绿。
+        """
         self._first_token_emitted = False
+        self._interrupt_gen[session_id] = self._interrupt_gen.get(session_id, 0) + 1

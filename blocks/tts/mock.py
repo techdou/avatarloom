@@ -39,6 +39,8 @@ class MockTtsBlock(Block):
     _total_samples: int = 0
     _first_audio_emitted: bool = False
     _sentence_buffers: dict[int, str] = {}  # sentence_index -> 累积文本
+    # session -> generation。reset 递增，process 检测不一致即停止合成。
+    _interrupt_gen: dict[str, int] = {}
 
     @classmethod
     def manifest(cls) -> BlockManifest:
@@ -71,6 +73,8 @@ class MockTtsBlock(Block):
 
     async def process(self, ctx: BlockContext, event: Event) -> None:
         if event.type == LLM_TEXT_DELTA:
+            # 打断检查：reset 递增 generation，旧 run 的残余 delta 直接丢弃
+            my_gen = self._interrupt_gen.get(ctx.session_id, 0)
             idx = event.payload.get("sentence_index", 0)
             text: str = event.payload.get("text", "")
             is_end = event.payload.get("is_sentence_end", False)
@@ -79,7 +83,7 @@ class MockTtsBlock(Block):
                 # 累积文本（按句索引）
                 self._sentence_buffers[idx] = self._sentence_buffers.get(idx, "") + text
                 # 为文本生成音频
-                await self._synthesize_text(ctx, text)
+                await self._synthesize_text(ctx, text, my_gen)
 
             if is_end:
                 # 句末——flush 当前句的尾部
@@ -99,7 +103,7 @@ class MockTtsBlock(Block):
                 )
             )
 
-    async def _synthesize_text(self, ctx: BlockContext, text: str) -> None:
+    async def _synthesize_text(self, ctx: BlockContext, text: str, my_gen: int) -> None:
         """为一段文本生成正弦波音频并流式输出。"""
         # 每字符时长
         samples_per_char = int(SAMPLE_RATE * self._ms_per_char / 1000)
@@ -122,6 +126,9 @@ class MockTtsBlock(Block):
         # 按 chunk 切分流式输出
         offset = 0
         while offset < len(pcm):
+            # 打断检查：generation 不一致说明 reset 发生过，立即停止合成
+            if self._interrupt_gen.get(ctx.session_id, 0) != my_gen:
+                return
             chunk = pcm[offset : offset + self._chunk_samples]
             offset += self._chunk_samples
 
@@ -148,7 +155,11 @@ class MockTtsBlock(Block):
             await asyncio.sleep(0)
 
     async def reset(self, session_id: str) -> None:
-        """打断时清空。"""
+        """打断时清空 + 递增 generation，让进行中的合成循环检测到并退出。
+
+        此前只清状态，流式合成照跑到底——用 mock 做打断回归会给出假绿。
+        """
         self._total_samples = 0
         self._first_audio_emitted = False
         self._sentence_buffers = {}
+        self._interrupt_gen[session_id] = self._interrupt_gen.get(session_id, 0) + 1

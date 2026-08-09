@@ -65,6 +65,9 @@ class MuseTalkAvatarBlock(Block):
         self._fps: int = 25
         self._activity_fps: float = 2.5
         self._render_timeout_s: float = 600.0
+        # worker 请求 id 计数器——每个 render 请求带唯一 id，
+        # 响应按 id 匹配，避免取消后残留响应被下一轮误收（off-by-one 毒化）
+        self._req_counter: int = 0
 
     @classmethod
     def manifest(cls) -> BlockManifest:
@@ -305,7 +308,14 @@ class MuseTalkAvatarBlock(Block):
         except Exception:
             logging.getLogger(__name__).exception("MuseTalk worker stdout drain failed")
 
-    async def _wait_line(self, timeout: float, expected: str | None = None) -> dict:
+    async def _wait_line(
+        self, timeout: float, expected: str | None = None, req_id: int | None = None
+    ) -> dict:
+        """等待 worker 响应行。
+
+        匹配优先级：req_id（精确匹配某次请求）> expected（按 cmd 名）> None（任意行）。
+        req_id 匹配解决了取消后残留响应被下一轮误收的 off-by-one 毒化问题。
+        """
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if self._worker_lines:
@@ -313,6 +323,11 @@ class MuseTalkAvatarBlock(Block):
                 try:
                     obj = json.loads(raw)
                 except Exception:
+                    continue
+                if req_id is not None:
+                    # 精确匹配——id 不符的旧响应直接丢弃（这正是修复的核心）
+                    if obj.get("id") == req_id:
+                        return obj
                     continue
                 if expected is None or obj.get("cmd") == expected:
                     return obj
@@ -326,11 +341,17 @@ class MuseTalkAvatarBlock(Block):
     async def _call_worker(self, req: dict, timeout: float) -> dict:
         if not self._worker_stdin or not self._worker_proc:
             raise RuntimeError("worker not running")
+        # 每个请求分配唯一 id——worker 回响应时原样带回，_wait_line 按 id 精确匹配。
+        # 这解决了"取消渲染后 worker 仍输出旧响应，下一轮 _call_worker 把旧响应当
+        # 新结果接收"的 off-by-one 毒化问题。
+        self._req_counter += 1
+        req_id = self._req_counter
+        req["id"] = req_id
         self._worker_stdin.write(
             (json.dumps(req, ensure_ascii=False) + "\n").encode("utf-8")
         )
         await self._worker_stdin.drain()
-        resp = await self._wait_line(timeout, expected=req.get("cmd"))
+        resp = await self._wait_line(timeout, req_id=req_id)
         if not resp.get("ok"):
             raise RuntimeError(resp.get("error", "worker error"))
         return resp

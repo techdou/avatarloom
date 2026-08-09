@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import contextlib
+
 from avatarloom_protocol import (
     LLM_REQUEST,
     LLM_TEXT_DELTA,
@@ -53,6 +55,11 @@ class OllamaLlmBlock(Block):
         cfg = ctx.config
         self._base_url = str(cfg.get("baseUrl") or "http://127.0.0.1:11434/v1")
         self._model = str(cfg.get("model") or "qwen2.5:7b")
+        # 重 setup（fallback 重建/热切换）时先销毁旧 delegate，避免用陈旧配置
+        if self._delegate is not None:
+            with contextlib.suppress(Exception):
+                await self._delegate.shutdown()
+            self._delegate = None
         self._mark_ready()
         await ctx.logger.ainfo("llm.ollama ready", base_url=self._base_url, model=self._model)
 
@@ -79,3 +86,14 @@ class OllamaLlmBlock(Block):
         # 注入 emit
         self._delegate._api_key = "ollama"
         await self._delegate.process(ctx, event)
+
+    async def reset(self, session_id: str) -> None:
+        """透传打断/重置到 delegate——否则旧 run 的 HTTP 流不关闭，token 继续吐。"""
+        if self._delegate is not None:
+            await self._delegate.reset(session_id)
+
+    async def shutdown(self) -> None:
+        """透传 shutdown 到 delegate，释放 HTTP 连接池。"""
+        if self._delegate is not None:
+            await self._delegate.shutdown()
+            self._delegate = None

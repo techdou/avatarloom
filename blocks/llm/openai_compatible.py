@@ -258,6 +258,9 @@ class OpenAILlmBlock(Block):
                                     raise
                             finally:
                                 self._active_resp = None
+                        if interrupted:
+                            # 已打断（reset 关闭了流）——不重试，跳出
+                            break
                         if not full_text and _attempt < 2:
                             # 成功完成但零产出——推理模型偶发空流（DeepSeek v4-flash 实测
                             # 正常 stop 但 content 全空），直接 stop 会让 TTS 零产出，重试
