@@ -61,6 +61,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.settings = settings
+        if not settings.api_token:
+            logger.warning(
+                "AVATARLOOM_API_TOKEN 未设置——WS 鉴权关闭，任何人可发起 GPU 会话。"
+                "生产环境务必设置 token。"
+            )
         logger.info("Runtime Gateway started on %s:%d", settings.host, settings.port)
         yield
         logger.info("Runtime Gateway stopped")

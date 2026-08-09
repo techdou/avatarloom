@@ -7,6 +7,16 @@ from pathlib import Path
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# 把 .env 加载进 os.environ——pydantic-settings 的 env_file 只填 Settings 字段，
+# 不写入 os.environ。secrets router 用 os.environ.get() 查 key 是否设置，
+# 不加载的话本地 dev 场景恒显示"未设置"（key 明明在 .env 里、runtime 实际可用）。
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(override=False)
+except ImportError:
+    pass  # python-dotenv 未装时降级——pydantic-settings 自带 env_file 仍可用
+
 
 class Settings(BaseSettings):
     """Control API 配置。优先级：环境变量 > .env > 默认。"""

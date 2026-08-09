@@ -21,14 +21,19 @@ COPY . .
 
 # 浏览器直连 Gateway 时，token 会在构建期内联进客户端 bundle。
 # 这是共享密钥模型：仅适用于受控的单用户隧道；多用户部署应改用服务端会话 token。
+# 注意：build arg 会留在镜像 history（docker history 可见），镜像不得公开分发。
 ARG NEXT_PUBLIC_WS_TOKEN=
-ENV NEXT_PUBLIC_WS_TOKEN=${NEXT_PUBLIC_WS_TOKEN}
 
-# 构建
+# 构建（build 期 ARG 已够 Next 内联，不设 ENV 避免进入镜像 config）
 RUN pnpm --filter @avatarloom/studio build
 
 ENV NODE_ENV=production
 ENV PORT=3000
+
+# 非 root 运行
+RUN useradd -r -u 10001 app && chown -R app:app /app
+USER app
+
 EXPOSE 3000
 
 CMD ["pnpm", "--filter", "@avatarloom/studio", "start"]

@@ -379,9 +379,18 @@ def main() -> None:
         )
         thread.start()
         # warmup 放后台线程——先 bind 端口让 block 能连上，
-        # torch.compile 首次预热（Blackwell 上可能 >180s）不再阻塞端口绑定
+        # torch.compile 首次预热（Blackwell 上可能 >180s）不再阻塞端口绑定。
+        # warmup 失败必须置 _inference_error——否则端口已绑、block 握手成功，
+        # 但推理循环已死，客户端喂音频永远收不到帧（"服务正常但画面全黑"半死态）
+        def _safe_warmup(on_frames_cb) -> None:
+            try:
+                engine.warmup(on_frames_cb)
+            except Exception as e:
+                logger.error("flashhead warmup 失败——推理不可用: %s", e, exc_info=True)
+                engine._inference_error = repr(e)
+
         warmup_thread = threading.Thread(
-            target=engine.warmup,
+            target=_safe_warmup,
             args=(on_frames,),
             daemon=True,
         )

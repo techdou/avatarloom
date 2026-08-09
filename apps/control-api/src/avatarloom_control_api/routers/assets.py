@@ -188,12 +188,12 @@ async def save_upload(
             f"kind={kind} requires {expected_prefix}* mime, got {mime}",
         )
 
-    # 读内容 + 校验大小
-    content = await upload.read()
+    # 读内容 + 校验大小——先读 MAX_SIZE+1 字节判断超限，避免数 GB body 全读进内存
+    content = await upload.read(_MAX_SIZE + 1)
     if len(content) > _MAX_SIZE:
         raise HTTPException(
             status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            f"File too large: {len(content)} bytes (max {_MAX_SIZE})",
+            f"File too large (max {_MAX_SIZE} bytes)",
         )
 
     # 写文件：assets_root/avatars/{avatar_id}/{kind}/{uuid}{ext}

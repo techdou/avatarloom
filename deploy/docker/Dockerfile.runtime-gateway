@@ -28,6 +28,11 @@ COPY personas/ ./personas/
 
 ENV AVATARLOOM_HOST=0.0.0.0
 ENV AVATARLOOM_RUNTIME_GATEWAY_PORT=8101
+
+# 非 root 运行——gateway 在容器内 fork 子进程、读写挂卷，root 被攻破=容器内完全控制
+RUN useradd -r -u 10001 app && mkdir -p /app/data && chown -R app:app /app
+USER app
+
 EXPOSE 8101
 
 # --no-sync：容器启动不再重新 sync，直接用镜像内环境。

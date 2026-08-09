@@ -44,6 +44,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # 启动：建表（开发用；生产用 alembic upgrade head）
         await init_db(engine)
+        if not settings.api_token:
+            logger.warning(
+                "AVATARLOOM_API_TOKEN 未设置——鉴权关闭，所有端点无密码可访问。"
+                "生产环境务必设置 token。"
+            )
         app.state.engine = engine
         app.state.session_factory = session_factory
         app.state.settings = settings

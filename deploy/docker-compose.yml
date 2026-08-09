@@ -21,7 +21,9 @@ services:
       dockerfile: deploy/docker/Dockerfile.control-api
     ports:
       # 宿主侧端口可覆盖：CONTROL_API_PORT=18100 docker compose up
-      - "${CONTROL_API_PORT:-8100}:8100"
+      # 默认绑 127.0.0.1——未设 AVATARLOOM_API_TOKEN 时无鉴权，公网暴露=裸奔。
+      # 需公网访问时改为 "${CONTROL_API_PORT:-8100}:8100" 并务必设置 token。
+      - "127.0.0.1:${CONTROL_API_PORT:-8100}:8100"
     environment:
       - AVATARLOOM_HOST=0.0.0.0
       - AVATARLOOM_CONTROL_API_PORT=8100
@@ -46,7 +48,8 @@ services:
       context: ..
       dockerfile: deploy/docker/Dockerfile.runtime-gateway
     ports:
-      - "${RUNTIME_GATEWAY_PORT:-8101}:8101"
+      # 默认绑 127.0.0.1——WS 无鉴权时公网暴露可被任何人连入发起 GPU 会话。
+      - "127.0.0.1:${RUNTIME_GATEWAY_PORT:-8101}:8101"
     environment:
       - AVATARLOOM_HOST=0.0.0.0
       - AVATARLOOM_RUNTIME_GATEWAY_PORT=8101
@@ -90,7 +93,9 @@ services:
         # NEXT_PUBLIC_* 在构建期内联到浏览器 bundle；仅适合单用户受控隧道。
         NEXT_PUBLIC_WS_TOKEN: ${AVATARLOOM_API_TOKEN:-}
     ports:
-      - "${STUDIO_PORT:-3000}:3000"
+      # 默认绑 127.0.0.1——Studio 的服务端 rewrites 代理 control-api，
+      # 无鉴权时公网暴露等于把 API 全端点公开。
+      - "127.0.0.1:${STUDIO_PORT:-3000}:3000"
     environment:
       - NODE_ENV=production
       - PORT=3000

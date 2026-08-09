@@ -29,6 +29,11 @@ COPY . .
 ENV AVATARLOOM_HOST=0.0.0.0
 ENV AVATARLOOM_CONTROL_API_PORT=8100
 ENV AVATARLOOM_DB_URL=sqlite+aiosqlite:///./data/avatarloom.db
+
+# 非 root 运行——容器内最小权限原则
+RUN useradd -r -u 10001 app && mkdir -p /app/data && chown -R app:app /app
+USER app
+
 EXPOSE 8100
 
 # --no-sync：容器启动不再按 lockfile 重新 sync，直接用上面装好的环境。

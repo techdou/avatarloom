@@ -9,6 +9,9 @@ VENV=/root/autodl-tmp/avatarloom-avatar-venv
 PIP="$VENV/bin/pip install --no-cache-dir --retries 20 --timeout 120 --progress-bar off"
 WHEEL_DIR=/root/autodl-tmp/wheels
 
+# 失败记账——只有全绿才打 DONE 标记
+FAILED=()
+
 echo "==> [1/4] 本地安装 torch wheel(跳过网络)"
 TORCH_WHL=$(ls $WHEEL_DIR/torch-2.7.1+cu128-*.whl 2>/dev/null | head -1)
 if [ -z "$TORCH_WHL" ]; then
@@ -19,12 +22,12 @@ echo "    using: $TORCH_WHL"
 # 先装 torch 本体,再补 torchvision/torchaudio(仍需从 pytorch.org,但小得多)
 $PIP "$TORCH_WHL"
 $PIP --index-url https://download.pytorch.org/whl/cu128 \
-  torchvision==0.22.1 torchaudio==2.7.1 || echo "WARN: torchvision/audio install partial"
+  torchvision==0.22.1 torchaudio==2.7.1 || FAILED+=("torchvision/torchaudio")
 
 echo "==> [2/4] FlashHead requirements"
 grep -vE '^(gradio|flask|nvidia-|torch==|torchvision|torchaudio)' \
   vendor/SoulX-FlashHead/requirements.txt > /tmp/fh-req.txt 2>/dev/null || true
-$PIP -r /tmp/fh-req.txt || echo "WARN: fh requirements partial failure (continue)"
+$PIP -r /tmp/fh-req.txt || FAILED+=("fh-requirements")
 $PIP websockets pyyaml modelscope opencv-python-headless
 
 echo "==> [3/4] 权重下载(ModelScope 国内高速)"
@@ -33,12 +36,18 @@ export HF_ENDPOINT=https://hf-mirror.com
 $VENV/bin/modelscope download --model Soul-AILab/SoulX-FlashHead-1_3B \
   --include "Model_Lite/*" "VAE_LTX/*" "config.json" "model_index.json" \
   --local_dir /root/autodl-tmp/models/SoulX-FlashHead-1_3B \
-  || echo "WARN: SoulX download may need retry"
+  || FAILED+=("SoulX-FlashHead-weights")
 $VENV/bin/modelscope download --model AI-ModelScope/wav2vec2-base-960h \
   --local_dir /root/autodl-tmp/models/wav2vec2-base-960h \
-  || echo "WARN: wav2vec2 download may need retry"
+  || FAILED+=("wav2vec2-weights")
 
 echo "==> [4/4] 验证"
 echo "torch:"; $VENV/bin/python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
 echo "models:"; du -sh /root/autodl-tmp/models/SoulX-FlashHead-1_3B /root/autodl-tmp/models/wav2vec2-base-960h 2>/dev/null
+
+if [ ${#FAILED[@]} -gt 0 ]; then
+  echo "FLASHHEAD_SETUP_FAILED: ${FAILED[*]}"
+  echo "请检查以上失败项并重试"
+  exit 1
+fi
 echo "FLASHHEAD_SETUP_DONE"

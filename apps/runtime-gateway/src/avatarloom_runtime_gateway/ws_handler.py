@@ -69,6 +69,9 @@ _ID_PATTERN = re.compile(r"[a-zA-Z0-9_-]{1,64}")
 # 需要自重启（rc=42）清除 fork-unsafe 的 CUDA 状态。mock/cpu 不触发。
 _GPU_DEPLOYMENTS = frozenset({"cuda-local", "nvidia-cuda"})
 
+# WS 上行消息大小上限——单条 JSON/二进制超此即拒绝，防内存 DoS
+_MAX_MSG_SIZE = 2 * 1024 * 1024  # 2MB
+
 # 进程级活跃会话锁（HIGH-4）：GPU profile 每套模型占 ~10-16G，多标签/重复连接
 # 并存会直接 OOM。session.mode=single 只在 profile 里声明，这里强制执行——
 # 已有活跃 orchestrator 时拒绝新会话，前端刷新会先断开旧连接（cleanup 释放）。
@@ -207,6 +210,10 @@ class WebSocketSession:
 
     async def _handle_json(self, text: str) -> None:
         """处理上行 JSON 消息。"""
+        # 消息大小上限——防止恶意客户端发超大 JSON 撑爆内存
+        if len(text) > _MAX_MSG_SIZE:
+            await self._send_error(f"message too large (max {_MAX_MSG_SIZE} bytes)")
+            return
         try:
             data = json.loads(text)
             msg = ClientMessage(**data)
@@ -240,6 +247,10 @@ class WebSocketSession:
         if not self.session or not self.orchestrator:
             return
         if not data:
+            return
+        # 二进制消息大小上限——防止超大帧撑爆内存
+        if len(data) > _MAX_MSG_SIZE:
+            logger.warning("ws binary message too large: %d bytes", len(data))
             return
         tag = data[0]
 
@@ -529,7 +540,7 @@ class WebSocketSession:
                     # 下行格式：0x03 + PCM；音频队列非阻塞丢最旧（不反压事件出口）
                     _put_drop_oldest(self._audio_queue, bytes([TAG_TTS_PCM_DOWNLINK]) + pcm)
                 except Exception:
-                    pass
+                    logger.warning("TTS audio base64 decode failed——audio chunk dropped", exc_info=True)
             # 元数据（不含 pcm_b64，减小 JSON 体积）——控制队列，不丢
             meta = {k: v for k, v in event.payload.items() if k != "pcm_b64"}
             await self._enqueue_json({"type": "tts.audio.delta", "payload": meta})
@@ -552,7 +563,7 @@ class WebSocketSession:
                     sub_tag = 0x01 if event.type == AVATAR_SPEECH_FRAME else 0x00
                     _put_drop_oldest(self._video_queue, bytes([TAG_AVATAR_JPEG, sub_tag]) + jpeg)
                 except Exception:
-                    pass
+                    logger.warning("avatar frame base64 decode failed——frame dropped", exc_info=True)
 
     async def _downlink_sender(self) -> None:
         """独立任务：三队列优先级调度发送（控制 > 音频 > 视频）。
