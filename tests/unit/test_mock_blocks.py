@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 
 import numpy as np
 from avatarloom_protocol import (
@@ -349,7 +350,8 @@ class TestMockInterruption:
             source="llm",
             payload={"text": "这是一段很长的测试文本用于验证打断", "sentence_index": 0},
         )
-        task = asyncio.create_task(block.process(ctx, event))
+        tasks: list[asyncio.Task[None]] = []
+        tasks.append(asyncio.create_task(block.process(ctx, event)))
         await asyncio.sleep(0.02)
 
         # 打断
@@ -362,3 +364,8 @@ class TestMockInterruption:
             e for e in emitted[count_at_interrupt:] if e.type == TTS_AUDIO_DELTA
         ]
         assert len(audio_deltas_after) == 0, "打断后 mock TTS 不应继续 emit audio delta"
+        # 清理 pending task
+        for t in tasks:
+            t.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await t
