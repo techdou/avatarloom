@@ -29,8 +29,9 @@ class OpenAISttBlock(Block):
     _model: str = "whisper-1"
     _language: str | None = None
     _timeout: float = 30.0
-    # 累积用户音频 PCM（按 session_id）
-    _audio_buffers: dict[str, bytearray] = {}
+    # 累积用户音频 PCM（按 session_id）——实例属性，非类属性。
+    # 此前挂类属性导致多实例/多会话共享同一 dict，音频互相串扰（sensevoice 已修过同款 bug）。
+    _audio_buffers: dict[str, bytearray] | None = None
 
     @classmethod
     def manifest(cls) -> BlockManifest:
@@ -61,10 +62,14 @@ class OpenAISttBlock(Block):
         self._api_key = str(cfg.get("apiKey") or _read_env(api_key_env))
         self._model = str(cfg.get("model") or "whisper-1")
         self._language = cfg.get("language") or None
+        # 实例级 buffer——fallback 重建/多实例时各自独立，不串扰
+        self._audio_buffers = {}
         self._mark_ready()
         await ctx.logger.ainfo("stt.openai-compatible ready", model=self._model)
 
     async def process(self, ctx: BlockContext, event: Event) -> None:
+        if self._audio_buffers is None:
+            self._audio_buffers = {}
         if event.type == AUDIO_APPENDED:
             # 累积 PCM（base64 -> bytes）
             pcm_b64 = event.payload.get("pcm_b64", "")
@@ -75,6 +80,8 @@ class OpenAISttBlock(Block):
             await self._transcribe(ctx, event)
 
     async def _transcribe(self, ctx: BlockContext, event: Event) -> None:
+        if self._audio_buffers is None:
+            return
         buf = self._audio_buffers.pop(event.session_id, bytearray())
         if not buf:
             return
@@ -115,7 +122,8 @@ class OpenAISttBlock(Block):
         )
 
     async def reset(self, session_id: str) -> None:
-        self._audio_buffers.pop(session_id, None)
+        if self._audio_buffers is not None:
+            self._audio_buffers.pop(session_id, None)
 
 
 # ---------------------------------------------------------------------------

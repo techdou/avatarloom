@@ -166,11 +166,33 @@ class EventBus:
         return fnmatch.fnmatchcase(event_type, pattern)
 
     async def _enqueue(self, sub: Subscription, event: Event) -> None:
-        """按 policy 入队。"""
+        """按 policy 入队。
+
+        BLOCK 策略不能无限 await q.put——快照（publish 持锁阶段）到 enqueue
+        之间，订阅可能被 unsubscribe/close 取消了 consumer。此时队列满时 put
+        永远等不到空位，publisher（往往是另一个订阅的 consumer 任务）会
+        静默挂死。用"put_nowait → QueueFull 时短超时等待 + 复查 closed"循环解决。
+        """
         q = sub.queue
         try:
             if sub.policy == BackpressurePolicy.BLOCK:
-                await q.put(event)
+                # 先尝试无阻塞入队
+                try:
+                    q.put_nowait(event)
+                    return
+                except asyncio.QueueFull:
+                    pass
+                # 队满——短超时轮询等待空位，每次复查 sub 是否已关闭
+                while not sub._closed:
+                    try:
+                        await asyncio.wait_for(q.put(event), timeout=0.1)
+                        return
+                    except TimeoutError:
+                        continue
+                    except asyncio.QueueFull:
+                        continue
+                # sub 已关闭——丢弃事件（消费者已不在，入队无意义）
+                return
             elif sub.policy == BackpressurePolicy.DROP_OLDEST:
                 if q.full():
                     # 丢最旧的一个——并发场景下可能已被取走，QueueEmpty 忽略

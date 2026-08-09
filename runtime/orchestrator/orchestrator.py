@@ -572,7 +572,8 @@ class Orchestrator:
                     block_id,
                     block_ref.fallback,
                 )
-                await self._setup_block(category, block_ref.fallback, config, block_ref, visited)
+                # fallback block 用空 config（走 manifest 默认值），不传原 block 的 config
+                await self._setup_block(category, block_ref.fallback, {}, block_ref, visited)
                 self.degraded_blocks[category] = block_ref.fallback
                 return
             if block_ref.optional:
@@ -593,7 +594,7 @@ class Orchestrator:
         except BlockSetupError as e:
             logger.warning("block %s setup import failed: %s", block_id, e)
             if block_ref.fallback:
-                await self._setup_block(category, block_ref.fallback, config, block_ref, visited)
+                await self._setup_block(category, block_ref.fallback, {}, block_ref, visited)
                 self.degraded_blocks[category] = block_ref.fallback
                 return
             if block_ref.optional:
@@ -623,7 +624,8 @@ class Orchestrator:
             logger.exception("block %s setup failed", block_id)
             if block_ref.fallback:
                 logger.info("degrading %s -> %s", block_id, block_ref.fallback)
-                await self._setup_block(category, block_ref.fallback, config, block_ref, visited)
+                # fallback block 用空 config（走 manifest 默认值），不传原 block 的 config
+                await self._setup_block(category, block_ref.fallback, {}, block_ref, visited)
                 self.degraded_blocks[category] = block_ref.fallback
                 return
             if block_ref.optional:
