@@ -60,8 +60,7 @@ prompts/
 # ---- 密钥与环境变量（绝不入库）----
 # .env 系列：本地配置含真实 API Key，只有 .env.example / .env.*.example 是模板可入库
 .env
-.env.local
-.env.*.local
+.env.*
 # 允许 example 模板入库（! 取反）
 !.env.example
 !.env.*.example
@@ -75,6 +74,10 @@ prompts/
 # SSH / GPG
 .ssh/
 .gnupg/
+
+# ---- 包管理器本地配置（开发软件配置，不上传）----
+.npmrc
+.pnpmrc
 
 # ---- 运行时数据（不入库，运行时生成）----
 # runs/ 与 artifacts/ 锚定到 data/ 下，避免误伤 apps/studio/app/runs/ 路由目录
