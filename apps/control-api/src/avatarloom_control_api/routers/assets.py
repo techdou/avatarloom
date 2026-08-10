@@ -91,13 +91,6 @@ def resolve_asset_path(assets_root: Path, rel_path: str) -> Path:
     return candidate
 
 
-def _assets_root(request_db: AsyncSession) -> Path:
-    """从 app.state.settings 取 assets_root。"""
-    # db 依赖拿到 request，但更简单是从 settings 取——通过 app.state
-    # 实际用法：在路由里从 request.app.state.settings 取
-    return Path("./data/assets")  # 默认；app 启动时会被覆盖
-
-
 @router.get("/{asset_id}", response_model=AssetOut)
 async def get_asset(asset_id: str, db: AsyncSession = Depends(get_db)) -> Asset:
     asset = await db.get(Asset, asset_id)

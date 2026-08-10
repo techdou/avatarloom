@@ -12,7 +12,6 @@ import asyncio
 import base64
 from typing import Any
 
-import numpy as np
 from avatarloom_protocol import (
     LLM_TEXT_DELTA,
     LLM_TEXT_DONE,
@@ -30,8 +29,20 @@ from avatarloom_sdk import (
 )
 
 from blocks import release_gpu_objects
+from blocks._audio import resample_float32_to_int16 as _resample_float32_to_int16
 
 TARGET_SR = 16000
+
+# 向后兼容别名——单测此前从此模块 import resample_pcm。
+# 实现已统一到 blocks._audio.resample_float32_to_int16。
+
+
+def resample_pcm(raw: bytes, source_sr: int, target_sr: int) -> bytes:
+    """float32 PCM -> int16 PCM + 降采样（向后兼容包装）。"""
+    return _resample_float32_to_int16(raw, source_sr, target_sr)
+
+
+__all__ = ["Qwen3TtsBlock", "resample_pcm"]
 
 
 class Qwen3TtsBlock(Block):
@@ -48,6 +59,9 @@ class Qwen3TtsBlock(Block):
         # 按 run 隔离 + 打断协作（同 voxcpm2 模式，见 AL-P2-003 / AL-P1-006）
         self._run_id: str | None = None
         self._cancelled_run_ids: set[str] = set()
+        # GPU 推理并发锁——PyTorch 模型非线程安全，asyncio.to_thread 并发推理
+        # 会撞显存/状态（同 musetalk._worker_lock 模式）
+        self._infer_lock = asyncio.Lock()
 
     @classmethod
     def manifest(cls) -> BlockManifest:
@@ -57,8 +71,11 @@ class Qwen3TtsBlock(Block):
             category="tts",
             runtime_type="python_inproc",
             # streaming=False：当前实现是整句 generate 后切块回放（非真流式）。
-            # 诚实声明——此前标 True 但 _infer_stream 不是增量推理，误导调用方。
-            capabilities=Capability(streaming=False, voice_cloning=True, interruption=True),
+            # interruption=False：整句 generate 后才有打断检查，无法真正打断进行中的推理。
+            # 诚实声明——此前标 True 但 _infer_stream 不是增量推理、不可中途打断，误导调用方。
+            capabilities=Capability(
+                streaming=False, voice_cloning=True, interruption=False
+            ),
             inputs=[LLM_TEXT_DELTA, LLM_TEXT_DONE],
             outputs=[TTS_AUDIO_DELTA, TTS_AUDIO_COMPLETED],
             resources=ResourceRequirements(
@@ -149,10 +166,12 @@ class Qwen3TtsBlock(Block):
 
     async def _synthesize(self, ctx: BlockContext, text: str) -> None:
         try:
-            # model.generate 是秒级 GPU/CPU 推理——offload 线程，不阻塞事件循环
-            pcm_chunks = await asyncio.to_thread(
-                self._infer_stream, text, ctx.persona_voice_ref
-            )
+            # model.generate 是秒级 GPU/CPU 推理——offload 线程，不阻塞事件循环。
+            # 加锁：PyTorch 模型非线程安全，并发 to_thread 推理会撞显存/状态。
+            async with self._infer_lock:
+                pcm_chunks = await asyncio.to_thread(
+                    self._infer_stream, text, ctx.persona_voice_ref
+                )
         except Exception as e:
             await ctx.logger.aerror("qwen3 synth error", error=str(e))
             return
@@ -161,8 +180,8 @@ class Qwen3TtsBlock(Block):
             # 打断检查（AL-P1-006）：丢弃已打断 run 的剩余输出
             if ctx.run_id is not None and ctx.run_id in self._cancelled_run_ids:
                 return
-            # Qwen3-TTS 输出 24kHz，降到 16kHz
-            pcm16 = resample_pcm(pcm, source_sr=24000, target_sr=TARGET_SR)
+            # Qwen3-TTS 输出 24kHz float32，降到 16kHz int16
+            pcm16 = _resample_float32_to_int16(pcm, source_sr=24000, target_sr=TARGET_SR)
             if not pcm16:
                 continue
             chunk_size = 1600
@@ -219,7 +238,7 @@ class Qwen3TtsBlock(Block):
         tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
         model = AutoModelForCausalLM.from_pretrained(
             model_name, trust_remote_code=True, torch_dtype=torch.bfloat16
-        ).to(device)  # type: ignore[arg-type]  # transformers stub 重载解析噪音
+        ).to(device)
         model.eval()
         return tokenizer, model
 
@@ -232,25 +251,3 @@ class Qwen3TtsBlock(Block):
         with torch.no_grad():
             audio = self._model.generate(**inputs, voice=voice_ref)
         return [audio.cpu().numpy().tobytes()]
-
-
-# ---------------------------------------------------------------------------
-# helpers（纯逻辑，可单测）
-# ---------------------------------------------------------------------------
-
-
-def resample_pcm(raw: bytes, source_sr: int, target_sr: int) -> bytes:
-    """float32 PCM -> int16 PCM + 降采样（同 openai_compatible 的实现，独立便于单测）。"""
-    if not raw or len(raw) < 4:
-        return b""
-    try:
-        arr = np.frombuffer(raw, dtype=np.float32)
-        ratio = source_sr / target_sr
-        if ratio > 1:
-            n_out = int(len(arr) / ratio)
-            indices = np.linspace(0, len(arr) - 1, n_out).astype(int)
-            arr = arr[indices]
-        arr = np.clip(arr, -1.0, 1.0)
-        return (arr * 32767).astype(np.int16).tobytes()
-    except Exception:
-        return b""

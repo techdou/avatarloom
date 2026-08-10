@@ -134,7 +134,9 @@ class MemoryStore:
 class Mem0MemoryBlock(Block):
     """Mem0 内嵌记忆 Block。orchestrator 鸭子调用 recall/memorize（同 vision 模式）。"""
 
-    _store: MemoryStore | None = None
+    def __init__(self) -> None:
+        super().__init__()
+        self._store: MemoryStore | None = None
 
     @classmethod
     def manifest(cls) -> BlockManifest:

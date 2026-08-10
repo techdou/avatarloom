@@ -571,7 +571,7 @@ class MuseTalkAvatarBlock(Block):
             # 用独立变量名避免与 cv2 分支的 ndarray 复用（mypy 类型推断串扰）
             pil_img = Image.open(io.BytesIO(data))
             if pil_img.mode != "RGB":
-                pil_img = pil_img.convert("RGB")  # type: ignore[assignment]  # PIL stub 返回 Image
+                pil_img = pil_img.convert("RGB")
             pil_buf = io.BytesIO()
             pil_img.save(pil_buf, format="JPEG", quality=88)
             return pil_buf.getvalue()

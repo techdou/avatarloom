@@ -30,11 +30,13 @@ from avatarloom_sdk import Block, BlockContext, BlockManifest, Capability, Resou
 class StaticAvatarBlock(Block):
     """静态肖像 Avatar。"""
 
-    _portrait_b64: str = ""
-    _portrait_path: str = ""
-    _frame_index: int = 0
-    _width: int = 1280
-    _height: int = 720
+    def __init__(self) -> None:
+        super().__init__()
+        self._portrait_b64: str = ""
+        self._portrait_path: str = ""
+        self._frame_index: int = 0
+        self._width: int = 1280
+        self._height: int = 720
 
     @classmethod
     def manifest(cls) -> BlockManifest:

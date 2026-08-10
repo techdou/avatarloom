@@ -23,11 +23,10 @@ from blocks.llm.openai_compatible import OpenAILlmBlock
 class OllamaLlmBlock(Block):
     """Ollama 本地 LLM（OpenAI 兼容）。"""
 
-    _base_url: str = "http://127.0.0.1:11434/v1"
-    _model: str = "qwen2.5:7b"
-
     def __init__(self) -> None:
         super().__init__()
+        self._base_url: str = "http://127.0.0.1:11434/v1"
+        self._model: str = "qwen2.5:7b"
         self._delegate: OpenAILlmBlock | None = None
 
     @classmethod

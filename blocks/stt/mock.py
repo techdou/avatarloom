@@ -14,7 +14,6 @@ import random
 
 from avatarloom_protocol import (
     AUDIO_APPENDED,
-    SPEECH_DETECTED,
     SPEECH_ENDED,
     TRANSCRIPT_COMPLETED,
     Event,
@@ -32,11 +31,13 @@ _DEFAULT_UTTERANCES = [
 class MockSttBlock(Block):
     """Mock 语音识别。"""
 
-    _utterances: list[str] = _DEFAULT_UTTERANCES
-    _mode: str = "random"  # random | fixed
-    _fixed_text: str = "你好"
-    # session -> 上一次选中的索引（random 轮转去重）
-    _last_pick_idx: dict[str, int] = {}
+    def __init__(self) -> None:
+        super().__init__()
+        self._utterances: list[str] = _DEFAULT_UTTERANCES
+        self._mode: str = "random"  # random | fixed
+        self._fixed_text: str = "你好"
+        # session -> 上一次选中的索引（random 轮转去重）
+        self._last_pick_idx: dict[str, int] = {}
 
     @classmethod
     def manifest(cls) -> BlockManifest:
@@ -46,7 +47,7 @@ class MockSttBlock(Block):
             category="stt",
             runtime_type="mock",
             capabilities=Capability(streaming=False, languages=["zh", "en"]),
-            inputs=[AUDIO_APPENDED, SPEECH_DETECTED, SPEECH_ENDED],
+            inputs=[AUDIO_APPENDED, SPEECH_ENDED],
             outputs=[TRANSCRIPT_COMPLETED],
             config_schema={
                 "type": "object",
@@ -73,10 +74,9 @@ class MockSttBlock(Block):
         await ctx.logger.ainfo("stt.mock ready", mode=self._mode)
 
     async def process(self, ctx: BlockContext, event: Event) -> None:
-        # 在 speech.detected 时记录开始；speech.ended 时输出"识别结果"
-        if event.type == SPEECH_DETECTED:
-            # 记录潜在用户输入的"开头"——Mock 不真识别，这里仅记状态
-            return
+        # 在 speech.ended 时输出"识别结果"——inputs 只订阅 AUDIO_APPENDED/SPEECH_ENDED
+        # （对齐 sensevoice/openai_compatible STT，此前多订阅 SPEECH_DETECTED 但收到后
+        # 直接 return，是死分支且让 manifest 误导调用方）
         if event.type == SPEECH_ENDED:
             text = self._pick_text(ctx.session_id)
             await ctx.emit(

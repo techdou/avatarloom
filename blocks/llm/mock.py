@@ -45,13 +45,15 @@ _DEFAULT_REPLIES = {
 class MockLlmBlock(Block):
     """Mock LLM，按规则模板回复。"""
 
-    _replies: dict[str, list[str]] = _DEFAULT_REPLIES
-    _default_reply: list[str] = _DEFAULT_REPLIES["default"]
-    _chunk_delay_ms: int = 80
-    _first_token_emitted: bool = False
-    # session -> generation 计数。reset 时递增，process 记住进入时的 generation，
-    # 循环内若发现不一致说明被 reset 了（用户打断），立即停止吐 token。
-    _interrupt_gen: dict[str, int] = {}
+    def __init__(self) -> None:
+        super().__init__()
+        self._replies: dict[str, list[str]] = _DEFAULT_REPLIES
+        self._default_reply: list[str] = _DEFAULT_REPLIES["default"]
+        self._chunk_delay_ms: int = 80
+        self._first_token_emitted: bool = False
+        # session -> generation 计数。reset 时递增，process 记住进入时的 generation，
+        # 循环内若发现不一致说明被 reset 了（用户打断），立即停止吐 token。
+        self._interrupt_gen: dict[str, int] = {}
 
     @classmethod
     def manifest(cls) -> BlockManifest:

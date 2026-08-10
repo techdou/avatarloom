@@ -15,7 +15,6 @@ from avatarloom_sdk import (
     BlockNotReadyError,
     BlockSetupError,
     Capability,
-    StreamingBlock,
     create_block,
 )
 
@@ -57,8 +56,8 @@ class _DummyVadBlock(Block):
         )
 
 
-class _StreamingTestBlock(StreamingBlock):
-    """测试用流式 Block。"""
+class _StreamingTestBlock(Block):
+    """测试用流式 Block——用 process() 模拟流式（不再有 StreamingBlock 基类）。"""
 
     @classmethod
     def manifest(cls) -> BlockManifest:
@@ -74,12 +73,6 @@ class _StreamingTestBlock(StreamingBlock):
         self._mark_ready()
 
     async def process(self, ctx: BlockContext, event: Event) -> None:
-        pass
-
-    async def open_stream(self, ctx: BlockContext) -> None:
-        pass
-
-    async def push(self, ctx: BlockContext, chunk: object) -> None:
         pass
 
 
@@ -194,22 +187,25 @@ class TestBlockLifecycle:
 
 
 # ---------------------------------------------------------------------------
-# StreamingBlock
+# 流式 Block（用 Block + process() 模拟流式，无单独基类）
 # ---------------------------------------------------------------------------
 
 
 class TestStreamingBlock:
-    async def test_streaming_block_lifecycle(self) -> None:
+    async def test_streaming_block_process_after_setup(self) -> None:
+        """流式 Block 继承 Block，通过 process() 处理流式事件。"""
         block = _StreamingTestBlock()
         ctx = BlockContext(session_id="s1", run_id="r1", workspace_root=".")
         await block.setup(ctx)
-        await block.open_stream(ctx)
-        await block.push(ctx, "hello")
-        await block.flush()
-        await block.close_stream()
+        assert block.is_ready
+        # process() 能处理流式 delta 事件不抛错即可
+        await block.process(
+            ctx,
+            Event(type="llm.text.delta", session_id="s1", source="llm.x"),
+        )
 
     def test_streaming_block_is_subclass_of_block(self) -> None:
-        assert issubclass(StreamingBlock, Block)
+        assert issubclass(_StreamingTestBlock, Block)
 
 
 # ---------------------------------------------------------------------------

@@ -28,6 +28,15 @@ from avatarloom_sdk import (
 )
 
 from blocks import release_gpu_objects
+from blocks._audio import pcm16_to_wav
+
+# 向后兼容别名——下游/单测此前从此模块 import pcm16_to_wav。
+# 实现已统一到 blocks._audio。
+__all__ = [
+    "SenseVoiceSttBlock",
+    "pcm16_to_wav",
+    "parse_sensevoice_output",
+]
 
 
 class SenseVoiceSttBlock(Block):
@@ -181,23 +190,7 @@ class SenseVoiceSttBlock(Block):
 # helpers（纯逻辑，可单测）
 # ---------------------------------------------------------------------------
 
-
-def pcm16_to_wav(pcm: bytes, sample_rate: int, channels: int = 1) -> bytes:
-    """PCM16 raw -> WAV 容器。"""
-    import struct
-
-    bits = 16
-    byte_rate = sample_rate * channels * bits // 8
-    block_align = channels * bits // 8
-    return (
-        b"RIFF"
-        + struct.pack("<I", 36 + len(pcm))
-        + b"WAVEfmt "
-        + struct.pack("<IHHIIHH", 16, 1, channels, sample_rate, byte_rate, block_align, bits)
-        + b"data"
-        + struct.pack("<I", len(pcm))
-        + pcm
-    )
+# pcm16_to_wav 已统一到 blocks._audio（本模块顶部 re-export 保留向后兼容）
 
 
 def parse_sensevoice_output(raw: str) -> tuple[str, dict[str, str]]:

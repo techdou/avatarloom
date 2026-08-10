@@ -19,11 +19,13 @@ from avatarloom_sdk import Block, BlockContext, BlockManifest, Capability
 class MockVisionBlock(Block):
     """Mock 视觉感知。"""
 
-    _descriptions: list[str] = [
-        "我看到了一个模糊的画面。",
-        "画面里似乎有人。",
-        "光线条件一般。",
-    ]
+    def __init__(self) -> None:
+        super().__init__()
+        self._descriptions: list[str] = [
+            "我看到了一个模糊的画面。",
+            "画面里似乎有人。",
+            "光线条件一般。",
+        ]
 
     @classmethod
     def manifest(cls) -> BlockManifest:

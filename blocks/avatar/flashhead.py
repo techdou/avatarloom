@@ -30,15 +30,15 @@ from avatarloom_protocol import (
     Event,
 )
 from avatarloom_sdk import (
+    AvatarState,
     Block,
     BlockContext,
     BlockManifest,
     BlockSetupError,
     Capability,
     ResourceRequirements,
+    transition_avatar_state,
 )
-
-from runtime.orchestrator.avatar_state import AvatarState, transition_avatar_state
 
 logger = logging.getLogger("avatar.flashhead")
 

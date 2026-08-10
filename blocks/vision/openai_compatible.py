@@ -25,10 +25,12 @@ _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 class OpenAIVisionBlock(Block):
     """OpenAI-compatible Vision——多模态图像描述。"""
 
-    _base_url: str = "https://api.openai.com/v1"
-    _api_key: str = ""
-    _model: str = "gpt-4o"
-    _timeout: float = 30.0
+    def __init__(self) -> None:
+        super().__init__()
+        self._base_url: str = "https://api.openai.com/v1"
+        self._api_key: str = ""
+        self._model: str = "gpt-4o"
+        self._timeout: float = 30.0
 
     @classmethod
     def manifest(cls) -> BlockManifest:

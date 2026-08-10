@@ -1,4 +1,43 @@
-/** Control API 客户端。 */
+/**
+ * Control API 客户端。
+ *
+ * Token 来源矩阵：
+ * - 浏览器路径（window defined）：走 Next.js rewrite（/api/control -> 127.0.0.1:8100），
+ *   同源代理由 Next server 端转发，鉴权由 rewrite upstream 或 Control API 的
+ *   loopback 策略兜底（浏览器侧无需 Authorization）。
+ * - SSR 路径（window undefined）：直连 Control API 绝对地址，需读服务端专用密钥
+ *   CONTROL_API_TOKEN 注入 Bearer。生产配 AVATARLOOM_API_TOKEN 后，缺这个会让
+ *   所有 SSR 页面 401。
+ *   注意：不要用 NEXT_PUBLIC_ 前缀——会打进客户端 bundle 泄漏。
+ */
+
+/** API 错误类——带 status 与精简 detail，调用方可按 e.message 渲染或 e instanceof ApiError 精细处理。 */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly detail: string;
+
+  constructor(prefix: string, status: number, detail: string) {
+    super(`${prefix} ${status}: ${detail}`);
+    this.name = "ApiError";
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
+const MAX_DETAIL_LEN = 200;
+
+/** detail 截断，避免把整个后端响应体（含 env 变量名、配置开关等）塞进错误 message 泄漏到 UI。 */
+function trimDetail(raw: string): string {
+  const t = raw.trim();
+  return t.length > MAX_DETAIL_LEN ? t.slice(0, MAX_DETAIL_LEN) + "…" : t;
+}
+
+/** SSR 时返回 Authorization header；浏览器返回空对象（走同源 rewrite 无需凭证）。 */
+function ssrAuthHeaders(): Record<string, string> {
+  if (typeof window !== "undefined") return {};
+  const token = process.env.CONTROL_API_TOKEN;
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
 
 /** 浏览器走 Next rewrite（/api/control -> 8100/api）；SSR 直连 Control API 绝对地址。 */
 const API_BASE = "/api/control";
@@ -13,11 +52,15 @@ function fetchBase(): string {
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(`${fetchBase()}${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
+    headers: {
+      "Content-Type": "application/json",
+      ...ssrAuthHeaders(),
+      ...(init?.headers || {}),
+    },
   });
   if (!r.ok) {
     const detail = await r.text();
-    throw new Error(`API ${r.status}: ${detail}`);
+    throw new ApiError("API", r.status, trimDetail(detail));
   }
   return r.json() as Promise<T>;
 }
@@ -30,7 +73,7 @@ export async function gatewayFetch<T>(path: string, init?: RequestInit): Promise
   });
   if (!r.ok) {
     const detail = await r.text();
-    throw new Error(`Gateway ${r.status}: ${detail}`);
+    throw new ApiError("Gateway", r.status, trimDetail(detail));
   }
   return r.json() as Promise<T>;
 }
@@ -44,10 +87,14 @@ export async function apiUpload<T>(
   const form = new FormData();
   Object.entries(fields).forEach(([k, v]) => form.append(k, v));
   form.append("file", file);
-  const r = await fetch(`${fetchBase()}${path}`, { method: "POST", body: form });
+  const r = await fetch(`${fetchBase()}${path}`, {
+    method: "POST",
+    body: form,
+    headers: { ...ssrAuthHeaders() },
+  });
   if (!r.ok) {
     const detail = await r.text();
-    throw new Error(`Upload ${r.status}: ${detail}`);
+    throw new ApiError("Upload", r.status, trimDetail(detail));
   }
   return r.json() as Promise<T>;
 }

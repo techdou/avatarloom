@@ -20,20 +20,23 @@ from avatarloom_protocol import (
 )
 from avatarloom_sdk import Block, BlockContext, BlockManifest, Capability, ResourceRequirements
 
+from blocks._audio import pcm16_to_wav as _pcm16_to_wav
 from blocks._http_retry import post_with_retry
 
 
 class OpenAISttBlock(Block):
     """OpenAI-compatible STT（Whisper）。"""
 
-    _base_url: str = "https://api.openai.com/v1"
-    _api_key: str = ""
-    _model: str = "whisper-1"
-    _language: str | None = None
-    _timeout: float = 30.0
-    # 累积用户音频 PCM（按 session_id）——实例属性，非类属性。
-    # 此前挂类属性导致多实例/多会话共享同一 dict，音频互相串扰（sensevoice 已修过同款 bug）。
-    _audio_buffers: dict[str, bytearray] | None = None
+    def __init__(self) -> None:
+        super().__init__()
+        self._base_url: str = "https://api.openai.com/v1"
+        self._api_key: str = ""
+        self._model: str = "whisper-1"
+        self._language: str | None = None
+        self._timeout: float = 30.0
+        # 累积用户音频 PCM（按 session_id）——实例属性，非类属性。
+        # 此前挂类属性导致多实例/多会话共享同一 dict，音频互相串扰（sensevoice 已修过同款 bug）。
+        self._audio_buffers: dict[str, bytearray] | None = None
 
     @classmethod
     def manifest(cls) -> BlockManifest:
@@ -138,26 +141,3 @@ def _read_env(name: str) -> str:
     import os
 
     return os.environ.get(name, "")
-
-
-def _pcm16_to_wav(pcm: bytes, sample_rate: int, channels: int = 1) -> bytes:
-    """PCM16 raw -> WAV 容器。"""
-    import struct
-
-    bits_per_sample = 16
-    byte_rate = sample_rate * channels * bits_per_sample // 8
-    block_align = channels * bits_per_sample // 8
-    data_size = len(pcm)
-    # RIFF header
-    return (
-        b"RIFF"
-        + struct.pack("<I", 36 + data_size)
-        + b"WAVE"
-        + b"fmt "
-        + struct.pack(
-            "<IHHIIHH", 16, 1, channels, sample_rate, byte_rate, block_align, bits_per_sample
-        )
-        + b"data"
-        + struct.pack("<I", data_size)
-        + pcm
-    )

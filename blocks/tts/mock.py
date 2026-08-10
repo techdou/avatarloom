@@ -33,14 +33,16 @@ SAMPLE_RATE = 16000
 class MockTtsBlock(Block):
     """Mock TTS — 正弦波合成。"""
 
-    _freq: float = 440.0
-    _ms_per_char: int = 120
-    _chunk_samples: int = 1600  # 100ms @ 16kHz
-    _total_samples: int = 0
-    _first_audio_emitted: bool = False
-    _sentence_buffers: dict[int, str] = {}  # sentence_index -> 累积文本
-    # session -> generation。reset 递增，process 检测不一致即停止合成。
-    _interrupt_gen: dict[str, int] = {}
+    def __init__(self) -> None:
+        super().__init__()
+        self._freq: float = 440.0
+        self._ms_per_char: int = 120
+        self._chunk_samples: int = 1600  # 100ms @ 16kHz
+        self._total_samples: int = 0
+        self._first_audio_emitted: bool = False
+        self._sentence_buffers: dict[int, str] = {}  # sentence_index -> 累积文本
+        # session -> generation。reset 递增，process 检测不一致即停止合成。
+        self._interrupt_gen: dict[str, int] = {}
 
     @classmethod
     def manifest(cls) -> BlockManifest:

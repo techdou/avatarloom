@@ -16,7 +16,6 @@ import base64
 from typing import Any
 
 import httpx
-import numpy as np
 from avatarloom_protocol import (
     LLM_TEXT_DELTA,
     LLM_TEXT_DONE,
@@ -26,6 +25,7 @@ from avatarloom_protocol import (
 )
 from avatarloom_sdk import Block, BlockContext, BlockManifest, Capability, ResourceRequirements
 
+from blocks._audio import resample_float32_to_int16 as _resample_pcm
 from blocks._http_retry import post_with_retry
 
 TARGET_SR = 16000
@@ -34,14 +34,19 @@ TARGET_SR = 16000
 class OpenAITtsBlock(Block):
     """OpenAI-compatible TTS（tts-1）。"""
 
-    _base_url: str = "https://api.openai.com/v1"
-    _api_key: str = ""
-    _model: str = "tts-1"
-    _voice: str = "alloy"
-    _timeout: float = 30.0
-    # 按句累积
-    _sentence_buffers: dict[int, str] = {}
-    _total_samples: int = 0
+    def __init__(self) -> None:
+        super().__init__()
+        self._base_url: str = "https://api.openai.com/v1"
+        self._api_key: str = ""
+        self._model: str = "tts-1"
+        self._voice: str = "alloy"
+        self._timeout: float = 30.0
+        # 按句累积
+        self._sentence_buffers: dict[int, str] = {}
+        self._total_samples: int = 0
+        # 按 run 隔离 + 打断协作（同 voxcpm2 模式，见 AL-P2-003 / AL-P1-006）
+        self._run_id: str | None = None
+        self._cancelled_run_ids: set[str] = set()
 
     @classmethod
     def manifest(cls) -> BlockManifest:
@@ -74,9 +79,9 @@ class OpenAITtsBlock(Block):
         self._voice = str(cfg.get("voice") or "alloy")
         self._total_samples = 0
         self._sentence_buffers = {}
-        # 按 run 隔离 + 打断协作（同 voxcpm2 模式，见 AL-P2-003 / AL-P1-006）
-        self._run_id: str | None = None
-        self._cancelled_run_ids: set[str] = set()
+        # 按 run 隔离 + 打断协作——setup 重新初始化以支持同实例 re-setup
+        self._run_id = None
+        self._cancelled_run_ids = set()
         self._mark_ready()
         await ctx.logger.ainfo("tts.openai-compatible ready", voice=self._voice)
 
@@ -190,23 +195,3 @@ def _read_env(name: str) -> str:
     import os
 
     return os.environ.get(name, "")
-
-
-def _resample_pcm(raw: bytes, source_sr: int, target_sr: int) -> bytes:
-    """float32 PCM -> int16 PCM + 降采样。"""
-    if not raw or len(raw) < 4:
-        return b""
-    try:
-        arr = np.frombuffer(raw, dtype=np.float32)
-        # 降采样
-        ratio = source_sr / target_sr
-        if ratio > 1:
-            n_out = int(len(arr) / ratio)
-            indices = np.linspace(0, len(arr) - 1, n_out).astype(int)
-            arr = arr[indices]
-        # float32 [-1, 1] -> int16
-        arr = np.clip(arr, -1.0, 1.0)
-        int16_arr = (arr * 32767).astype(np.int16)
-        return int16_arr.tobytes()
-    except Exception:
-        return b""

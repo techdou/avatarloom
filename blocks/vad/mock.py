@@ -28,13 +28,15 @@ from avatarloom_sdk import Block, BlockContext, BlockManifest, Capability
 class MockVadBlock(Block):
     """能量阈值 VAD。"""
 
-    # 状态字段（实例级，每个 Session 独立——v0.1 单 Session 简化）
-    _energy_threshold: float = 300.0
-    _silence_chunks_to_end: int = 8
-    _current_silence_count: int = 0
-    _is_speaking: bool = False
-    _min_speech_chunks: int = 2
-    _speech_chunk_count: int = 0
+    def __init__(self) -> None:
+        super().__init__()
+        # 状态字段（实例级，每个 Session 独立——v0.1 单 Session 简化）
+        self._energy_threshold: float = 300.0
+        self._silence_chunks_to_end: int = 8
+        self._current_silence_count: int = 0
+        self._is_speaking: bool = False
+        self._min_speech_chunks: int = 2
+        self._speech_chunk_count: int = 0
 
     @classmethod
     def manifest(cls) -> BlockManifest:

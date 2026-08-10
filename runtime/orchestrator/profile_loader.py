@@ -19,7 +19,7 @@ from typing import Any
 import yaml
 
 from runtime.orchestrator.config import BlockRef, OrchestratorConfig, SyncConfig
-from runtime.orchestrator.orchestrator import BLOCK_REGISTRY
+from runtime.orchestrator.registry import BLOCK_REGISTRY
 
 _ENV_PATTERN = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}")
 

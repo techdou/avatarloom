@@ -30,6 +30,7 @@ from avatarloom_sdk import (
 )
 
 from blocks import release_gpu_objects
+from blocks._audio import resample_48k_to_16k as _resample_48k_to_16k
 
 # 流式切块粒度：512 采样 = 32ms @16kHz（对齐 VoxEMW blocksize）
 BLOCK_SIZE = 512
@@ -53,23 +54,27 @@ class VoxCpm2TtsBlock(Block):
     - prompt cache 预编码 persona voice
     """
 
-    _model: Any = None
-    _device: str = "cuda"
-    _rate: float = 0.886  # 语速补偿
-    _streaming: bool = True
-    _cfg_value: float = 2.0
-    _inference_timesteps: int = 10
-    _normalize: bool = False
-    _denoise: bool = False
-    _prompt_text: str = ""  # 参考音频对应的文本（与 voiceRef 成对，音色克隆锚点）
     def __init__(self) -> None:
         super().__init__()
         self._model: Any = None
+        self._device: str = "cuda"
+        self._rate: float = 0.886  # 语速补偿
+        self._streaming: bool = True
+        self._cfg_value: float = 2.0
+        self._inference_timesteps: int = 10
+        self._normalize: bool = False
+        self._denoise: bool = False
+        self._prompt_text: str = ""  # 参考音频对应的文本（与 voiceRef 成对，音色克隆锚点）
+        self._block_size: int = BLOCK_SIZE
+        self._default_voice_ref: str | None = None
         self._voice_caches: dict[str, Any] = {}
         self._sentence_buffers: dict[int, str] = {}
         self._total_samples = 0
         self._run_id: str | None = None
         self._cancelled_run_ids: set[str] = set()
+        # GPU 推理并发锁——PyTorch 模型非线程安全，asyncio.to_thread 推理期间
+        # 并发调用会撞显存/状态（同 musetalk._worker_lock 模式）
+        self._infer_lock = asyncio.Lock()
 
     @classmethod
     def manifest(cls) -> BlockManifest:
@@ -203,15 +208,15 @@ class VoxCpm2TtsBlock(Block):
 
         # 流式：边收 48k chunk 边重采样 16k，攒够 BLOCK_SIZE 就 emit。
         # 首 chunk 一到即发出，不必等整句合成完（对齐 VoxEMW blocksize=512）。
-        import numpy as np
-
         buf16 = np.empty(0, dtype=np.int16)
         block = self._block_size  # 512 采样 = 32ms @16k（profile 可配）
         phase = 0  # 跨 chunk 降采样相位（防边界爆音）
         try:
             while True:
                 # 每次推进同步 generator 都放到线程，GPU 推理不会卡住事件循环。
-                wav48 = await asyncio.to_thread(_next_generator_item, gen)
+                # 加锁：PyTorch 模型非线程安全，并发 to_thread 推理会撞显存/状态。
+                async with self._infer_lock:
+                    wav48 = await asyncio.to_thread(_next_generator_item, gen)
                 if wav48 is _GENERATOR_DONE:
                     break
                 # 打断检查：当前 chunk 完成后立即丢弃后续输出。
@@ -342,50 +347,3 @@ class VoxCpm2TtsBlock(Block):
             kwargs["prompt_wav_path"] = voice_ref
             kwargs["prompt_text"] = self._prompt_text
         yield from self._model.generate_streaming(text, **kwargs)
-
-
-def _resample_48k_to_16k(
-    wav48: np.ndarray,
-    rate: float = 1.0,
-    phase: int = 0,
-) -> tuple[np.ndarray, int]:
-    """48kHz float32 -> 16kHz int16，带语速补偿与跨 chunk 相位连续。
-
-    rate<1 降速（如 0.886 = 克隆固有提速 ~12% 的补偿），保持音调。
-    用 np.interp 线性插值，避免裸抽点的混叠（对齐 VoxEMW atempo 语义，
-    但纯 numpy 无 ffmpeg 进程依赖）。
-
-    Args:
-        wav48: 单个 48k chunk（float32 1D）。
-        rate: 语速补偿系数。
-        phase: 降采样相位（已消费 48k 样本数 mod 3）。流式时必须跨 chunk
-            传递，否则每 chunk 独立从 0 取样，边界处相位跳变产生爆音
-            （chunk 长度几乎必然不是 3 的倍数）。
-
-    Returns:
-        (pcm16, new_phase)：16k int16 数组 + 更新后的相位。
-    """
-    import numpy as np
-
-    if wav48 is None or len(wav48) == 0:
-        return np.empty(0, dtype=np.int16), phase
-    try:
-        arr = np.asarray(wav48, dtype=np.float32).reshape(-1)
-        n48 = len(arr)
-        # 48k -> 16k：从补足相位的偏移开始每 3 取 1，保证跨 chunk 连续。
-        # phase = 已消费 48k 样本数 mod 3；本 chunk 需跳过 (3-phase)%3 个样本
-        # 使取样网格对齐绝对时间轴（整段与分块等价）。
-        skip = (3 - phase) % 3
-        idx_16k = np.arange(skip, n48, 3, dtype=np.int64)
-        arr16 = arr[idx_16k]
-        new_phase = (phase + n48) % 3
-        # rate 语速补偿：rate<1 拉长（插值出更多点），rate>1 压缩
-        if rate != 1.0 and len(arr16) > 1:
-            n_out = max(1, round(len(arr16) / rate))
-            x_old = np.linspace(0.0, 1.0, len(arr16))
-            x_new = np.linspace(0.0, 1.0, n_out)
-            arr16 = np.interp(x_new, x_old, arr16).astype(np.float32)
-        arr16 = np.clip(arr16, -1.0, 1.0)
-        return (arr16 * 32767).astype(np.int16), new_phase
-    except Exception:
-        return np.empty(0, dtype=np.int16), phase

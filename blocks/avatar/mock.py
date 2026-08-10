@@ -33,8 +33,10 @@ _PLACEHOLDER_JPEG_B64 = (
 class MockAvatarBlock(Block):
     """Mock Avatar — 占位 JPEG 帧。"""
 
-    _frame_index: int = 0
-    _is_speaking: bool = False
+    def __init__(self) -> None:
+        super().__init__()
+        self._frame_index: int = 0
+        self._is_speaking: bool = False
 
     @classmethod
     def manifest(cls) -> BlockManifest:

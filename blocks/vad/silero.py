@@ -41,17 +41,22 @@ _SAMPLE_RATE = 16000
 class SileroVadBlock(Block):
     """Silero VAD——基于神经网络的语音活动检测。"""
 
-    _threshold: float = _DEFAULT_THRESHOLD
-    _min_silence_samples: int = 0
-    _model: Any = None  # torch.jit.ScriptModule，运行时加载
-    _h: Any = None  # LSTM hidden state
-    _forward_has_state: bool = True  # 探测 forward 签名（见 _load_model）
-    _is_speaking: bool = False
-    _silence_count: int = 0
-    _device: str = "cpu"  # 模型所在设备，_infer 的输入 tensor 需对齐
-    # 跨事件尾部样本结转——此前不足 512 的尾巴直接丢弃，每事件丢最多 32ms 音频，
-    # 词尾可能被切。carry buffer 拼到下个事件的首部再切。
-    _carry: np.ndarray | None = None
+    def __init__(self) -> None:
+        super().__init__()
+        self._threshold: float = _DEFAULT_THRESHOLD
+        self._min_silence_samples: int = 0
+        self._model: Any = None  # torch.jit.ScriptModule，运行时加载
+        self._h: Any = None  # LSTM hidden state
+        self._forward_has_state: bool = True  # 探测 forward 签名（见 _load_model）
+        self._is_speaking: bool = False
+        self._silence_count: int = 0
+        self._device: str = "cpu"  # 模型所在设备，_infer 的输入 tensor 需对齐
+        # 跨事件尾部样本结转——此前不足 512 的尾巴直接丢弃，每事件丢最多 32ms 音频，
+        # 词尾可能被切。carry buffer 拼到下个事件的首部再切。
+        self._carry: np.ndarray | None = None
+        # GPU 推理并发锁——PyTorch JIT 模型非线程安全，asyncio.to_thread 并发
+        # 推理会撞状态（同 musetalk._worker_lock 模式）
+        self._infer_lock = asyncio.Lock()
 
     @classmethod
     def manifest(cls) -> BlockManifest:
@@ -123,9 +128,11 @@ class SileroVadBlock(Block):
             pcm = np.concatenate([self._carry, pcm])
             self._carry = None
         # Silero 要求 512 samples（16kHz）为一个 chunk；
-        # torch 前向 + .item() 同步是阻塞调用——逐 chunk offload，不卡事件循环
+        # torch 前向 + .item() 同步是阻塞调用——逐 chunk offload，不卡事件循环。
+        # 加锁：PyTorch 模型非线程安全，并发 to_thread 推理会撞 LSTM 状态/显存。
         for chunk in self._chunk_with_carry(pcm, 512):
-            prob, self._h = await asyncio.to_thread(self._infer, chunk, self._h)
+            async with self._infer_lock:
+                prob, self._h = await asyncio.to_thread(self._infer, chunk, self._h)
             await self._update_state(ctx, prob)
 
     async def _update_state(self, ctx: BlockContext, prob: float) -> None:

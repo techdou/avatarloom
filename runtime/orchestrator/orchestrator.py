@@ -53,11 +53,19 @@ from avatarloom_sdk import (
     BlockSetupError,
 )
 
+# Block ID -> entrypoint 映射已下沉到 registry.py（纯数据模块），
+# 避免 profile_loader 等配置层反向依赖 runtime 核心。这里 re-export 保持
+# `from runtime.orchestrator.orchestrator import BLOCK_REGISTRY, register_block` 兼容。
 from runtime.event_bus import BackpressurePolicy, EventBus
 from runtime.orchestrator.config import OrchestratorConfig
+from runtime.orchestrator.registry import BLOCK_REGISTRY, register_block
 from runtime.session import Session, SessionManager
 
 logger = logging.getLogger(__name__)
+
+# 显式声明 re-export，避免 ruff F401 误报（这两个符号本模块内部不使用，
+# 纯粹为外部 `from runtime.orchestrator.orchestrator import ...` 兼容而导入）。
+__all__ = ["BLOCK_REGISTRY", "register_block"]
 
 # 视觉触发词：用户说出这些词 → 下行 vision.request 让浏览器截帧分析
 _VISION_TRIGGER_RE = re.compile(r"看看|评价|describe|looks?\s+like", re.IGNORECASE)
@@ -94,37 +102,6 @@ CATEGORY_LLM = "llm"
 CATEGORY_TTS = "tts"
 CATEGORY_AVATAR = "avatar"
 CATEGORY_VISION = "vision"
-
-
-# Block ID -> entrypoint 映射。v0.1 用 Mock 全部注册。
-# 真实 Adapter 在阶段 5/6/8 增补。
-BLOCK_REGISTRY: dict[str, str] = {
-    "vad.mock": "blocks.vad.mock:MockVadBlock",
-    "stt.mock": "blocks.stt.mock:MockSttBlock",
-    "llm.mock": "blocks.llm.mock:MockLlmBlock",
-    "tts.mock": "blocks.tts.mock:MockTtsBlock",
-    "avatar.mock": "blocks.avatar.mock:MockAvatarBlock",
-    "vision.mock": "blocks.vision.mock:MockVisionBlock",
-    # 真实 Adapter（阶段 5+ 实装，这里先注册 entrypoint）
-    "vad.silero": "blocks.vad.silero:SileroVadBlock",
-    "stt.sensevoice": "blocks.stt.sensevoice:SenseVoiceSttBlock",
-    "stt.openai-compatible": "blocks.stt.openai_compatible:OpenAISttBlock",
-    "llm.openai-compatible": "blocks.llm.openai_compatible:OpenAILlmBlock",
-    "llm.ollama": "blocks.llm.ollama:OllamaLlmBlock",
-    "tts.openai-compatible": "blocks.tts.openai_compatible:OpenAITtsBlock",
-    "tts.qwen3": "blocks.tts.qwen3:Qwen3TtsBlock",
-    "tts.voxcpm2": "blocks.tts.voxcpm2:VoxCpm2TtsBlock",
-    "avatar.static": "blocks.avatar.static:StaticAvatarBlock",
-    "avatar.musetalk": "blocks.avatar.musetalk:MuseTalkAvatarBlock",
-    "avatar.flashhead": "blocks.avatar.flashhead:FlashHeadAvatarBlock",
-    "vision.openai-compatible": "blocks.vision.openai_compatible:OpenAIVisionBlock",
-    "memory.mem0-local": "blocks.memory.mem0_local:Mem0MemoryBlock",
-}
-
-
-def register_block(block_id: str, entrypoint: str) -> None:
-    """第三方注册新 Block。"""
-    BLOCK_REGISTRY[block_id] = entrypoint
 
 
 class Orchestrator:

@@ -266,8 +266,14 @@ class ArtifactOut(ORMBase):
 
 class SecretReferenceCreate(BaseModel):
     id: str = Field(min_length=1, max_length=64, pattern=RESOURCE_ID_PATTERN)
-    name: str
-    env_var: str
+    name: str = Field(min_length=1, max_length=128)
+    # POSIX 环境变量名：大写字母/下划线开头，后续允许字母数字下划线。
+    # 防止任意字符串借 os.environ.get() 探测任意 env 变量名（信息泄漏）。
+    env_var: str = Field(
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Z_][A-Z0-9_]{0,127}$",
+    )
     description: str | None = None
 
 

@@ -323,35 +323,6 @@ class Block(abc.ABC):
 
 
 # ---------------------------------------------------------------------------
-# StreamingBlock 基类
-# ---------------------------------------------------------------------------
-
-
-class StreamingBlock(Block):
-    """流式 Block（LLM/TTS/Avatar）。
-
-    生命周期：
-        open_stream(session) -> 接受多个 push(chunk) -> flush() -> close_stream()
-
-    用 anyio.CancelScope 支持打断/取消。
-    """
-
-    @abc.abstractmethod
-    async def open_stream(self, ctx: BlockContext) -> None:
-        """开始一个流式会话。"""
-
-    @abc.abstractmethod
-    async def push(self, ctx: BlockContext, chunk: Any) -> None:
-        """推入一个 chunk（文本 delta / PCM chunk / 控制消息）。"""
-
-    async def flush(self) -> None:
-        """刷出未完成的输出。默认空实现。"""
-
-    async def close_stream(self) -> None:
-        """关闭流，释放本次会话资源。默认空实现。"""
-
-
-# ---------------------------------------------------------------------------
 # Block 工厂
 # ---------------------------------------------------------------------------
 
@@ -437,7 +408,6 @@ __all__ = [
     "Capability",
     "HealthStatus",
     "ResourceRequirements",
-    "StreamingBlock",
     "Timer",
     "create_block",
     "now_ms",

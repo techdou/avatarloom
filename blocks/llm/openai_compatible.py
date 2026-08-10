@@ -44,13 +44,19 @@ _SENTENCE_END_RE = re.compile(r"[。！？!?\.…\n]")
 class OpenAILlmBlock(Block):
     """OpenAI-compatible chat-completions LLM。"""
 
-    _base_url: str = "https://api.openai.com/v1"
-    _api_key: str = ""
-    _model: str = "gpt-4o-mini"
-    _timeout: float = 30.0
-    _max_tokens: int = 512
-    _temperature: float = 0.7
-    _disable_thinking: bool = False  # DeepSeek 等推理模型用
+    def __init__(self) -> None:
+        super().__init__()
+        self._base_url: str = "https://api.openai.com/v1"
+        self._api_key: str = ""
+        self._model: str = "gpt-4o-mini"
+        self._timeout: float = 30.0
+        self._max_tokens: int = 512
+        self._temperature: float = 0.7
+        self._disable_thinking: bool = False  # DeepSeek 等推理模型用
+        # 打断协作状态（AL-P1-006）——实例级，不能放类属性（可变对象跨实例共享）
+        self._interrupted_run_ids: set[str] = set()
+        self._active_run_id: str | None = None
+        self._active_resp: httpx.Response | None = None
 
     @classmethod
     def manifest(cls) -> BlockManifest:
@@ -90,10 +96,10 @@ class OpenAILlmBlock(Block):
         self._disable_thinking = bool(cfg.get("disableThinking", False))
         # 请求超时（秒）——云端 LLM 首 token 可能慢，可配置防误时
         self._timeout = float(cfg.get("timeoutS", self._timeout))
-        # 打断协作状态（AL-P1-006）——实例级，不能放类属性（可变对象跨实例共享）
-        self._interrupted_run_ids: set[str] = set()
-        self._active_run_id: str | None = None
-        self._active_resp: httpx.Response | None = None
+        # 打断协作状态（AL-P1-006）——实例级状态，setup 重新初始化以支持同实例 re-setup
+        self._interrupted_run_ids = set()
+        self._active_run_id = None
+        self._active_resp = None
         self._mark_ready()
         await ctx.logger.ainfo(
             "llm.openai-compatible ready",
