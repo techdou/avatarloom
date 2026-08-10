@@ -30,9 +30,9 @@ avatarloom/
 │   ├── sdk-python/        # Block SDK（抽象基类 + 生命周期契约）
 │   └── sdk-typescript/    # TS SDK（gen_protocol.py 生成）
 ├── runtime/
-│   ├── orchestrator/      # 编排核心（Run / 打断 / Vision 同轮 / Filler 垫音）
+│   ├── orchestrator/      # 编排核心 + coordinator（Vision / Filler / Memory）
 │   ├── session/           # 显式状态机
-│   ├── event_bus/         # 事件总线（背压策略）
+│   ├── event_bus/         # 事件总线（并行投递 + 背压策略）
 │   └── recorder/          # Run Recorder（事件流 / 指标 / 产物落盘）
 ├── blocks/                # vad / stt / llm / tts / avatar / vision / memory ...
 ├── profiles/              # Runtime Profile（YAML 声明式组合）
@@ -129,7 +129,7 @@ docker compose -f deploy/docker/docker-compose.yml up -d --build
 
 - **密钥/私密信息不入库**：`.env` 系列、`*.key`/`*.pem`/`*.p12` 等均被 `.gitignore` 排除，只有 `*.example` 模板入库
 - **开发软件配置目录不上传**：`.venv/`、`.zcode/`、`.omx/`、`.agents/`、IDE 配置、`.npmrc` 等均不入库
-- **文档不纳入版本控制**：`docs/` 仅本地维护，面向用户的说明统一在根目录 `README.md`
+- **文档不纳入版本控制**：`docs/` 和 `CHANGELOG.md` 仅本地维护，面向用户的说明统一在根目录 `README.md`
 
 ## 许可证
 

@@ -249,7 +249,7 @@ def _drain_control(ws_session) -> list[dict]:
     msgs = []
     while True:
         try:
-            msgs.append(ws_session._control_queue.get_nowait())
+            msgs.append(ws_session.bridge._control_queue.get_nowait())
         except asyncio.QueueEmpty:
             return msgs
 

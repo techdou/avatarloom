@@ -123,8 +123,12 @@ class PersonaCreate(BaseModel):
     prompt: str = ""
     package_path: str | None = None
     voice_ref: dict[str, Any] | None = None
-    avatar_ref: dict[str, Any] | None = None
-    avatar_id: str | None = None
+    avatar_ref: dict[str, Any] | None = Field(
+        default=None,
+        deprecated=True,
+        description="[Deprecated] 旧的 avatar JSON 引用；请改用 avatar_id。",
+    )
+    avatar_id: str | None = Field(default=None, description="权威 avatar 引用（外键）。")
     behavior: dict[str, Any] | None = None
 
 
@@ -133,8 +137,12 @@ class PersonaUpdate(BaseModel):
     label: str | None = None
     prompt: str | None = None
     voice_ref: dict[str, Any] | None = None
-    avatar_ref: dict[str, Any] | None = None
-    avatar_id: str | None = None
+    avatar_ref: dict[str, Any] | None = Field(
+        default=None,
+        deprecated=True,
+        description="[Deprecated] 旧的 avatar JSON 引用；请改用 avatar_id。",
+    )
+    avatar_id: str | None = Field(default=None, description="权威 avatar 引用（外键）。")
     behavior: dict[str, Any] | None = None
 
 
@@ -146,6 +154,7 @@ class PersonaOut(ORMBase):
     prompt: str
     package_path: str | None
     voice_ref: dict[str, Any] | None
+    # [Deprecated] 旧的 avatar JSON 引用；仅用于读出存量数据。权威引用是 avatar_id。
     avatar_ref: dict[str, Any] | None
     avatar_id: str | None
     behavior: dict[str, Any] | None

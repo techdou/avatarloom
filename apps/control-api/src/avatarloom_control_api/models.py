@@ -115,9 +115,10 @@ class Persona(Base):
     package_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
     # voice 引用（JSON）
     voice_ref: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    # avatar_ref 保留向后兼容；新数据用 avatar_id
+    # [DEPRECATED] avatar_ref 保留向后兼容；权威引用是 avatar_id。
+    # 存量数据可能含 {id, portrait, ...}；新数据一律用 avatar_id 外键。
     avatar_ref: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    # 显式外键引用 Avatar 实体（推荐用法）
+    # 权威 Avatar 引用（显式外键）。avatar_id 与 avatar_ref 同时存在时以本字段为准。
     avatar_id: Mapped[str | None] = mapped_column(
         ForeignKey("avatars.id", ondelete="SET NULL"), nullable=True
     )

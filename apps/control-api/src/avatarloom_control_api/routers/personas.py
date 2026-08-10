@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,7 +17,24 @@ from avatarloom_control_api.schemas import (
     PersonaUpdate,
 )
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
+
+
+def _warn_conflicting_avatar_refs(persona_id: str, payload_dict: dict[str, object]) -> None:
+    """avatar_id 与 avatar_ref 同时设置时记 warning：avatar_id 优先，avatar_ref 被忽略。
+
+    存量数据可能两者都有（历史遗留），不拒绝、不报 422——只记日志提示收敛到 avatar_id。
+    """
+    if payload_dict.get("avatar_id") is not None and payload_dict.get("avatar_ref") is not None:
+        logger.warning(
+            "Persona %s 同时设置 avatar_id=%r 与 avatar_ref=%r；以 avatar_id 为准，"
+            "avatar_ref 被忽略。请迁移到仅使用 avatar_id。",
+            persona_id,
+            payload_dict["avatar_id"],
+            payload_dict["avatar_ref"],
+        )
 
 
 @router.get("", response_model=list[PersonaOut])
@@ -42,6 +61,7 @@ async def get_persona(persona_id: str, db: AsyncSession = Depends(get_db)) -> Pe
 async def create_persona(payload: PersonaCreate, db: AsyncSession = Depends(get_db)) -> Persona:
     if await db.get(Persona, payload.id) is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="Persona already exists")
+    _warn_conflicting_avatar_refs(payload.id, payload.model_dump())
     persona = Persona(**payload.model_dump())
     db.add(persona)
     await db.commit()
@@ -56,7 +76,9 @@ async def update_persona(
     persona = await db.get(Persona, persona_id)
     if persona is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Persona not found")
-    for k, v in payload.model_dump(exclude_unset=True).items():
+    update_dict = payload.model_dump(exclude_unset=True)
+    _warn_conflicting_avatar_refs(persona_id, update_dict)
+    for k, v in update_dict.items():
         setattr(persona, k, v)
     await db.commit()
     await db.refresh(persona)

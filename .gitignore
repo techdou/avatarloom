@@ -92,6 +92,8 @@ alembic_versions_local/
 # 所有 docs/ 下的文档仅本地维护，不纳入版本控制。
 # 面向用户的说明统一放项目根目录 README.md。
 docs/
+# CHANGELOG 记录内部开发过程（含 AL-xxx ticket 号），不入库
+CHANGELOG.md
 
 # ---- 模型与素材（不入库，体积大且含可识别信息）----
 models/
@@ -114,3 +116,4 @@ avatarloom-v*/
 *.bak
 .cache/
 vendor/
+.pytest_tmp/
