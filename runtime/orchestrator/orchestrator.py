@@ -16,18 +16,18 @@
         -> TTS -> tts.audio.delta/completed
         -> Avatar -> avatar.speech_frame/idle_frame
         -> browser（双写：TTS audio 也直发浏览器播放）
+
+职责拆分（H1）：Vision/Filler/Memory 三组状态和方法已抽到 coordinators.py 的
+独立 coordinator 类。Orchestrator 保留 Block 装配/降级、EventBus 连线、状态机
+驱动、session 管理、persona 切换、打断处理。coordinator 通过 @property 转发，
+外部访问 orch._filler_tasks 等保持透明（测试不需改）。
 """
 
 from __future__ import annotations
 
 import asyncio
-import base64
 import logging
-import re
-import time
-import uuid
 from collections.abc import Awaitable, Callable
-from pathlib import Path
 from typing import Any
 
 from avatarloom_protocol import (
@@ -42,7 +42,6 @@ from avatarloom_protocol import (
     TRANSCRIPT_COMPLETED,
     TTS_AUDIO_COMPLETED,
     TTS_AUDIO_DELTA,
-    VISION_REQUEST,
     Event,
     State,
 )
@@ -57,51 +56,39 @@ from avatarloom_sdk import (
 # 避免 profile_loader 等配置层反向依赖 runtime 核心。这里 re-export 保持
 # `from runtime.orchestrator.orchestrator import BLOCK_REGISTRY, register_block` 兼容。
 from runtime.event_bus import BackpressurePolicy, EventBus
+from runtime.orchestrator._helpers import (
+    _BLOCK_SHUTDOWN_TIMEOUT_S,
+    _VISION_TRIGGER_RE,
+    CATEGORY_AVATAR,
+    CATEGORY_LLM,
+    CATEGORY_STT,
+    CATEGORY_TTS,
+    CATEGORY_VAD,
+    CATEGORY_VISION,
+)
 from runtime.orchestrator.config import OrchestratorConfig
+from runtime.orchestrator.coordinators import (
+    FillerPlayer,
+    MemoryBridge,
+    VisionCoordinator,
+)
 from runtime.orchestrator.registry import BLOCK_REGISTRY, register_block
 from runtime.session import Session, SessionManager
 
 logger = logging.getLogger(__name__)
 
-# 显式声明 re-export，避免 ruff F401 误报（这两个符号本模块内部不使用，
+# 显式声明 re-export，避免 ruff F401 误报（这些符号本模块内部不使用或仅 re-export，
 # 纯粹为外部 `from runtime.orchestrator.orchestrator import ...` 兼容而导入）。
-__all__ = ["BLOCK_REGISTRY", "register_block"]
-
-# 视觉触发词：用户说出这些词 → 下行 vision.request 让浏览器截帧分析
-_VISION_TRIGGER_RE = re.compile(r"看看|评价|describe|looks?\s+like", re.IGNORECASE)
-
-# 视觉上下文有效期（秒）：超过后不再注入 LLM
-_VISION_CONTEXT_TTL_S = 30.0
-# Vision 手动帧最小调用间隔（AL-P1-011 节流）——无同轮等待的帧限频
-_VISION_MIN_INTERVAL_S = 2.0
-
-# 单个 Block shutdown 的最长等待：GPU 模型释放/子进程终止正常秒级完成，
-# 卡死（如子进程僵死、死锁）时跳过该 block 继续清理其余资源，不拖垮整体关停
-_BLOCK_SHUTDOWN_TIMEOUT_S = 15.0
-
-
-def _read_wav_16k_mono_s16(path: Path) -> bytes | None:
-    """读取 16kHz 单声道 s16 wav，返回裸 PCM；格式不符返回 None（VoxEMW 同款严格校验）。"""
-    try:
-        import wave
-
-        with wave.open(str(path), "rb") as w:
-            if w.getframerate() != 16000 or w.getnchannels() != 1 or w.getsampwidth() != 2:
-                logger.warning("垫音格式不符（需 16k mono s16），跳过: %s", path)
-                return None
-            return w.readframes(w.getnframes())
-    except Exception as e:
-        logger.warning("垫音读取失败 %s: %s", path, e)
-        return None
-
-
-# Block category 标准名（和 Profile yaml 的 key 对齐）
-CATEGORY_VAD = "vad"
-CATEGORY_STT = "stt"
-CATEGORY_LLM = "llm"
-CATEGORY_TTS = "tts"
-CATEGORY_AVATAR = "avatar"
-CATEGORY_VISION = "vision"
+__all__ = [
+    "BLOCK_REGISTRY",
+    "register_block",
+    "CATEGORY_VAD",
+    "CATEGORY_STT",
+    "CATEGORY_LLM",
+    "CATEGORY_TTS",
+    "CATEGORY_AVATAR",
+    "CATEGORY_VISION",
+]
 
 
 class Orchestrator:
@@ -138,27 +125,55 @@ class Orchestrator:
         self._block_configs: dict[str, dict[str, Any]] = {}
         # 失败/降级记录
         self.degraded_blocks: dict[str, str] = {}  # category -> fallback block_id
-        # Persona 上下文（session_id -> dict），切换 Persona 时更新
+        # Persona 上下文（session_id -> dict），切换 Persona 时更新。
+        # 跨 coordinator 共享（LLM handler / Vision / Memory 都读），留 Orchestrator 上。
         self._persona_contexts: dict[str, dict[str, Any]] = {}
-        # 视觉感知上下文：session_id -> {"description", "request_id", "ts"}，
-        # 单次消费 + TTL（_VISION_CONTEXT_TTL_S），供 LLM 下一轮回复注入
-        self._vision_contexts: dict[str, dict[str, Any]] = {}
-        # 同轮 Vision 等待：session_id -> (request_id, Future)。
-        # 触发词命中后挂起，ingest_vision_frame/超时/打断时 resolve。
-        self._vision_pending: dict[str, tuple[str, asyncio.Future[None]]] = {}
-        # Vision 调用并发锁与节流（AL-P1-011）：同 session 同时仅 1 个多模态调用；
-        # 无同轮等待的手动帧受最小间隔限制——任意频率帧都会触发远程 API（费用风险）
-        self._vision_locks: dict[str, asyncio.Lock] = {}
-        self._vision_last_call: dict[str, float] = {}
-        # Filler 垫音（VoxEMW 移植）：persona_id -> [(pcm_bytes, label)]；
-        # session_id -> 播放 task。转写完成即播，盖 LLM 首句空白
-        self._filler_cache: dict[str, list[tuple[bytes, str]]] = {}
-        self._filler_tasks: dict[str, asyncio.Task[None]] = {}
-        self._filler_last_idx: dict[str, int] = {}
-        # Memory 记忆（Mem0 移植）：session_id -> 本轮用户文本（llm.done 时凑对写入）
-        self._memory_pending_users: dict[str, str] = {}
+
+        # 协调器（H1 拆分）——各持 self 引用，通过它访问 blocks/config/sessions/emit。
+        # 状态字典在 coordinator 内部；下方 @property 转发保持外部访问透明。
+        self._vision_coord = VisionCoordinator(self)
+        self._filler = FillerPlayer(self)
+        self._memory = MemoryBridge(self)
+
         self._setup_done = False
         self._lock = asyncio.Lock()
+
+    # ------------------------------------------------------------------
+    # 转发属性（让 orch._filler_tasks / _vision_pending / _memory_pending_users
+    # 等外部访问透明——测试直接读这些私有属性，coordinator 拆分后不能破坏）
+    # ------------------------------------------------------------------
+
+    @property
+    def _filler_tasks(self) -> dict[str, asyncio.Task[None]]:
+        return self._filler._tasks
+
+    @property
+    def _filler_cache(self) -> dict[str, list[tuple[bytes, str]]]:
+        return self._filler._cache
+
+    @property
+    def _filler_last_idx(self) -> dict[str, int]:
+        return self._filler._last_idx
+
+    @property
+    def _vision_pending(self) -> dict[str, tuple[str, asyncio.Future[None]]]:
+        return self._vision_coord._pending
+
+    @property
+    def _vision_locks(self) -> dict[str, asyncio.Lock]:
+        return self._vision_coord._locks
+
+    @property
+    def _vision_last_call(self) -> dict[str, float]:
+        return self._vision_coord._last_call
+
+    @property
+    def _vision_contexts(self) -> dict[str, dict[str, Any]]:
+        return self._vision_coord._contexts
+
+    @property
+    def _memory_pending_users(self) -> dict[str, str]:
+        return self._memory._pending_users
 
     # ------------------------------------------------------------------
     # 生命周期
@@ -198,7 +213,8 @@ class Orchestrator:
     async def shutdown(self) -> None:
         """关闭所有 Block 和 EventBus。
 
-        顺序很重要：先关 sessions（会 emit closed 事件）→ 再关 EventBus。
+        顺序很重要：先清理 session 派生状态（filler/vision/字典）→ 关 sessions
+        （会 emit closed 事件）→ 关 Block → 关 EventBus。
         否则 session.close() 往已关闭的 bus publish 会抛。
 
         每一步故障隔离：单个 block 异常/超时/误抛 CancelledError 都只记日志，
@@ -286,6 +302,8 @@ class Orchestrator:
 
         if persona_id:
             try:
+                from pathlib import Path
+
                 from blocks.persona.loader import load_persona
 
                 persona = load_persona(
@@ -298,7 +316,7 @@ class Orchestrator:
 
         # 记忆召回（Mem0 移植）：一次性追加到 persona instructions，不进语音回合。
         # store 未启用时 recall 返回 ""——零开销静默跳过。
-        memory_block = await self._recall_memory(session)
+        memory_block = await self._memory.recall(session)
         if memory_block:
             persona_ctx = self._persona_contexts.setdefault(session.session_id, {})
             persona_ctx["instructions"] = (persona_ctx.get("instructions") or "") + (
@@ -319,18 +337,11 @@ class Orchestrator:
         end_session 和 shutdown 共用——否则 shutdown 只调 session.close()
         不走这条路径，filler task / vision pending future / 各状态字典全部泄漏。
         """
-        # 取消挂起的同轮 Vision 等待（等待方收到 CancelledError 后跳过 LLM）
-        pending = self._vision_pending.pop(session_id, None)
-        if pending is not None and not pending[1].done():
-            pending[1].cancel()
-        # 取消垫音 task——否则 session 关闭后 filler 继续 emit tts.audio.delta
-        self._cancel_filler(session_id)
-        # 清空 session 级状态字典
+        self._vision_coord.cleanup_session(session_id)
+        self._filler.cleanup_session(session_id)
+        self._memory.cleanup_session(session_id)
+        # persona_contexts 跨 coordinator 共享，Orchestrator 自己清
         self._persona_contexts.pop(session_id, None)
-        self._memory_pending_users.pop(session_id, None)
-        self._vision_contexts.pop(session_id, None)
-        self._vision_locks.pop(session_id, None)
-        self._vision_last_call.pop(session_id, None)
 
     # ------------------------------------------------------------------
     # Persona 切换
@@ -418,101 +429,12 @@ class Orchestrator:
         await self._on_event(event)
 
     async def ingest_vision_frame(self, session: Session, jpeg_b64: str) -> None:
-        """接收浏览器摄像头截帧（0x02 上行），调用 vision block 多模态分析。
-
-        结果存到 _vision_contexts（单次消费 + TTL，供 LLM 注入）；若本轮有
-        挂起的同轮 Vision 等待（触发词命中），resolve 它让 LLM 立即继续。
-        vision block 缺席时静默跳过（不阻断主链路）。
-        """
-        vision = self.blocks.get(CATEGORY_VISION)
-        if vision is None:
-            logger.info("vision block 未装配，跳过摄像头帧分析")
-            self._resolve_vision_pending(session.session_id)
-            return
-        pending = self._vision_pending.get(session.session_id)
-        # AL-P1-011 并发锁：同 session 已有 vision 调用进行中 → 丢弃重复帧。
-        # 进行中的调用会 resolve pending（若有），新帧无需再调远程 API。
-        lock = self._vision_locks.setdefault(session.session_id, asyncio.Lock())
-        if lock.locked():
-            logger.info(
-                "vision 调用进行中，丢弃重复帧 (session %s)",
-                session.session_id[:12],
-            )
-            return
-        # AL-P1-011 节流：无同轮等待的手动帧受最小间隔限制（费用控制）。
-        # 有 pending（触发词同轮）的帧必须服务——它是本轮回答的前提。
-        if pending is None:
-            last = self._vision_last_call.get(session.session_id, 0.0)
-            gap = time.monotonic() - last
-            if gap < _VISION_MIN_INTERVAL_S:
-                logger.info(
-                    "vision 帧节流丢弃（距上次 %.1fs < %.1fs, session %s）",
-                    gap,
-                    _VISION_MIN_INTERVAL_S,
-                    session.session_id[:12],
-                )
-                return
-        self._vision_last_call[session.session_id] = time.monotonic()
-        request_id = pending[0] if pending else None
-        ctx = BlockContext(
-            session_id=session.session_id,
-            run_id=session.current_run_id,
-            workspace_root=".",
-            config=self._block_configs.get(CATEGORY_VISION, {}),
-            _emit_fn=self._on_event,
-        )
-        async with lock:
-            try:
-                describe_frame = getattr(vision, "describe_frame", None)
-                if not callable(describe_frame):
-                    raise AttributeError("vision block does not implement describe_frame")
-                # 外层超时——block 内部 httpx 超时是传输层兜底，但若 block 实现
-                # 忘了设超时，锁会被永久持有，该 session 后续所有帧被静默丢弃
-                result = await asyncio.wait_for(
-                    describe_frame(
-                        ctx,
-                        jpeg_b64,
-                        prompt=(
-                            "描述这张图片里的内容，包括人物外貌特征、穿着、表情、"
-                            "以及周围环境。用中文，2-3 句话。"
-                        ),
-                        request_id=request_id,
-                    ),
-                    timeout=self.config.vision_timeout_s,
-                )
-                description = result.payload.get("description", "")
-                if description and "视觉感知失败" not in description:
-                    self._vision_contexts[session.session_id] = {
-                        "description": description,
-                        "request_id": request_id,
-                        "ts": time.monotonic(),
-                    }
-                    logger.info(
-                        "vision 分析完成 (session %s, req %s): %.60s",
-                        session.session_id[:12],
-                        (request_id or "-")[:12],
-                        description,
-                    )
-            except Exception as e:
-                logger.warning("vision describe_frame 失败: %s", e)
-            finally:
-                # 成功/失败都唤醒同轮等待——失败走降级回答，不让 LLM 干等超时
-                self._resolve_vision_pending(session.session_id)
+        """接收浏览器摄像头截帧（0x02 上行），委托给 VisionCoordinator。"""
+        await self._vision_coord.ingest_frame(session, jpeg_b64)
 
     async def handle_vision_frame_error(self, session: Session, reason: str) -> None:
-        """浏览器截帧失败（摄像头拒绝/不可用）——立即降级，不等超时。"""
-        logger.info(
-            "vision 截帧失败 (session %s): %s——降级为无视觉回答",
-            session.session_id[:12],
-            reason,
-        )
-        self._resolve_vision_pending(session.session_id)
-
-    def _resolve_vision_pending(self, session_id: str) -> None:
-        """唤醒 session 上挂起的同轮 Vision 等待（若有）。"""
-        pending = self._vision_pending.pop(session_id, None)
-        if pending is not None and not pending[1].done():
-            pending[1].set_result(None)
+        """浏览器截帧失败（摄像头拒绝/不可用）——委托给 VisionCoordinator 立即降级。"""
+        await self._vision_coord.handle_frame_error(session, reason)
 
     async def handle_user_speech_started(self, session: Session) -> None:
         """VAD 检测到用户开始说话——可能触发打断。
@@ -731,14 +653,14 @@ class Orchestrator:
         # 垫音抢占事件收不到，真假音频叠放）
         await self.event_bus.subscribe(
             TTS_AUDIO_DELTA,
-            self._on_tts_delta_preempt,
+            self._filler.on_tts_delta_preempt,
             policy=BackpressurePolicy.DROP_OLDEST,
             queue_size=128,
         )
         # 记忆写入（Mem0 移植）：response.done 后异步抽取，不占语音延迟
         await self.event_bus.subscribe(
             LLM_TEXT_DONE,
-            self._on_llm_done_memory,
+            self._memory.on_llm_done,
         )
 
     def _make_block_handler(
@@ -755,7 +677,7 @@ class Orchestrator:
             # AL-P1-003：只有 LLM 消费视觉描述——其他 Block 经手会提前消耗
             vision_description = None
             if category == CATEGORY_LLM:
-                vision_description = self._consume_vision_context(event.session_id)
+                vision_description = self._vision_coord.consume_context(event.session_id)
             ctx = BlockContext(
                 session_id=event.session_id,
                 run_id=event.run_id,
@@ -781,17 +703,6 @@ class Orchestrator:
                 logger.exception("unhandled error in block %s", block.manifest().block_id)
 
         return handler
-
-    def _consume_vision_context(self, session_id: str) -> str | None:
-        """取出 session 的视觉描述（单次消费 + TTL 过期清理）。"""
-        entry = self._vision_contexts.pop(session_id, None)
-        if entry is None:
-            return None
-        age = time.monotonic() - float(entry.get("ts", 0.0))
-        if age > _VISION_CONTEXT_TTL_S:
-            logger.info("vision context 已过期（%.1fs），丢弃", age)
-            return None
-        return str(entry.get("description") or "") or None
 
     # ------------------------------------------------------------------
     # 内部：事件出口（emit）
@@ -856,9 +767,9 @@ class Orchestrator:
         # 立即取消旧垫音——旧垫音在 vision 等待期（最长 8s）继续带新 run_id 发送，
         # 会污染延迟指标和 Recorder 归属。此前 _cancel_filler 只在 _start_filler
         # 内部调（在 vision 等待之后），等待期旧垫音帧带新 run_id 落盘/计指标。
-        self._cancel_filler(session.session_id)
+        self._filler.cancel(session.session_id)
         # 记忆凑对：存本轮用户文本（llm.done 时与 full_text 一起写入 Mem0）
-        self._memory_pending_users[session.session_id] = text
+        self._memory.store_user_text(session.session_id, text)
         # AL-P1-005：STT 发出的原始 transcript.completed 携带旧 run_id（或 None），
         # 到达 Recorder 时新 run 尚未建立而被丢弃——用新 run_id 重发一份，
         # 让 Recorder 落录本轮用户文本、前端事件流正确归属新 run。
@@ -891,7 +802,7 @@ class Orchestrator:
         # 触发词检测：命中 → 截帧分析，等同轮视觉结果再回答
         m = _VISION_TRIGGER_RE.search(text)
         if m and CATEGORY_VISION in self.blocks:
-            proceed = await self._request_vision_and_wait(session, keyword=m.group(0))
+            proceed = await self._vision_coord.request_and_wait(session, keyword=m.group(0))
             if not proceed:
                 # 被打断/会话结束——跳过本轮 LLM
                 return
@@ -900,7 +811,7 @@ class Orchestrator:
 
         # Filler 垫音（VoxEMW 移植）：盖 LLM 首句空白——放在 vision 判定后、
         # llm.request 前，让视觉等待期也有垫音；真 TTS 首块到达自动停发余量
-        await self._start_filler(session)
+        await self._filler.start(session)
 
         await self._on_event(
             Event(
@@ -915,61 +826,6 @@ class Orchestrator:
                 },
             )
         )
-
-    async def _request_vision_and_wait(self, session: Session, keyword: str) -> bool:
-        """下行 vision.request 并挂起等待截帧分析。返回 True=继续 LLM。
-
-        唤醒路径：ingest_vision_frame（成功/失败）/ handle_vision_frame_error /
-        超时降级。打断或会话结束 → Future 被 cancel → 返回 False 跳过 LLM。
-        """
-        loop = asyncio.get_running_loop()
-        fut: asyncio.Future[None] = loop.create_future()
-        request_id = f"vreq_{uuid.uuid4().hex[:12]}"
-        # 同 session 已有 pending（连说两次触发词）→ 取消旧的，以新请求为准
-        old = self._vision_pending.pop(session.session_id, None)
-        if old is not None and not old[1].done():
-            old[1].cancel()
-        self._vision_pending[session.session_id] = (request_id, fut)
-
-        await self._on_event(
-            Event(
-                type=VISION_REQUEST,
-                session_id=session.session_id,
-                source="orchestrator.trigger",
-                run_id=session.current_run_id,
-                payload={"keyword": keyword, "request_id": request_id},
-            )
-        )
-
-        timeout = float(self.config.vision_timeout_s)
-        try:
-            # shield：超时只放弃等待，不取消 fut——迟到的截帧仍可存上下文
-            await asyncio.wait_for(asyncio.shield(fut), timeout=timeout)
-            return True
-        except TimeoutError:
-            self._vision_pending.pop(session.session_id, None)
-            logger.info(
-                "vision 等待超时（%.1fs, session %s）——降级为无视觉回答",
-                timeout,
-                session.session_id[:12],
-            )
-            return True
-        except asyncio.CancelledError:
-            # 区分两种取消（Python 语义：吞掉 task.cancel() 又不 re-raise，
-            # 任务会继续跑——asyncio.run/shutdown 的 gather 会因此永远等它）：
-            # - fut 被 _do_interrupt/end_session 取消（任务本身未被 cancel）
-            #   → 内部打断，跳过本轮 LLM，返回 False
-            # - 消费者任务自身被 cancel（bus 关闭/loop teardown）
-            #   → 必须 re-raise 让任务正常消亡
-            task = asyncio.current_task()
-            if fut.cancelled() and (task is None or task.cancelling() == 0):
-                self._vision_pending.pop(session.session_id, None)
-                logger.info(
-                    "vision 等待被打断（session %s），跳过本轮 LLM",
-                    session.session_id[:12],
-                )
-                return False
-            raise
 
     async def _on_llm_text_delta(self, event: Event) -> None:
         session = self.sessions.get(event.session_id)
@@ -997,138 +853,22 @@ class Orchestrator:
         )
 
     # ------------------------------------------------------------------
-    # Filler 垫音（移植自 VoxEMW voxemw/avatar/orchestrator.py）
-    # 转写完成即播 persona 预渲染口头禅，盖 LLM 首句空白；
-    # 伪造为普通 tts.audio.delta 事件——前端播放、Avatar 张嘴、AVMux 同步全部复用。
-    # 与上游一致：单发不循环；真 TTS 抢先即停余量；打断即取消。
+    # 记忆委托（测试直接访问 orch._recall_memory / _memorize_turn / _on_llm_done_memory）
     # ------------------------------------------------------------------
 
-    async def _start_filler(self, session: Session) -> None:
-        """转写完成后启动垫音（盖 LLM 首句空白，含 Vision 等待期）。"""
-        if not self.config.filler_enabled:
-            return
-        clips = self._load_filler_clips(session)
-        if not clips:
-            return
-        # 防御：同 session 旧垫音先取消
-        self._cancel_filler(session.session_id)
-        # 随机选一条，避免与上次重复（VoxEMW 同款策略）
-        import random
+    async def _recall_memory(self, session: Session) -> str:
+        """召回记忆——委托给 MemoryBridge（测试直接调，保留兼容签名）。"""
+        return await self._memory.recall(session)
 
-        persona_key = session.persona_id or ""
-        last = self._filler_last_idx.get(persona_key, -1)
-        idx = random.randrange(len(clips))
-        if len(clips) > 1 and idx == last:
-            idx = (idx + 1) % len(clips)
-        self._filler_last_idx[persona_key] = idx
-        pcm, _label = clips[idx]
-        self._filler_tasks[session.session_id] = asyncio.create_task(
-            self._play_filler(session, pcm)
-        )
-
-    async def _play_filler(self, session: Session, pcm: bytes) -> None:
-        """按实时节奏分块 emit 垫音（0.4s/块），伪 TTS 通道。"""
-        try:
-            chunk_bytes = 6400 * 2  # 0.4s @16k int16
-            for offset in range(0, len(pcm), chunk_bytes):
-                chunk = pcm[offset : offset + chunk_bytes]
-                if not chunk:
-                    break
-                await self._on_event(
-                    Event(
-                        type=TTS_AUDIO_DELTA,
-                        session_id=session.session_id,
-                        source="orchestrator.filler",
-                        run_id=session.current_run_id,
-                        payload={
-                            "pcm_b64": base64.b64encode(chunk).decode("ascii"),
-                            "sample_rate": 16000,
-                            "samples": len(chunk) // 2,
-                            "text": "",
-                            "filler": True,
-                        },
-                    )
-                )
-                await asyncio.sleep(0.4)
-        except asyncio.CancelledError:
-            raise
-        finally:
-            self._filler_tasks.pop(session.session_id, None)
-
-    def _cancel_filler(self, session_id: str) -> None:
-        """取消垫音（打断 / 真 TTS 抢先 / 会话结束）。"""
-        task = self._filler_tasks.pop(session_id, None)
-        if task is not None and not task.done():
-            task.cancel()
-
-    async def _on_tts_delta_preempt(self, event: Event) -> None:
-        """真 TTS 首块到达 → 停发垫音余量（VoxEMW：真音频抢先，尾帧不错切 idle）。"""
-        if event.payload.get("filler"):
-            return
-        self._cancel_filler(event.session_id)
+    async def _memorize_turn(
+        self, user_text: str, assistant_text: str, agent_id: str
+    ) -> None:
+        """写入记忆——委托给 MemoryBridge（测试直接调，保留兼容签名）。"""
+        await self._memory.memorize_turn(user_text, assistant_text, agent_id)
 
     async def _on_llm_done_memory(self, event: Event) -> None:
-        """记忆写入（Mem0 移植）：一轮 user/assistant 凑对，response.done 后异步抽取。
-
-        打断的回复（finish_reason=interrupted）不完整，写入会污染记忆——跳过。
-        memory.memorize 内部已用 asyncio.to_thread 包装 Mem0 的同步阻塞调用，
-        不占语音延迟；block 未启用时内部 no-op。
-        """
-        if event.payload.get("finish_reason") == "interrupted":
-            self._memory_pending_users.pop(event.session_id, None)
-            return
-        user_text = self._memory_pending_users.pop(event.session_id, "")
-        assistant_text = str(event.payload.get("full_text") or "")
-        if not user_text and not assistant_text:
-            return
-        session = self.sessions.get(event.session_id)
-        agent_id = (session.persona_id if session else None) or "default"
-        await self._memorize_turn(user_text, assistant_text, agent_id)
-
-    async def _recall_memory(self, session: Session) -> str:
-        """召回该 persona 的记忆块（未启用/无 block 返回 ""）。"""
-        memory = self.blocks.get("memory")
-        if memory is None or not getattr(memory, "active", False):
-            return ""
-        try:
-            return await memory.recall(session.persona_id or "default")  # type: ignore[attr-defined]
-        except Exception as e:
-            logger.warning("memory recall 异常（按无记忆继续）: %s", e)
-            return ""
-
-    async def _memorize_turn(self, user_text: str, assistant_text: str, agent_id: str) -> None:
-        """写入一轮对话（未启用/无 block no-op）。"""
-        memory = self.blocks.get("memory")
-        if memory is None or not getattr(memory, "active", False):
-            return
-        try:
-            await memory.memorize(user_text, assistant_text, agent_id)  # type: ignore[attr-defined]
-        except Exception as e:
-            logger.warning("memory memorize 异常（静默跳过）: %s", e)
-
-    def _load_filler_clips(self, session: Session) -> list[tuple[bytes, str]]:
-        """加载 persona 垫音（16k mono s16 校验，按 persona 缓存）。"""
-        persona_id = session.persona_id or ""
-        if persona_id in self._filler_cache:
-            return self._filler_cache[persona_id]
-        clips: list[tuple[bytes, str]] = []
-        try:
-            root = (
-                Path(getattr(session, "workspace_root", ".") or ".")
-                / "personas"
-                / persona_id
-                / "fillers"
-            )
-            for wav_path in sorted(root.rglob("*.wav")):
-                pcm = _read_wav_16k_mono_s16(wav_path)
-                if pcm is not None:
-                    clips.append((pcm, wav_path.stem))
-            if clips:
-                logger.info("filler 加载 %d 条 (persona %s)", len(clips), persona_id)
-        except Exception as e:
-            logger.info("filler 无可用垫音 (persona %s): %s", persona_id, e)
-        self._filler_cache[persona_id] = clips
-        return clips
+        """记忆写入钩子——委托给 MemoryBridge（测试直接调，保留兼容签名）。"""
+        await self._memory.on_llm_done(event)
 
     # ------------------------------------------------------------------
     # 打断处理
@@ -1142,10 +882,8 @@ class Orchestrator:
         4. emit response.interrupted 让 recorder finalize
         5. 按 user_speaking 选 trigger：用户在说话 → LISTENING，否则 → IDLE
         """
-        pending = self._vision_pending.pop(session.session_id, None)
-        if pending is not None and not pending[1].done():
-            pending[1].cancel()
-        self._cancel_filler(session.session_id)
+        self._vision_coord.cancel_pending(session.session_id)
+        self._filler.cancel(session.session_id)
         for block in self.blocks.values():
             try:
                 await block.reset(session.session_id)

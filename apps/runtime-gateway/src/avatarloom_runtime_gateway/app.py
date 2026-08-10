@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -52,10 +53,47 @@ from avatarloom_runtime_gateway.ws_handler import (  # noqa: E402
 logger = logging.getLogger(__name__)
 
 
+def _assert_single_worker_for_gpu(settings: Settings) -> None:
+    """多 worker 部署下，GPU profile 必须单 worker。
+
+    单会话锁（ws_handler._session_lock）是进程内 asyncio.Lock——``uvicorn --workers N``
+    会 fork N 个独立进程，各自一份锁，单会话约束完全失效：N 个 worker 同时接受
+    session.start，各装配一套 GPU 模型 → 瞬态 N×(10-16G) → OOM。
+
+    mock profile 无 GPU 资源冲突（所有 block 是内存模拟），允许任意 worker 数。
+    WEB_CONCURRENCY 是 gunicorn/uvicorn/Render/Heroku 约定的 worker 数环境变量。
+    """
+    workers_str = os.environ.get("WEB_CONCURRENCY", "1").strip()
+    try:
+        workers = int(workers_str)
+    except ValueError:
+        return  # 异常值交给 uvicorn 自己报错，这里不拦截
+
+    if workers <= 1:
+        return
+
+    if settings.default_profile == "mock":
+        return
+
+    raise RuntimeError(
+        f"GPU profile {settings.default_profile!r} 不支持多 worker "
+        f"(WEB_CONCURRENCY={workers})——单会话锁是进程级的，"
+        f"N 个 worker 各起一个 GPU 会话会 OOM。"
+        f"请用 --workers 1（或 WEB_CONCURRENCY=1），"
+        f"或设 AVATARLOOM_DEFAULT_PROFILE=mock 走无 GPU 模拟链路。"
+    )
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     """创建 Runtime Gateway app。"""
     if settings is None:
         settings = load_settings()
+
+    # 多 worker 防护（S2）：单会话锁是进程内 Python 全局变量，--workers N>1 时
+    # 每个 worker 各持一份，单会话约束失效——N 个 worker 各起一个 GPU 会话
+    # 直接 OOM（每套模型 10-16G）。启动时 fail-fast，把"部署假设"变"代码契约"。
+    # mock profile 无 GPU 资源冲突，允许任意 worker 数（测试/CI 友好）。
+    _assert_single_worker_for_gpu(settings)
 
     logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
     Path(settings.workspace_root).mkdir(parents=True, exist_ok=True)

@@ -4,7 +4,13 @@
 - 接收浏览器上行（JSON 控制 + 二进制 PCM）
 - 转发 PCM 到 Orchestrator.ingest_audio
 - 接收 Orchestrator emit 的事件，转发给浏览器（JSON + 二进制 PCM/JPEG）
-- 管理会话生命周期
+- 管理会话生命周期（鉴权 / 单会话锁 / GPU 自重启）
+
+模块组成：
+- ``ws_handler``（本文件）：WebSocketSession 主循环 + 鉴权 + 生命周期 + 进程级
+  单会话锁 + GPU 自重启。持有 UplinkDispatcher 和 OrchestratorEventBridge 实例。
+- ``uplink``：上行 JSON/二进制消息分发（表驱动路由）
+- ``event_bridge``：Orchestrator 事件 → 三队列下行调度（控制 > 音频 > 视频）
 
 音频编码：PCM16/16kHz/单声道，base64 编码放 JSON payload.pcm_b64。
 v0.1 用 JSON 承载音频（简化前端实现）；二进制通道留给 Avatar JPEG。
@@ -13,52 +19,30 @@ v0.1 用 JSON 承载音频（简化前端实现）；二进制通道留给 Avata
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import logging
 import os
 import re
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from avatarloom_protocol import (
-    AVATAR_IDLE_FRAME,
-    AVATAR_SPEECH_FRAME,
-    AVATAR_VIDEO_READY,
-    RESPONSE_DONE,
-    RUN_STARTED,
-    SESSION_STATE_CHANGED,
-    TRANSCRIPT_COMPLETED,
-    TTS_AUDIO_COMPLETED,
-    TTS_AUDIO_DELTA,
-    VISION_REQUEST,
-    VISION_RESULT,
-    Event,
-)
 from fastapi import WebSocket, WebSocketDisconnect
-from starlette.websockets import WebSocketState
 
 from avatarloom_runtime_gateway.auth import (
     header_token_authenticated,
     token_matches,
 )
 from avatarloom_runtime_gateway.config import Settings
-from avatarloom_runtime_gateway.protocol import (
-    MAX_CAMERA_FRAME_BYTES,
-    TAG_AVATAR_JPEG,
-    TAG_CAMERA_FRAME,
-    TAG_PCM_UPLINK,
-    TAG_TTS_PCM_DOWNLINK,
-    ClientMessage,
-)
+from avatarloom_runtime_gateway.event_bridge import OrchestratorEventBridge, put_drop_oldest
+from avatarloom_runtime_gateway.uplink import UplinkDispatcher
 from runtime.orchestrator import Orchestrator
 from runtime.orchestrator.config import BlockRef, OrchestratorConfig
 from runtime.recorder import RunRecorder
 from runtime.session import Session
 
-if TYPE_CHECKING:
-    pass
+# 向后兼容 re-export：旧测试 (test_gateway_ws.py:375) 直接 from ws_handler import _put_drop_oldest
+_put_drop_oldest = put_drop_oldest
 
 logger = logging.getLogger(__name__)
 
@@ -69,9 +53,6 @@ _ID_PATTERN = re.compile(r"[a-zA-Z0-9_-]{1,64}")
 # GPU deployment 标识——这些 deployment 会初始化 CUDA context，会话结束后
 # 需要自重启（rc=42）清除 fork-unsafe 的 CUDA 状态。mock/cpu 不触发。
 _GPU_DEPLOYMENTS = frozenset({"cuda-local", "nvidia-cuda"})
-
-# WS 上行消息大小上限——单条 JSON/二进制超此即拒绝，防内存 DoS
-_MAX_MSG_SIZE = 2 * 1024 * 1024  # 2MB
 
 # GPU 会话结束后是否自重启（rc=42）：默认开启，依赖 supervisor/dev.py 拉起；
 # 无 supervisor 的部署可设 AVATARLOOM_SELF_RESTART=0 关闭（需手动重启清 CUDA 状态）。
@@ -119,49 +100,54 @@ def _mock_profile_config() -> OrchestratorConfig:
     )
 
 
-# ------------------------------------------------------------------
-# 模块级 helper
-# ------------------------------------------------------------------
-
-
-def _put_drop_oldest(q: asyncio.Queue[bytes], item: bytes) -> None:
-    """非阻塞入队；队满丢最旧（音频跳段/视频跳帧，绝不反压事件出口）。"""
-    if q.full():
-        try:
-            q.get_nowait()
-        except asyncio.QueueEmpty:
-            pass
-    try:
-        q.put_nowait(item)
-    except asyncio.QueueFull:
-        pass
-
-
 class WebSocketSession:
-    """单浏览器连接的 WS 会话。"""
+    """单浏览器连接的 WS 会话。
+
+    职责（拆分后保留的部分）：
+    - ``run()`` 主循环：auth → receive loop → cleanup
+    - ``_authenticate()``：握手后首条 auth 消息鉴权
+    - 会话生命周期：``_start_session`` / ``_stop_session`` / ``set_persona`` / ``cleanup``
+    - 进程级单会话锁 + GPU 自重启（rc=42）
+    - 持有 ``UplinkDispatcher`` 和 ``OrchestratorEventBridge`` 实例
+
+    上行消息分发委托给 ``self._dispatcher``（见 uplink.py）；
+    下行三队列调度委托给 ``self.bridge``（见 event_bridge.py）。
+    """
 
     def __init__(self, ws: WebSocket, settings: Settings) -> None:
         self.ws = ws
         self.settings = settings
         self.orchestrator: Orchestrator | None = None
         self.session: Session | None = None
-        self.recorder: RunRecorder | None = None
-        # 下行三队列（AL-P2-006）：控制 / 音频 / 视频分离——
-        # 此前单队列混排，队满无差别丢最旧，error/response.done 也会被丢；
-        # 且 TTS/Avatar 阻塞 put 让慢客户端反压整个 Orchestrator 事件出口。
-        self._control_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=512)
-        # TTS PCM：32ms/块，64 块 ≈ 2s 缓冲；队满丢最旧（音频可跳段）
-        self._audio_queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=64)
-        # Avatar 帧：25fps，32 帧 ≈ 1.3s 缓冲；队满丢最旧（视频可跳帧）
-        self._video_queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=32)
-        self._downlink_task: asyncio.Task[None] | None = None
+
+        # 下行事件桥接（三队列 + recorder）——is_closed 回调避免循环引用
+        self.bridge = OrchestratorEventBridge(ws, is_closed=lambda: self._closed)
+        # 上行消息分发——session 自身满足 UplinkContext Protocol
+        self._dispatcher = UplinkDispatcher(ctx=self)
+
         self._closed = False
-        self._warned_unknown_tag = False
-        # 下行最近一次成功发送时间——90s idle 超时按下行活动顺延（AL-P2-007 修正）
-        self._last_downlink_at = time.monotonic()
         # 是否装配了 GPU block——决定会话结束后是否需要自重启（rc=42）。
         # mock profile 全是 deployment="mock"，不触发；GPU profile 才触发。
         self._had_gpu_block: bool = False
+
+    # ------------------------------------------------------------------
+    # UplinkContext Protocol 实现——供 UplinkDispatcher 调用
+    # ------------------------------------------------------------------
+    # dispatcher 通过这些方法访问 session 状态与生命周期，避免在 uplink.py
+    # 直接 import WebSocketSession 造成循环依赖。
+
+    async def start_session(self, payload: dict[str, Any]) -> None:
+        await self._start_session(payload)
+
+    async def stop_session(self) -> None:
+        await self._stop_session()
+
+    async def set_persona(self, persona_id: str | None) -> None:
+        await self._set_persona(persona_id)
+
+    # ------------------------------------------------------------------
+    # 主循环
+    # ------------------------------------------------------------------
 
     async def run(self) -> None:
         """主循环：接收上行消息，处理控制 + 音频。
@@ -176,22 +162,22 @@ class WebSocketSession:
                 return
 
             # 启动下行发送任务
-            self._downlink_task = asyncio.create_task(self._downlink_sender())
+            self.bridge.start()
             while not self._closed:
                 try:
                     msg = await asyncio.wait_for(self.ws.receive(), timeout=90)
                 except TimeoutError:
                     # 下行仍在持续（客户端在听/看但没上行）时不算 idle
-                    if time.monotonic() - self._last_downlink_at < 90:
+                    if time.monotonic() - self.bridge.last_downlink_at < 90:
                         continue
                     logger.info("ws idle timeout (90s)——主动断开半开连接")
                     break
                 if msg["type"] == "websocket.disconnect":
                     break
                 if "text" in msg and msg["text"] is not None:
-                    await self._handle_json(msg["text"])
+                    await self._dispatcher.handle_json(msg["text"])
                 elif "bytes" in msg and msg["bytes"] is not None:
-                    await self._handle_bytes(msg["bytes"])
+                    await self._dispatcher.handle_bytes(msg["bytes"])
         except WebSocketDisconnect:
             pass
         finally:
@@ -230,119 +216,6 @@ class WebSocketSession:
             return False
         return True
 
-    async def _handle_json(self, text: str) -> None:
-        """处理上行 JSON 消息。"""
-        # 消息大小上限——防止恶意客户端发超大 JSON 撑爆内存
-        if len(text) > _MAX_MSG_SIZE:
-            await self._send_error(f"message too large (max {_MAX_MSG_SIZE} bytes)")
-            return
-        try:
-            data = json.loads(text)
-            msg = ClientMessage(**data)
-        except Exception as e:
-            await self._send_error(f"invalid message: {e}")
-            return
-
-        if msg.type == "session.start":
-            await self._start_session(msg.payload)
-        elif msg.type == "session.stop":
-            await self._stop_session()
-        elif msg.type == "persona.set":
-            await self._set_persona(msg.payload.get("persona_id"))
-        elif msg.type == "audio.chunk":
-            # PCM 在 payload.pcm_b64 里
-            await self._handle_audio_chunk(msg.payload)
-        elif msg.type == "audio.interrupt":
-            await self._handle_interrupt()
-        elif msg.type == "vision.frame_error":
-            # 浏览器截帧失败（摄像头拒绝/不可用）→ 立即降级，不等 vision 超时
-            await self._handle_vision_frame_error(msg.payload)
-        elif msg.type == "ping":
-            await self._enqueue_json({"type": "pong"})
-
-    async def _handle_bytes(self, data: bytes) -> None:
-        """处理上行二进制：显式 tag 路由（AL-P1-001）。
-
-        0x00 + PCM16 → STT；0x02 + JPEG → Vision；未知 tag 拒绝。
-        不再"其他一律 PCM"——裸 PCM 首字节可能恰为 0x02 被误送 Vision。
-        """
-        if not self.session or not self.orchestrator:
-            return
-        if not data:
-            return
-        # 二进制消息大小上限——防止超大帧撑爆内存
-        if len(data) > _MAX_MSG_SIZE:
-            logger.warning("ws binary message too large: %d bytes", len(data))
-            return
-        tag = data[0]
-
-        if tag == TAG_PCM_UPLINK:
-            pcm = data[1:]
-            # 奇数字节/空 chunk 无法按 int16 解码，丢弃
-            if len(pcm) < 2 or len(pcm) % 2 != 0:
-                return
-            samples = len(pcm) // 2
-            pcm_b64 = base64.b64encode(pcm).decode("ascii")
-            await self.orchestrator.ingest_audio(self.session, pcm_b64, samples)
-            return
-
-        if tag == TAG_CAMERA_FRAME:
-            jpeg = data[1:]
-            # AL-P1-011：大小 + JPEG SOI header 校验，防任意内容打远程 Vision API
-            if len(jpeg) > MAX_CAMERA_FRAME_BYTES:
-                logger.warning("camera frame too large: %d bytes, rejected", len(jpeg))
-                await self._send_error(
-                    f"camera frame too large ({len(jpeg)} > {MAX_CAMERA_FRAME_BYTES})"
-                )
-                return
-            if not jpeg.startswith(b"\xff\xd8\xff"):
-                logger.warning("camera frame is not JPEG (bad SOI), rejected")
-                await self._send_error("camera frame is not a valid JPEG")
-                return
-            jpeg_b64 = base64.b64encode(jpeg).decode("ascii")
-            await self.orchestrator.ingest_vision_frame(self.session, jpeg_b64)
-            return
-
-        # 未知 tag：拒绝。error JSON 每连接只发一次，避免旧前端裸 PCM 刷屏
-        logger.warning("unknown uplink binary tag 0x%02x (%d bytes), rejected", tag, len(data))
-        if not self._warned_unknown_tag:
-            self._warned_unknown_tag = True
-            await self._send_error(
-                f"unknown binary tag 0x{tag:02x}——上行协议要求 0x00+PCM16 / 0x02+JPEG"
-            )
-
-    async def _handle_audio_chunk(self, payload: dict[str, Any]) -> None:
-        """处理 audio.chunk JSON 消息（带 pcm_b64）。"""
-        if not self.session or not self.orchestrator:
-            return
-        pcm_b64 = payload.get("pcm_b64", "")
-        if not pcm_b64:
-            return
-        # samples 由服务端按解码长度计算，不信任客户端上报（防指标/时长误导）
-        try:
-            pcm = base64.b64decode(pcm_b64, validate=True)
-        except Exception:
-            await self._send_error("audio.chunk: invalid base64 pcm_b64")
-            return
-        if len(pcm) < 2 or len(pcm) % 2 != 0:
-            await self._send_error("audio.chunk: PCM must be even-length int16")
-            return
-        samples = len(pcm) // 2
-        await self.orchestrator.ingest_audio(self.session, pcm_b64, samples)
-
-    async def _handle_interrupt(self) -> None:
-        """显式打断。"""
-        if not self.session or not self.orchestrator:
-            return
-        await self.orchestrator.handle_user_speech_started(self.session)
-
-    async def _handle_vision_frame_error(self, payload: dict[str, Any]) -> None:
-        """浏览器截帧失败——通知 Orchestrator 降级（唤醒同轮 Vision 等待）。"""
-        if not self.session or not self.orchestrator:
-            return
-        reason = str(payload.get("reason") or "unknown")
-        await self.orchestrator.handle_vision_frame_error(self.session, reason)
-
     # ------------------------------------------------------------------
     # 会话生命周期
     # ------------------------------------------------------------------
@@ -356,14 +229,14 @@ class WebSocketSession:
 
         # profile_id 白名单校验——客户端可控，防路径穿越（../../ 读任意 yaml）
         if not isinstance(profile_id, str) or not _ID_PATTERN.fullmatch(profile_id):
-            await self._send_error(f"invalid profile_id: {profile_id!r}")
+            await self.bridge.send_error(f"invalid profile_id: {profile_id!r}")
             return
 
         # persona_id 白名单校验——会拼进 personas/{id}/ 路径，同样防穿越
         if persona_id is not None and (
             not isinstance(persona_id, str) or not _ID_PATTERN.fullmatch(persona_id)
         ):
-            await self._send_error(f"invalid persona_id: {persona_id!r}")
+            await self.bridge.send_error(f"invalid persona_id: {persona_id!r}")
             return
 
         # 单会话强制（HIGH-4）：GPU 模型重复加载会 OOM，拒绝并存。
@@ -374,7 +247,7 @@ class WebSocketSession:
             if not busy:
                 _orchestrator_starting = True
         if busy:
-            await self._send_error(
+            await self.bridge.send_error(
                 "已有活跃会话，请先关闭/刷新页面（旧会话断开后模型会释放）"
             )
             return
@@ -392,17 +265,17 @@ class WebSocketSession:
                 except Exception:
                     # 对外脱敏：异常原文（含服务器绝对路径/内部细节）只进服务端日志
                     logger.exception("profile %s load failed", profile_id)
-                    await self._send_error(f"profile 加载失败（{profile_id}），详见服务端日志")
+                    await self.bridge.send_error(f"profile 加载失败（{profile_id}），详见服务端日志")
                     return
             if config is None:
                 config = _mock_profile_config()
                 config.profile_id = profile_id
 
-            # Recorder 接收所有事件
+            # Recorder 接收所有事件——注入 bridge（事件出口用它记录）
             recorder = RunRecorder(root=self.settings.runs_root)
             orchestrator = Orchestrator(
                 config,
-                event_sink=self._on_orchestrator_event,
+                event_sink=self.bridge.on_orchestrator_event,
             )
             try:
                 await orchestrator.setup()
@@ -426,13 +299,16 @@ class WebSocketSession:
                     logger.exception("setup 失败后 orchestrator 回收异常")
                 # 对外脱敏：异常原文只进服务端日志
                 logger.exception("orchestrator setup/start failed (profile=%s)", profile_id)
-                await self._send_error("orchestrator 初始化失败，详见服务端日志")
+                await self.bridge.send_error("orchestrator 初始化失败，详见服务端日志")
                 return
 
             # 全部就绪后原子登记（锁内 set，与上面的 check 配对）
             async with _session_lock:
                 _active_orchestrator = orchestrator
-            self.recorder = recorder
+            # 把 recorder / session 注入 bridge——之后 orchestrator emit 的事件
+            # 会经 bridge.on_orchestrator_event 记录并下行
+            self.bridge.recorder = recorder
+            self.bridge.session_ref = session
             self.orchestrator = orchestrator
             self.session = session
             # 标记是否装配了 GPU block——用于会话结束后判定是否自重启。
@@ -446,7 +322,7 @@ class WebSocketSession:
             async with _session_lock:
                 _orchestrator_starting = False
 
-        await self._enqueue_json(
+        await self.bridge.enqueue_json(
             {
                 "type": "session.started",
                 "payload": {
@@ -474,11 +350,11 @@ class WebSocketSession:
         现在真切换成功才发 changed；加载/切换失败回明确 error。
         """
         if not self.session or not self.orchestrator:
-            await self._send_error("persona.set 需要先建立会话（session.start）")
+            await self.bridge.send_error("persona.set 需要先建立会话（session.start）")
             return
         # persona_id 白名单校验——会拼进 personas/{id}/ 路径，防路径穿越
         if not persona_id or not _ID_PATTERN.fullmatch(persona_id):
-            await self._send_error(f"invalid persona_id: {persona_id!r}")
+            await self.bridge.send_error(f"invalid persona_id: {persona_id!r}")
             return
         try:
             from blocks.persona.loader import load_persona
@@ -489,183 +365,14 @@ class WebSocketSession:
         except Exception:
             # 对外脱敏：异常原文（含服务器路径/persona 包内部结构）只进服务端日志
             logger.exception("persona.set %s failed", persona_id)
-            await self._send_error(f"persona 切换失败（{persona_id}），详见服务端日志")
+            await self.bridge.send_error(f"persona 切换失败（{persona_id}），详见服务端日志")
             return
-        await self._enqueue_json(
+        await self.bridge.enqueue_json(
             {
                 "type": "persona.changed",
                 "payload": {"persona_id": persona_id},
             }
         )
-
-    # ------------------------------------------------------------------
-    # Orchestrator 事件 -> 浏览器
-    # ------------------------------------------------------------------
-
-    async def _on_orchestrator_event(self, event: Event) -> None:
-        """Orchestrator emit 的事件出口——转发给浏览器。
-
-        - session.* / transcript.* / llm.* / response.* → JSON 下行
-        - tts.audio.delta → 二进制 PCM 下行（tag + PCM）+ JSON 元数据
-        - avatar.*_frame → 二进制 JPEG 下行（tag + JPEG）+ JSON 元数据
-        """
-        # 新一轮 Run：在 record() 之前 start_run，保证后续（含本事件）都被记录
-        if (
-            event.type == RUN_STARTED
-            and self.recorder
-            and event.run_id
-            and not self.recorder.is_active(event.run_id)
-        ):
-            await self.recorder.start_run(
-                event.run_id,
-                event.session_id,
-                self.session.profile_id if self.session else "mock",
-                persona_id=self.session.persona_id if self.session else None,
-            )
-
-        # Recorder 记录
-        if self.recorder and event.run_id:
-            await self.recorder.record(event)
-
-        # 状态变更/会话事件
-        if event.type == SESSION_STATE_CHANGED:
-            await self._enqueue_json(
-                {
-                    "type": "session.state_changed",
-                    "payload": event.payload,
-                }
-            )
-        elif event.type == "session.started":
-            await self._enqueue_json({"type": "session.started", "payload": event.payload})
-        elif event.type == TRANSCRIPT_COMPLETED:
-            await self._enqueue_json(
-                {
-                    "type": "transcript.completed",
-                    "payload": event.payload,
-                }
-            )
-        elif event.type == RUN_STARTED:
-            # 通知前端新 Run 开始（Recorder 已在上方的 start_run 早启动逻辑里就绪）
-            await self._enqueue_json({"type": "run.started", "payload": event.payload})
-        elif event.type == "llm.text.delta":
-            await self._enqueue_json({"type": "llm.text.delta", "payload": event.payload})
-        elif event.type == "llm.text.done":
-            await self._enqueue_json({"type": "llm.text.done", "payload": event.payload})
-        elif event.type == RESPONSE_DONE:
-            await self._enqueue_json({"type": "response.done", "payload": event.payload})
-            # 结束 Run 记录
-            if self.recorder and event.run_id and self.recorder.is_active(event.run_id):
-                await self.recorder.finalize_run(event.run_id)
-
-        # Vision：触发词命中 → 请求浏览器截帧；分析结果 → 下行描述
-        elif event.type == VISION_REQUEST:
-            await self._enqueue_json({"type": "vision.request", "payload": event.payload})
-        elif event.type == VISION_RESULT:
-            await self._enqueue_json({"type": "vision.result", "payload": event.payload})
-
-        # TTS 音频：二进制下行 + JSON 元数据
-        elif event.type == TTS_AUDIO_DELTA:
-            pcm_b64 = event.payload.get("pcm_b64", "")
-            if pcm_b64:
-                try:
-                    pcm = base64.b64decode(pcm_b64)
-                    # 下行格式：0x03 + PCM；音频队列非阻塞丢最旧（不反压事件出口）
-                    _put_drop_oldest(self._audio_queue, bytes([TAG_TTS_PCM_DOWNLINK]) + pcm)
-                except Exception:
-                    logger.warning("TTS audio base64 decode failed——audio chunk dropped", exc_info=True)
-            # 元数据（不含 pcm_b64，减小 JSON 体积）——控制队列，不丢
-            meta = {k: v for k, v in event.payload.items() if k != "pcm_b64"}
-            await self._enqueue_json({"type": "tts.audio.delta", "payload": meta})
-
-        elif event.type == TTS_AUDIO_COMPLETED:
-            await self._enqueue_json({"type": "tts.audio.completed", "payload": event.payload})
-
-        elif event.type == AVATAR_VIDEO_READY:
-            await self._enqueue_json(
-                {"type": "avatar.video.ready", "payload": event.payload}
-            )
-
-        # Avatar 帧：二进制下行
-        elif event.type in (AVATAR_SPEECH_FRAME, AVATAR_IDLE_FRAME):
-            frame_b64 = event.payload.get("frame_b64", "")
-            if frame_b64:
-                try:
-                    jpeg = base64.b64decode(frame_b64)
-                    # 下行格式：0x01 + 0x00/0x01(子tag) + JPEG；视频队列丢最旧
-                    sub_tag = 0x01 if event.type == AVATAR_SPEECH_FRAME else 0x00
-                    _put_drop_oldest(self._video_queue, bytes([TAG_AVATAR_JPEG, sub_tag]) + jpeg)
-                except Exception:
-                    logger.warning("avatar frame base64 decode failed——frame dropped", exc_info=True)
-
-    async def _downlink_sender(self) -> None:
-        """独立任务：三队列优先级调度发送（控制 > 音频 > 视频）。
-
-        每轮从 control 开始轮询，发一条即重排——控制事件绝对优先；
-        全空时 5ms 短睡眠（25fps 帧间隔 40ms，无感）。避免阻塞 Orchestrator。
-        """
-        try:
-            while not self._closed:
-                sent = False
-                # 控制队列（JSON）
-                try:
-                    ctrl = self._control_queue.get_nowait()
-                    if self.ws.client_state != WebSocketState.CONNECTED:
-                        break
-
-                    await self.ws.send_text(json.dumps(ctrl, ensure_ascii=False))
-                    sent = True
-                    self._last_downlink_at = time.monotonic()
-                except asyncio.QueueEmpty:
-                    pass
-                # 音频队列
-                if not sent:
-                    try:
-                        audio = self._audio_queue.get_nowait()
-                        if self.ws.client_state != WebSocketState.CONNECTED:
-                            break
-                        await self.ws.send_bytes(audio)
-                        sent = True
-                        self._last_downlink_at = time.monotonic()
-                    except asyncio.QueueEmpty:
-                        pass
-                # 视频队列
-                if not sent:
-                    try:
-                        video = self._video_queue.get_nowait()
-                        if self.ws.client_state != WebSocketState.CONNECTED:
-                            break
-                        await self.ws.send_bytes(video)
-                        sent = True
-                        self._last_downlink_at = time.monotonic()
-                    except asyncio.QueueEmpty:
-                        pass
-                if not sent:
-                    await asyncio.sleep(0.005)
-        except asyncio.CancelledError:
-            pass
-        except Exception:
-            logger.exception("downlink send error")
-
-    async def _enqueue_json(self, data: dict[str, Any]) -> None:
-        """入队 JSON 控制消息（AL-P2-006）。
-
-        控制事件量小（状态/错误/边界），512 深度几乎不会满；
-        真满说明客户端已不消费——短等待（2s）后丢弃并告警，
-        避免慢客户端反压整个 Orchestrator 事件出口（含 recorder/TTS 链路）。
-        """
-        try:
-            self._control_queue.put_nowait(data)
-        except asyncio.QueueFull:
-            try:
-                await asyncio.wait_for(self._control_queue.put(data), timeout=2.0)
-            except TimeoutError:
-                logger.warning(
-                    "control queue full for 2s——dropping JSON message %s",
-                    data.get("type"),
-                )
-
-    async def _send_error(self, message: str) -> None:
-        await self._enqueue_json({"type": "error", "payload": {"message": message}})
 
     # ------------------------------------------------------------------
     # 清理
@@ -697,25 +404,14 @@ class WebSocketSession:
                     if _active_orchestrator is self.orchestrator:
                         _active_orchestrator = None
 
-        # 收尾 Recorder：flush 所有未 finalize 的 Run（events.jsonl 文件句柄、
+        # 收尾 bridge：cancel downlink task + flush recorder（events.jsonl 句柄、
         # metrics/transcript 落盘），避免客户端断开时资源泄漏。
-        if self.recorder:
-            try:
-                await self.recorder.shutdown()
-            except Exception:
-                logger.exception("recorder shutdown error")
-
-        if self._downlink_task:
-            self._downlink_task.cancel()
-            try:
-                await self._downlink_task
-            except asyncio.CancelledError:
-                pass
+        await self.bridge.stop()
 
         had_gpu_session = self._had_gpu_block
         self.orchestrator = None
         self.session = None
-        self.recorder = None
+        self.bridge.session_ref = None
         self._had_gpu_block = False
 
         if had_gpu_session and not os.environ.get("AVATARLOOM_TESTING") and _SELF_RESTART:
