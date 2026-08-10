@@ -157,8 +157,6 @@ class Orchestrator:
         self._filler_last_idx: dict[str, int] = {}
         # Memory 记忆（Mem0 移植）：session_id -> 本轮用户文本（llm.done 时凑对写入）
         self._memory_pending_users: dict[str, str] = {}
-        # 内部任务（订阅消费者等）
-        self._tasks: list[asyncio.Task[None]] = []
         self._setup_done = False
         self._lock = asyncio.Lock()
 
@@ -208,31 +206,27 @@ class Orchestrator:
         任何一环卡死都不能挡住其余显存释放。
         """
         async with self._lock:
-            # 1. 先关 sessions（emit session.closed）
+            # 1. 先清理所有 session 的派生状态（filler task / vision pending /
+            # 状态字典）——close_all 只调 session.close()，不走 end_session 的
+            # 清理路径，filler task 会在 session 关闭后继续 emit tts.audio.delta
+            for session_id in list(self.sessions._sessions.keys()):
+                try:
+                    self._cleanup_session_state(session_id)
+                except Exception:
+                    logger.exception(
+                        "session state cleanup error during shutdown: %s",
+                        session_id,
+                    )
+
+            # 2. 关 sessions（emit session.closed）
             try:
                 await self.sessions.close_all()
             except Exception:
                 logger.exception("sessions close_all error during shutdown")
 
-            # 2. 关 Block——逐个隔离（异常/超时/自取消泄漏不扩散）
+            # 3. 关 Block——逐个隔离（异常/超时/自取消泄漏不扩散）
             for block in list(self.blocks.values()):
                 await self._shutdown_block(block)
-
-            # 3. 取消内部任务
-            for task in self._tasks:
-                task.cancel()
-            for task in self._tasks:
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    # 这些 task 是我们自己 cancel 的——自取消吞掉；
-                    # 仅当前 shutdown 任务自身被外部取消时透传
-                    current = asyncio.current_task()
-                    if current is not None and current.cancelling() > 0:
-                        raise
-                except Exception:
-                    logger.exception("orchestrator internal task error during shutdown")
-            self._tasks.clear()
 
             # 4. 最后关 EventBus
             try:
@@ -315,18 +309,28 @@ class Orchestrator:
 
     async def end_session(self, session: Session, reason: str = "normal") -> None:
         """结束会话——同时清理 Persona/Vision 上下文和 pending Vision 等待。"""
-        # 取消挂起的同轮 Vision 等待（等待方收到 CancelledError 后跳过 LLM）
-        pending = self._vision_pending.pop(session.session_id, None)
-        if pending is not None and not pending[1].done():
-            pending[1].cancel()
-        self._cancel_filler(session.session_id)
-        self._persona_contexts.pop(session.session_id, None)
-        self._memory_pending_users.pop(session.session_id, None)
-        self._vision_contexts.pop(session.session_id, None)
-        self._vision_locks.pop(session.session_id, None)
-        self._vision_last_call.pop(session.session_id, None)
+        self._cleanup_session_state(session.session_id)
         await session.close(reason)
         self.sessions.remove(session.session_id)
+
+    def _cleanup_session_state(self, session_id: str) -> None:
+        """清理 session 级状态字典 + 取消派生任务。
+
+        end_session 和 shutdown 共用——否则 shutdown 只调 session.close()
+        不走这条路径，filler task / vision pending future / 各状态字典全部泄漏。
+        """
+        # 取消挂起的同轮 Vision 等待（等待方收到 CancelledError 后跳过 LLM）
+        pending = self._vision_pending.pop(session_id, None)
+        if pending is not None and not pending[1].done():
+            pending[1].cancel()
+        # 取消垫音 task——否则 session 关闭后 filler 继续 emit tts.audio.delta
+        self._cancel_filler(session_id)
+        # 清空 session 级状态字典
+        self._persona_contexts.pop(session_id, None)
+        self._memory_pending_users.pop(session_id, None)
+        self._vision_contexts.pop(session_id, None)
+        self._vision_locks.pop(session_id, None)
+        self._vision_last_call.pop(session_id, None)
 
     # ------------------------------------------------------------------
     # Persona 切换

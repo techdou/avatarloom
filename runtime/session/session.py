@@ -186,22 +186,28 @@ class Session:
         同时 emit run.started 事件，让 Recorder/Studio UI 在 LLM/TTS 事件
         到达前就能感知到新 Run（避免 delta 事件先到、run 还未注册导致丢录）。
         """
-        self.current_run_id = _new_run_id()
-        event = make_event(
-            RUN_STARTED,
-            session_id=self.session_id,
-            source="session.manager",
-            run_id=self.current_run_id,
-            sequence=self.next_sequence(),
-            payload={
-                "run_id": self.current_run_id,
-                "session_id": self.session_id,
-                "profile_id": self.profile_id,
-                "persona_id": self.persona_id,
-            },
-        )
+        # 锁内生成 run_id 并建事件——await _emit_event 期间另一个协程可能
+        # 再次调 start_new_run 覆盖 current_run_id，返回值会与实际 run 不符。
+        # 返回锁内快照，和 trigger 同模式（emit 移锁外避免持锁 publish 遇
+        # BLOCK 满队列阻塞）。
+        async with self._lock:
+            self.current_run_id = _new_run_id()
+            run_id = self.current_run_id
+            event = make_event(
+                RUN_STARTED,
+                session_id=self.session_id,
+                source="session.manager",
+                run_id=run_id,
+                sequence=self.next_sequence(),
+                payload={
+                    "run_id": run_id,
+                    "session_id": self.session_id,
+                    "profile_id": self.profile_id,
+                    "persona_id": self.persona_id,
+                },
+            )
         await self._emit_event(event)
-        return self.current_run_id
+        return run_id
 
     async def close(self, reason: str = "normal") -> None:
         """关闭会话。"""

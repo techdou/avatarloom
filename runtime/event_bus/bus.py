@@ -141,8 +141,16 @@ class EventBus:
                 if self._matches(sub.pattern, event.type):
                     matched.append(sub)
 
-        for sub in matched:
-            await self._enqueue(sub, event)
+        # 并行投递——串行 enqueue 时一个慢 BLOCK 订阅者会钳制整条链路：
+        # publish 持有当前协程，直到最慢的订阅者入队完成才返回。改成 gather
+        # 后各订阅者独立入队等待，互不阻塞。return_exceptions=True 保证一个
+        # 订阅的异常不影响其他（enqueue 内部已吞 QueueFull，这里主要兜底 CancelledError
+        # 之外的意外）。
+        if matched:
+            await asyncio.gather(
+                *(self._enqueue(sub, event) for sub in matched),
+                return_exceptions=True,
+            )
 
     async def close(self) -> None:
         """关闭总线，取消所有订阅。"""

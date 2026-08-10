@@ -53,6 +53,9 @@ class RunRecorder:
         # run_id -> 当前活跃记录状态
         self._active: dict[str, _RunState] = {}
         self._lock = asyncio.Lock()
+        # flush 降频参数：高频音频事件下每秒 20-40 次 flush 浪费 syscalls。
+        # write 留锁内（防并发交错），flush 改按时间窗口批量；finalize 强制 flush。
+        self._flush_interval_s = 0.5
 
     async def start_run(
         self,
@@ -122,6 +125,10 @@ class RunRecorder:
 
         仅记录当前活跃 Run 的事件；非 Run 范围（run_id 为 None 或已 finalize）
         直接跳过（session 级事件单独管理，v0.1 简化）。
+
+        flush 策略：write 留锁内（防并发写交错），flush 按 _flush_interval_s
+        时间窗口降频——高频音频事件下原本每秒 20-40 次 flush，现在合并。
+        finalize_run 时强制 flush 保证落盘。
         """
         # 序列化在锁外做（json.dumps 是 CPU、不涉及共享状态）
         line = json.dumps(event.model_dump(), ensure_ascii=False) + "\n"
@@ -132,11 +139,16 @@ class RunRecorder:
                 return
             state = self._active[run_id]
 
-            # 追加事件到 jsonl + 更新指标，都在锁内。
-            # 锁保证串行（杜绝并发写同一句柄导致行交错）；I/O 经 to_thread 移出
-            # 事件循环（慢盘不再卡住整条 gateway 协程链路）。两者可兼得。
+            # 追加事件到 jsonl：write 在锁内 + to_thread（杜绝并发写同一句柄
+            # 导致行交错，慢盘不卡事件循环）。
             await asyncio.to_thread(state.events_file.write, line)
-            await asyncio.to_thread(state.events_file.flush)
+
+            # flush 降频：距上次 flush 超过 _flush_interval_s 才真正 flush。
+            # 进程崩溃最多丢一个窗口（0.5s）的事件——可接受，finalize 会强制 flush。
+            now = time.monotonic()
+            if now - state.last_flush_ts >= self._flush_interval_s:
+                await asyncio.to_thread(state.events_file.flush)
+                state.last_flush_ts = now
 
             # 更新指标（锁内——state 读改写需原子）
             self._update_metrics(state, event)
@@ -189,7 +201,9 @@ class RunRecorder:
                 encoding="utf-8",
             )
 
-            # 关事件文件
+            # 关事件文件前强制 flush——record 的 flush 是降频的，
+            # finalize 时必须把剩余缓冲落盘再关，否则尾事件丢失。
+            state.events_file.flush()
             state.events_file.close()
             logger.info(
                 "run finalized: %s status=%s duration=%dms",
@@ -351,3 +365,5 @@ class _RunState:
         self.runtime_config = runtime_config
         self.rounds: list[dict[str, str]] = []
         self.artifacts: list[dict[str, Any]] = []
+        # 上次 flush 的 monotonic 时间戳——record 按 _flush_interval_s 降频 flush
+        self.last_flush_ts: float = 0.0
