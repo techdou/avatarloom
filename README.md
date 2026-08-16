@@ -120,7 +120,7 @@ make doctor    # 环境自检
 
 ```bash
 # Docker Compose 一键起三服务（非 root、frozen lockfile 构建）
-docker compose -f deploy/docker/docker-compose.yml up -d --build
+docker compose -f deploy/docker-compose.yml up -d --build
 ```
 
 生产环境必须设置 `AVATARLOOM_API_TOKEN`（或按部署拓扑注入共享密钥），不要依赖默认开发模式。
