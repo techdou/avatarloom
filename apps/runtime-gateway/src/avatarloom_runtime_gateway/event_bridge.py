@@ -47,7 +47,7 @@ from runtime.recorder import RunRecorder
 from runtime.session import Session
 
 if TYPE_CHECKING:
-    pass
+    from avatarloom_runtime_gateway.control_api import ControlApiReporter
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +103,10 @@ class OrchestratorEventBridge:
         # （虽然实际上 setup 成功前 orchestrator 不会 emit 业务事件）。
         self.recorder: RunRecorder | None = None
         self.session_ref: Session | None = None
+        # Session/Run 生命周期上报 control-api（ws_handler 注入；测试可不设）
+        self.reporter: ControlApiReporter | None = None
+        # 已上报 started、尚未收到 response.done 的 run——cleanup 兜底标 interrupted
+        self._active_reported_runs: set[str] = set()
 
     # ------------------------------------------------------------------
     # 属性
@@ -123,10 +127,11 @@ class OrchestratorEventBridge:
             self._downlink_task = asyncio.create_task(self._downlink_sender())
 
     async def stop(self) -> None:
-        """停止下行任务 + flush recorder。
+        """停止下行任务 + flush recorder + 兜底上报未收尾的 Run。
 
-        cleanup 流程调用——cancel downlink task 后等待退出，再把未 finalize
-        的 Run 收尾（events.jsonl 句柄、metrics/transcript 落盘）。
+        cleanup 流程调用——先 cancel downlink task 后等待退出；再把未 finalize
+        的 Run 上报为 interrupted（客户端断开/服务关停时 response.done 不会来），
+        最后 flush recorder（events.jsonl 句柄、metrics/transcript 落盘）。
         """
         if self._downlink_task is not None:
             self._downlink_task.cancel()
@@ -135,6 +140,11 @@ class OrchestratorEventBridge:
             except asyncio.CancelledError:
                 pass
             self._downlink_task = None
+
+        if self.reporter is not None:
+            for run_id in list(self._active_reported_runs):
+                await self.reporter.report_run_finalized(run_id, status="interrupted")
+            self._active_reported_runs.clear()
 
         if self.recorder is not None:
             try:
@@ -194,6 +204,15 @@ class OrchestratorEventBridge:
         elif event.type == RUN_STARTED:
             # 通知前端新 Run 开始（Recorder 已在上方的 start_run 早启动逻辑里就绪）
             await self.enqueue_json({"type": "run.started", "payload": event.payload})
+            # Run 开始上报 control-api（旁路；upsert 幂等，失败仅日志）
+            if self.reporter and event.run_id and event.session_id:
+                self._active_reported_runs.add(event.run_id)
+                await self.reporter.report_run_started(
+                    event.run_id,
+                    session_id=event.session_id,
+                    profile_id=self.session_ref.profile_id if self.session_ref else None,
+                    persona_id=self.session_ref.persona_id if self.session_ref else None,
+                )
         elif event.type == "llm.text.delta":
             await self.enqueue_json({"type": "llm.text.delta", "payload": event.payload})
         elif event.type == "llm.text.done":
@@ -203,6 +222,21 @@ class OrchestratorEventBridge:
             # 结束 Run 记录
             if self.recorder and event.run_id and self.recorder.is_active(event.run_id):
                 await self.recorder.finalize_run(event.run_id)
+            # Run 收尾上报 control-api——metrics/transcript 读自 recorder 落盘产物
+            # （旁路；run 未上报过 started 时跳过——control-api 侧无记录可 PATCH）
+            if self.reporter and event.run_id and event.run_id in self._active_reported_runs:
+                self._active_reported_runs.discard(event.run_id)
+                metrics = self.recorder.load_metrics(event.run_id) if self.recorder else None
+                transcript = (
+                    self.recorder.load_transcript(event.run_id) if self.recorder else None
+                )
+                await self.reporter.report_run_finalized(
+                    event.run_id,
+                    status="completed",
+                    metrics=metrics,
+                    user_text=str(transcript.get("user") or "") if transcript else None,
+                    assistant_text=str(transcript.get("assistant") or "") if transcript else None,
+                )
 
         # Vision：触发词命中 → 请求浏览器截帧；分析结果 → 下行描述
         elif event.type == VISION_REQUEST:

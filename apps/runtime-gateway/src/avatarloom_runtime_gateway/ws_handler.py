@@ -34,6 +34,7 @@ from avatarloom_runtime_gateway.auth import (
     token_matches,
 )
 from avatarloom_runtime_gateway.config import Settings
+from avatarloom_runtime_gateway.control_api import ControlApiReporter
 from avatarloom_runtime_gateway.event_bridge import OrchestratorEventBridge, put_drop_oldest
 from avatarloom_runtime_gateway.uplink import UplinkDispatcher
 from runtime.orchestrator import Orchestrator
@@ -122,6 +123,9 @@ class WebSocketSession:
 
         # 下行事件桥接（三队列 + recorder）——is_closed 回调避免循环引用
         self.bridge = OrchestratorEventBridge(ws, is_closed=lambda: self._closed)
+        # Session/Run 生命周期上报 control-api（Runs/Sessions 页数据源；失败仅日志）
+        self.reporter = ControlApiReporter(settings)
+        self.bridge.reporter = self.reporter
         # 上行消息分发——session 自身满足 UplinkContext Protocol
         self._dispatcher = UplinkDispatcher(ctx=self)
 
@@ -336,6 +340,12 @@ class WebSocketSession:
                 },
             }
         )
+        # Session 生命周期上报 control-api（旁路，失败仅日志不阻塞会话）
+        await self.reporter.report_session_started(
+            self.session.session_id,
+            profile_id=profile_id,
+            persona_id=persona_id,
+        )
         logger.info("ws session started: %s (profile=%s)", self.session.session_id, profile_id)
 
     async def _stop_session(self) -> None:
@@ -386,6 +396,8 @@ class WebSocketSession:
             return
         self._closed = True
 
+        session_id = self.session.session_id if self.session else None
+
         if self.session and self.orchestrator:
             try:
                 await self.orchestrator.end_session(self.session, reason="client_disconnect")
@@ -405,13 +417,18 @@ class WebSocketSession:
                         _active_orchestrator = None
 
         # 收尾 bridge：cancel downlink task + flush recorder（events.jsonl 句柄、
-        # metrics/transcript 落盘），避免客户端断开时资源泄漏。
+        # metrics/transcript 落盘），并对未收到 response.done 的 run 兜底上报
+        # interrupted。之后再上报 session 收尾（此时 run 旁路已 drain）。
         await self.bridge.stop()
+        if session_id:
+            await self.reporter.report_session_ended(session_id)
+            await self.reporter.close()
 
         had_gpu_session = self._had_gpu_block
         self.orchestrator = None
         self.session = None
         self.bridge.session_ref = None
+        self.bridge.reporter = None
         self._had_gpu_block = False
 
         if had_gpu_session and not os.environ.get("AVATARLOOM_TESTING") and _SELF_RESTART:

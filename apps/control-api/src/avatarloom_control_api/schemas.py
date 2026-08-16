@@ -243,6 +243,23 @@ class SessionOut(ORMBase):
     ended_at: datetime | None
 
 
+class SessionReport(BaseModel):
+    """Runtime Gateway 上报的会话开始（upsert：存在则更新）。"""
+
+    id: str = Field(min_length=1, max_length=64, pattern=RESOURCE_ID_PATTERN)
+    avatar_id: str | None = None
+    profile_id: str | None = None
+    persona_id: str | None = None
+    status: str = "active"
+
+
+class SessionUpdate(BaseModel):
+    """会话收尾（ended/status）。"""
+
+    status: str | None = None
+    ended_at: datetime | None = None
+
+
 class RunOut(ORMBase):
     id: str
     session_id: str
@@ -255,6 +272,28 @@ class RunOut(ORMBase):
     assistant_text: str
     started_at: datetime
     ended_at: datetime | None
+
+
+class RunReport(BaseModel):
+    """Runtime Gateway 上报的 Run 开始（upsert：存在则更新）。"""
+
+    id: str = Field(min_length=1, max_length=128, pattern=RESOURCE_ID_PATTERN)
+    session_id: str = Field(min_length=1, max_length=64)
+    profile_id: str | None = None
+    persona_id: str | None = None
+    status: str = "running"
+    run_dir: str | None = None
+
+
+class RunUpdate(BaseModel):
+    """Run 收尾（status/metrics/transcript）。"""
+
+    status: str | None = None
+    metrics: dict[str, Any] | None = None
+    run_dir: str | None = None
+    user_text: str | None = None
+    assistant_text: str | None = None
+    ended_at: datetime | None = None
 
 
 class ArtifactOut(ORMBase):

@@ -1,9 +1,11 @@
-"""Sessions / Runs / Artifacts 只读路由。
+"""Sessions / Runs / Artifacts 路由。
 
-Session 和 Run 主要由 Runtime Gateway 创建，这里提供查询接口。
+Session 由 Runtime Gateway 创建/收尾（POST/PATCH 上报），这里同时提供查询接口。
 """
 
 from __future__ import annotations
+
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
@@ -11,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from avatarloom_control_api.deps import get_db
 from avatarloom_control_api.models import Session
-from avatarloom_control_api.schemas import SessionOut
+from avatarloom_control_api.schemas import SessionOut, SessionReport, SessionUpdate
 
 router = APIRouter()
 
@@ -36,4 +38,44 @@ async def get_session(session_id: str, db: AsyncSession = Depends(get_db)) -> Se
     session = await db.get(Session, session_id)
     if session is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Session not found")
+    return session
+
+
+@router.post("", response_model=SessionOut)
+async def report_session_start(
+    payload: SessionReport, db: AsyncSession = Depends(get_db)
+) -> Session:
+    """Runtime Gateway 上报会话开始（upsert——重试幂等）。"""
+    session = await db.get(Session, payload.id)
+    if session is None:
+        session = Session(
+            **payload.model_dump(),
+            started_at=datetime.now(timezone.utc),
+        )
+        db.add(session)
+    else:
+        for k, v in payload.model_dump().items():
+            setattr(session, k, v)
+    await db.commit()
+    await db.refresh(session)
+    return session
+
+
+@router.patch("/{session_id}", response_model=SessionOut)
+async def update_session(
+    session_id: str,
+    payload: SessionUpdate,
+    db: AsyncSession = Depends(get_db),
+) -> Session:
+    """Runtime Gateway 上报会话收尾（status/ended_at）。"""
+    session = await db.get(Session, session_id)
+    if session is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Session not found")
+    update_dict = payload.model_dump(exclude_unset=True)
+    for k, v in update_dict.items():
+        setattr(session, k, v)
+    if "status" in update_dict and session.ended_at is None:
+        session.ended_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(session)
     return session
