@@ -347,18 +347,20 @@ class TestSingleSessionLock:
 
 class TestBlockShutdown:
     async def test_qwen3_shutdown_releases_model_without_torch(self) -> None:
-        """qwen3 shutdown：清模型/缓存/运行态；无 torch 环境不抛 ImportError。"""
+        """qwen3 shutdown：清模型/缓存/运行态；无 torch 环境不抛 ImportError。
+
+        qwen-tts 官方包的 Qwen3TTSModel 自带 tokenizer——独立 _tokenizer
+        字段已随 transformers→qwen-tts 迁移移除，不再单独断言。
+        """
         from blocks.tts.qwen3 import Qwen3TtsBlock
 
         block = Qwen3TtsBlock()
         block._model = object()
-        block._tokenizer = object()
         block._sentence_buffers = {0: "残留"}
         block._cancelled_run_ids.add("r0")
 
         await asyncio.wait_for(block.shutdown(), timeout=5)
         assert block._model is None
-        assert block._tokenizer is None
         assert block._sentence_buffers == {}
         assert block._cancelled_run_ids == set()
 

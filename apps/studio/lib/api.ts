@@ -57,6 +57,9 @@ function ssrAuthHeaders(token?: string): Record<string, string> {
 
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(`${fetchBase()}${path}`, {
+    // Next.js SSR fetch 默认 force-cache（结果持久化进 .next，进程重启也在）——
+    // 列表/详情数据必须显式 no-store，否则 DB 更新后页面一直渲染旧缓存
+    cache: "no-store",
     ...init,
     headers: {
       "Content-Type": "application/json",
@@ -74,6 +77,7 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
 /** Runtime Gateway 客户端（浏览器 /api/realtime/* → 8101/api/*；SSR 直连 + GATEWAY_API_TOKEN）。 */
 export async function gatewayFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(`${gatewayFetchBase()}${path}`, {
+    cache: "no-store",
     ...init,
     headers: {
       "Content-Type": "application/json",

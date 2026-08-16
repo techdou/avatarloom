@@ -117,3 +117,8 @@ avatarloom-v*/
 .cache/
 vendor/
 .pytest_tmp/
+
+# Playwright e2e 产物与 UI 验证截图（本地证据，不进仓库）
+e2e-results/
+gui-test-screenshots/
+apps/studio/e2e-results/
