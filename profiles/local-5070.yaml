@@ -1,0 +1,66 @@
+apiVersion: avatarloom.io/v1alpha1
+kind: RuntimeProfile
+metadata:
+  id: local-5070
+  name: Local RTX 5070 Ti (VAD+STT+LLM+TTS, no Avatar)
+  description: >
+    本机 RTX 5070 Ti Laptop 12GB 测试档。
+    VAD 走 CPU、STT 用 Mock（funasr 与 Python 3.12 不兼容）、
+    LLM 走 DeepSeek 远程、TTS 走 Qwen3-TTS GPU。
+    Avatar 用 Mock——只测语音链路，不测口型驱动。
+blocks:
+  vad:
+    id: vad.silero
+    deployment: local
+    config:
+      device: cpu
+      threshold: 0.5
+      minSilenceMs: 500
+  stt:
+    id: stt.mock
+    deployment: mock
+    config:
+      mode: random
+  llm:
+    id: llm.openai-compatible
+    deployment: remote
+    config:
+      baseUrl: ${LLM_BASE_URL}
+      apiKeyEnv: LLM_API_KEY
+      model: ${LLM_MODEL}
+      maxTokens: 256
+      temperature: 0.6
+      disableThinking: true
+      systemPrompt: "你是一个简短的语音助手。回答控制在 1-2 句话，不要使用 Markdown 符号或列表。"
+  tts:
+    id: tts.qwen3
+    deployment: local
+    config:
+      device: cuda
+      model: E:/models/Qwen3-TTS
+      refAudio: .omx/assets/mimo/audio/assistant_voice_ref.wav
+      language: Chinese
+  avatar:
+    id: avatar.mock
+    deployment: mock
+  vision:
+    id: vision.mock
+    deployment: mock
+    optional: true
+  memory:
+    id: memory.mem0-local
+    deployment: local
+    optional: true
+    config:
+      enabled: false
+      apiKeyEnv: LLM_API_KEY
+
+sync:
+  audio_delay_ms: 600
+  video_lag_frames: 0
+  max_video_behind_ms: 1000
+  drop_policy: drop_oldest_video
+session:
+  mode: single
+  allowInterruption: true
+  event_log: true

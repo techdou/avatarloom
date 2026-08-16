@@ -51,9 +51,11 @@ class Qwen3TtsBlock(Block):
     def __init__(self) -> None:
         super().__init__()
         self._model: Any = None
-        self._tokenizer: Any = None
         self._device: str = "cuda"
         self._model_name: str = "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
+        self._source_sr: int = 24000
+        self._default_ref_audio: str | None = None
+        self._language: str = "Chinese"
         self._sentence_buffers: dict[int, str] = {}
         self._total_samples: int = 0
         # 按 run 隔离 + 打断协作（同 voxcpm2 模式，见 AL-P2-003 / AL-P1-006）
@@ -94,6 +96,15 @@ class Qwen3TtsBlock(Block):
                         "default": "none",
                     },
                     "sampleRate": {"type": "integer", "default": 16000},
+                    "refAudio": {
+                        "type": "string",
+                        "description": "默认参考音频路径（音色克隆），persona 未设置 voice_ref 时用此默认值",
+                    },
+                    "language": {
+                        "type": "string",
+                        "default": "Chinese",
+                        "description": "合成语言（Chinese/English/Japanese...）",
+                    },
                 },
             },
             install_extras=["qwen3-tts"],
@@ -103,15 +114,17 @@ class Qwen3TtsBlock(Block):
         cfg = ctx.config
         self._model_name = str(cfg.get("model", "Qwen/Qwen3-TTS-12Hz-0.6B-Base"))
         self._device = str(cfg.get("device", "cuda"))
+        self._default_ref_audio = str(cfg.get("refAudio", "")) or None
+        self._language = str(cfg.get("language", "Chinese"))
         try:
             # 模型加载是重阻塞 IO+初始化——offload 线程，不卡事件循环
-            self._tokenizer, self._model = await asyncio.to_thread(
+            self._model = await asyncio.to_thread(
                 self._load_model, self._model_name, self._device
             )
         except ImportError as e:
             raise BlockSetupError(
                 "tts.qwen3",
-                f"transformers/torch 未安装: {e}. 运行 `uv sync --extra qwen3-tts`",
+                f"qwen-tts/torch 未安装: {e}. 运行 `uv sync --extra qwen3-tts`",
             ) from e
         except Exception as e:
             raise BlockSetupError("tts.qwen3", f"加载模型失败: {e}") from e
@@ -180,8 +193,9 @@ class Qwen3TtsBlock(Block):
             # 打断检查（AL-P1-006）：丢弃已打断 run 的剩余输出
             if ctx.run_id is not None and ctx.run_id in self._cancelled_run_ids:
                 return
-            # Qwen3-TTS 输出 24kHz float32，降到 16kHz int16
-            pcm16 = _resample_float32_to_int16(pcm, source_sr=24000, target_sr=TARGET_SR)
+            # Qwen3-TTS 输出 float32（采样率由模型返回，通常 24kHz），降到 16kHz int16
+            source_sr = getattr(self, "_source_sr", 24000)
+            pcm16 = _resample_float32_to_int16(pcm, source_sr=source_sr, target_sr=TARGET_SR)
             if not pcm16:
                 continue
             chunk_size = 1600
@@ -214,40 +228,55 @@ class Qwen3TtsBlock(Block):
         模型常驻显存，torch caching allocator 不归还，多次重连必然 OOM）。
         gc + empty_cache 是阻塞调用——offload 线程执行。"""
         model = self._model
-        tokenizer = self._tokenizer
         self._model = None
-        self._tokenizer = None
         self._sentence_buffers = {}
         self._total_samples = 0
         self._run_id = None
         self._cancelled_run_ids.clear()
-        holder = [model, tokenizer]
+        holder = [model]
         model = None
-        tokenizer = None
         await asyncio.to_thread(release_gpu_objects, holder)
 
     # ---- 重依赖 ----
 
-    def _load_model(self, model_name: str, device: str) -> tuple[Any, Any]:
-        import torch
-        from transformers import AutoModelForCausalLM, AutoTokenizer
+    def _load_model(self, model_name: str, device: str) -> Any:
+        """加载 Qwen3-TTS 模型（用官方 qwen-tts 包）。
 
-        # 安全提示：trust_remote_code=True 会执行模型仓库里的自定义 Python 代码。
-        # 生产环境建议固定 model_name 到具体 commit hash（revision=...）锚定版本，
-        # 或全部走本地预置目录（同 voxcpm2 的 local dir 模式）。
-        tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name, trust_remote_code=True, torch_dtype=torch.bfloat16
-        ).to(device)
-        model.eval()
-        return tokenizer, model
+        qwen-tts 自带模型架构注册，不需要 trust_remote_code。
+        返回 Qwen3TTSModel 实例（自带 tokenizer/processor）。
+        """
+        import torch
+
+        from qwen_tts import Qwen3TTSModel
+
+        model = Qwen3TTSModel.from_pretrained(
+            model_name,
+            device_map=device,
+            dtype=torch.bfloat16,
+        )
+        return model
 
     def _infer_stream(self, text: str, voice_ref: str | None) -> list[bytes]:
-        """流式合成。返回 PCM chunk 列表（24kHz float32）。"""
-        import torch
+        """合成语音。返回 PCM chunk 列表（原始采样率 float32 numpy）。
 
-        # 简化版——真实实现参考 Qwen3-TTS 官方 demo
-        inputs = self._tokenizer(text, return_tensors="pt").to(self._device)
-        with torch.no_grad():
-            audio = self._model.generate(**inputs, voice=voice_ref)
-        return [audio.cpu().numpy().tobytes()]
+        Qwen3-TTS 官方 API：generate_voice_clone(text, language, ref_audio, ref_text)
+        返回 (wavs: list[np.ndarray], sr: int)，wavs 元素是 float32 1D 数组。
+        """
+        import numpy as np
+
+        # ref_audio 优先用 persona voice_ref，其次用 config 的默认参考音频
+        # Base 模型用 x_vector_only_mode=True：只需参考音频提取音色向量，不需要 ref_text
+        ref_audio = voice_ref or self._default_ref_audio
+        wavs, sr = self._model.generate_voice_clone(
+            text=text,
+            language=self._language,
+            ref_audio=ref_audio,
+            ref_text=None,
+            x_vector_only_mode=True,
+        )
+        # wavs 是 list[np.ndarray]，取第一个（单说话人）
+        if not wavs:
+            return []
+        audio = np.asarray(wavs[0], dtype=np.float32)
+        self._source_sr = sr
+        return [audio.tobytes()]
