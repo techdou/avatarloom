@@ -26,6 +26,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 # 注入项目根到 sys.path，让 runtime/ 和 blocks/ 可 import
 # （runtime/blocks 是扁平 namespace 包，不是 workspace 成员）
 _PROJECT_ROOT = Path(__file__).resolve().parents[4]
@@ -142,12 +144,45 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/profiles")
     async def list_profiles() -> dict[str, Any]:
-        """列出 profiles/ 目录下的 yaml。"""
+        """列出 profiles/ 目录下可用的 RuntimeProfile（yaml 概要）。
+
+        这是运行时真实装配来源（session.start 按 id 装配这里的 yaml）——
+        前端 profile 下拉/列表页的数据源。轻量读 yaml（不 load_profile
+        构造 OrchestratorConfig，避免逐文件触发 block 定义校验）；
+        单个 yaml 损坏只跳过该条，不影响整体端点。
+        """
         profiles_dir = Path(settings.workspace_root) / "profiles"
-        profiles: list[str] = []
+        profiles: list[dict[str, Any]] = []
         if profiles_dir.exists():
             for f in sorted(profiles_dir.glob("*.yaml")):
-                profiles.append(f.stem)
+                try:
+                    data = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
+                except Exception:
+                    logger.warning("profile yaml 解析失败，跳过: %s", f.name, exc_info=True)
+                    continue
+                meta = data.get("metadata") or {}
+                blocks_raw = data.get("blocks") or {}
+                blocks: dict[str, Any] = {}
+                memory_cfg: dict[str, Any] | None = None
+                if isinstance(blocks_raw, dict):
+                    for cat, ref in blocks_raw.items():
+                        if not isinstance(ref, dict):
+                            continue
+                        blocks[cat] = {
+                            "id": ref.get("id"),
+                            "deployment": ref.get("deployment"),
+                        }
+                        if cat == "memory" and isinstance(ref.get("config"), dict):
+                            memory_cfg = ref["config"]
+                profiles.append(
+                    {
+                        "id": str(meta.get("id") or f.stem),
+                        "name": str(meta.get("name") or f.stem),
+                        "description": meta.get("description"),
+                        "blocks": blocks,
+                        "memory": memory_cfg,
+                    }
+                )
         return {"profiles": profiles, "default": settings.default_profile}
 
     # ------------------------------------------------------------------

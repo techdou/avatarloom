@@ -180,8 +180,10 @@ class OrchestratorEventBridge:
                     "payload": event.payload,
                 }
             )
-        elif event.type == "session.started":
-            await self.enqueue_json({"type": "session.started", "payload": event.payload})
+        # 注意：orchestrator 内部 emit 的 "session.started"（session.start()）不转发——
+        # ws_handler._start_session 成功后会发一条 payload 更完整的 session.started
+        # （含 state/degraded）。转发 orchestrator 那条会导致前端收到双份，reducer
+        # 二次重置还会清掉两条之间到达的事件流条目。
         elif event.type == TRANSCRIPT_COMPLETED:
             await self.enqueue_json(
                 {

@@ -13,6 +13,24 @@ export function CreateAvatarForm() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
+  /**
+   * 确保默认 project 存在（Avatar.project_id 是外键引用，悬挂会让数据不一致）。
+   * 幂等：已存在则跳过；创建失败不阻塞——后端未开外键约束，容错可接受。
+   */
+  async function ensureDefaultProject() {
+    try {
+      const r = await fetch("/api/control/projects/default");
+      if (r.ok) return;
+      if (r.status !== 404) return;
+      await apiFetch("/projects", {
+        method: "POST",
+        body: JSON.stringify({ id: "default", name: "Default" }),
+      });
+    } catch {
+      /* project 补建失败不阻塞 Avatar 创建 */
+    }
+  }
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!id.trim() || !name.trim()) {
@@ -22,6 +40,7 @@ export function CreateAvatarForm() {
     setSubmitting(true);
     setError(null);
     try {
+      await ensureDefaultProject();
       await apiFetch("/avatars", {
         method: "POST",
         body: JSON.stringify({

@@ -5,7 +5,7 @@ import { clsx } from "clsx";
 import { Camera, Link2, Power } from "lucide-react";
 import { ThemeToggle } from "@/components/layout/theme-toggle";
 import { useToast } from "@/components/ui/toast";
-import type { Persona, RuntimeProfile } from "@/lib/api";
+import type { GatewayProfile, Persona } from "@/lib/api";
 
 type ConnState = "disconnected" | "connecting" | "connected" | "error";
 
@@ -14,7 +14,7 @@ interface ContextBarProps {
   profileId: string;
   personaId: string;
   /** 下拉选项——由 PlaygroundClient（orchestration 层）统一拉取后传入。 */
-  profiles: RuntimeProfile[];
+  profiles: GatewayProfile[];
   personas: Persona[];
   onProfileChange: (id: string) => void;
   onPersonaChange: (id: string) => void;

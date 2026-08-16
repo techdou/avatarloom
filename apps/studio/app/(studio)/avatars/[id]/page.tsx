@@ -9,6 +9,8 @@ import {
   type Avatar,
 } from "@/lib/api";
 import { AssetUploader } from "@/components/avatar/asset-uploader";
+import { AssetList } from "@/components/avatar/asset-list";
+import { AvatarInfoEditor } from "@/components/avatar/info-editor";
 import { VoiceTextEditor } from "@/components/avatar/voice-text-editor";
 
 interface PageProps {
@@ -70,6 +72,12 @@ export default async function AvatarDetailPage({ params }: PageProps) {
                 <div className="text-sm">{avatar.description}</div>
               </div>
             )}
+            <AvatarInfoEditor
+              avatarId={avatar.id}
+              initialName={avatar.name}
+              initialDescription={avatar.description || ""}
+              initialAvatarBlock={avatar.avatar_block || ""}
+            />
           </div>
 
           {/* 音色参考文本 */}
@@ -163,18 +171,11 @@ export default async function AvatarDetailPage({ params }: PageProps) {
             hasCurrent={!!avatar.voice_ref_path}
           />
 
-          {/* 已上传资产历史 */}
+          {/* 已上传资产历史（可删除） */}
           {assets.length > 0 && (
             <div className="mt-4 pt-4 border-t border-border">
               <div className="text-xs text-fg-muted mb-2">所有资产（{assets.length}）</div>
-              <div className="space-y-1 max-h-48 overflow-auto">
-                {assets.map((a) => (
-                  <div key={a.id} className="flex items-center justify-between text-xs py-1">
-                    <span className="truncate flex-1">{a.name}</span>
-                    <span className="badge text-micro ml-2">{a.kind}</span>
-                  </div>
-                ))}
-              </div>
+              <AssetList assets={assets} />
             </div>
           )}
         </div>

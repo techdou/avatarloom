@@ -351,6 +351,15 @@ export function useRealtimeSession({
           setError(message);
           break;
         }
+        default: {
+          // 未显式覆盖的事件（session.closed / response.started / 未来新增）：
+          // 至少进调试事件流——summarizeEvent 对高频/心跳类返回 null 自动过滤
+          const summary = summarizeEvent(msg.type, msg.payload);
+          if (summary !== null) {
+            dispatch({ kind: "event", type: msg.type, summary, ts });
+          }
+          break;
+        }
       }
     },
     [captureAndSendFrame]
@@ -474,12 +483,21 @@ export function useRealtimeSession({
       setConn("error");
       setError("WebSocket 连接失败——确认 Runtime Gateway 已启动（端口 8101）");
     };
-    ws.onclose = () => {
+    ws.onclose = (ev: CloseEvent) => {
       if (wsRef.current !== ws) return; // stale socket——旧连接的 close 不污染新会话
       window.clearInterval(pingTimerRef.current);
       setConn("disconnected");
       dispatch({ kind: "disconnected" });
       setMicActive(false);
+      // 1008（Policy Violation）：gateway token 开启而鉴权未通过——
+      // 与"服务未启动"分开提示，避免排障方向跑偏
+      if (ev.code === 1008) {
+        setError(
+          "鉴权失败——检查 NEXT_PUBLIC_WS_TOKEN 与服务端 AVATARLOOM_API_TOKEN 是否一致"
+        );
+        reconnectRef.current.intentional = true;
+        return;
+      }
       // 非主动断开（网络抖动/服务端掉线）→ 指数退避自动重连，最多 3 次
       const r = reconnectRef.current;
       if (!r.intentional && r.attempts < 3) {

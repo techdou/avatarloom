@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { Persona, RuntimeProfile } from "@/lib/api";
+import { gatewayFetch, type GatewayProfilesResponse, type Persona } from "@/lib/api";
 
 /**
  * 「当前活动」卡——设置页顶部，显示 Playground 实际会用的运行时上下文。
  * 数据源：localStorage（al.profile / al.persona，与 PlaygroundClient 同一套 key）
- * + /api/control 拉取名称映射。未连接 API 时降级显示 id。
+ * + gateway /profiles（yaml——运行时装配源）与 control-api /personas 拉名称映射。
+ * 未连接 API 时降级显示 id。
  */
 export function ActiveContextCard() {
   const [profileId, setProfileId] = useState("mock");
@@ -27,11 +28,10 @@ export function ActiveContextCard() {
 
   useEffect(() => {
     let alive = true;
-    fetch("/api/control/profiles")
-      .then((r) => (r.ok ? r.json() : []))
-      .then((list: RuntimeProfile[]) => {
-        if (!alive || !Array.isArray(list)) return;
-        const hit = list.find((x) => x.id === profileId);
+    gatewayFetch<GatewayProfilesResponse>("/profiles")
+      .then((data) => {
+        if (!alive || !Array.isArray(data?.profiles)) return;
+        const hit = data.profiles.find((x) => x.id === profileId);
         if (hit) setProfileName(hit.name);
       })
       .catch(() => {});

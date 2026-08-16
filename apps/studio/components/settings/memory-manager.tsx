@@ -3,10 +3,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { BrainCircuit, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
 import {
-  apiFetch,
   gatewayFetch,
+  type GatewayProfilesResponse,
   type MemoryListResponse,
-  type RuntimeProfile,
 } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 
@@ -21,7 +20,7 @@ interface MemoryConfig {
 
 /**
  * 长期记忆管理卡——Settings 内查看与整理运行时记忆：
- * - 配置状态来自 control-api profile（启用/关闭）
+ * - 配置状态来自 gateway /profiles（profile yaml 的 blocks.memory.config）
  * - 条目列表来自 gateway /api/memory（按 persona 隔离）
  * - 支持搜索过滤、删除、手动添加；30s 轮询
  */
@@ -52,15 +51,13 @@ export function MemoryManager() {
 
   useEffect(() => {
     let alive = true;
-    apiFetch<RuntimeProfile[]>("/profiles")
-      .then((list) => {
-        if (!alive || !Array.isArray(list)) return;
-        const hit = list.find((x) => x.id === profileId);
-        const mem = hit
-          ? (hit.blocks as Record<string, { config?: MemoryConfig }>)?.memory
-          : undefined;
-        if (mem?.config) {
-          setCfg(mem.config);
+    gatewayFetch<GatewayProfilesResponse>("/profiles")
+      .then((data) => {
+        if (!alive || !Array.isArray(data?.profiles)) return;
+        const hit = data.profiles.find((x) => x.id === profileId);
+        const mem = hit?.memory ?? undefined;
+        if (mem && Object.keys(mem).length > 0) {
+          setCfg(mem as MemoryConfig);
           setCfgFound(true);
         } else {
           setCfg(null);

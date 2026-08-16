@@ -2,10 +2,10 @@
  * Control API 客户端。
  *
  * Token 来源矩阵：
- * - 浏览器路径（window defined）：走 Next.js rewrite（/api/control -> 127.0.0.1:8100），
- *   同源代理由 Next server 端转发，鉴权由 rewrite upstream 或 Control API 的
- *   loopback 策略兜底（浏览器侧无需 Authorization）。
- * - SSR 路径（window undefined）：直连 Control API 绝对地址，需读服务端专用密钥
+ * - 浏览器路径（window defined）：走 Next rewrite（/api/control -> 127.0.0.1:8100）。
+ *   后端配置 AVATARLOOM_API_TOKEN 时，由 middleware.ts 在服务端注入 Authorization
+ *   （token 只存在于 Next server env，不进浏览器 bundle）。
+ * - SSR 路径（window undefined）：直连 Control API 绝对地址，读服务端专用密钥
  *   CONTROL_API_TOKEN 注入 Bearer。生产配 AVATARLOOM_API_TOKEN 后，缺这个会让
  *   所有 SSR 页面 401。
  *   注意：不要用 NEXT_PUBLIC_ 前缀——会打进客户端 bundle 泄漏。
@@ -32,21 +32,27 @@ function trimDetail(raw: string): string {
   return t.length > MAX_DETAIL_LEN ? t.slice(0, MAX_DETAIL_LEN) + "…" : t;
 }
 
-/** SSR 时返回 Authorization header；浏览器返回空对象（走同源 rewrite 无需凭证）。 */
-function ssrAuthHeaders(): Record<string, string> {
-  if (typeof window !== "undefined") return {};
-  const token = process.env.CONTROL_API_TOKEN;
-  return token ? { Authorization: `Bearer ${token}` } : {};
-}
-
 /** 浏览器走 Next rewrite（/api/control -> 8100/api）；SSR 直连 Control API 绝对地址。 */
 const API_BASE = "/api/control";
 const SERVER_API_BASE =
   process.env.CONTROL_API_BASE ?? "http://127.0.0.1:8100/api";
 const GATEWAY_API_BASE = "/api/realtime";
+const SERVER_GATEWAY_BASE =
+  process.env.RUNTIME_GATEWAY_BASE ?? "http://127.0.0.1:8101/api";
 
 function fetchBase(): string {
   return typeof window === "undefined" ? SERVER_API_BASE : API_BASE;
+}
+
+function gatewayFetchBase(): string {
+  return typeof window === "undefined" ? SERVER_GATEWAY_BASE : GATEWAY_API_BASE;
+}
+
+/** SSR 时返回各后端的 Authorization header；浏览器返回空对象（同源代理由 middleware 注入）。 */
+function ssrAuthHeaders(token?: string): Record<string, string> {
+  if (typeof window !== "undefined") return {};
+  if (!token) return {};
+  return { Authorization: `Bearer ${token}` };
 }
 
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
@@ -54,7 +60,7 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
     ...init,
     headers: {
       "Content-Type": "application/json",
-      ...ssrAuthHeaders(),
+      ...ssrAuthHeaders(process.env.CONTROL_API_TOKEN),
       ...(init?.headers || {}),
     },
   });
@@ -65,11 +71,15 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
   return r.json() as Promise<T>;
 }
 
-/** Runtime Gateway 客户端（/api/realtime/* → 8101/api/*）。 */
+/** Runtime Gateway 客户端（浏览器 /api/realtime/* → 8101/api/*；SSR 直连 + GATEWAY_API_TOKEN）。 */
 export async function gatewayFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const r = await fetch(`${GATEWAY_API_BASE}${path}`, {
+  const r = await fetch(`${gatewayFetchBase()}${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
+    headers: {
+      "Content-Type": "application/json",
+      ...ssrAuthHeaders(process.env.GATEWAY_API_TOKEN),
+      ...(init?.headers || {}),
+    },
   });
   if (!r.ok) {
     const detail = await r.text();
@@ -90,7 +100,7 @@ export async function apiUpload<T>(
   const r = await fetch(`${fetchBase()}${path}`, {
     method: "POST",
     body: form,
-    headers: { ...ssrAuthHeaders() },
+    headers: { ...ssrAuthHeaders(process.env.CONTROL_API_TOKEN) },
   });
   if (!r.ok) {
     const detail = await r.text();
@@ -127,7 +137,7 @@ export interface Project {
   id: string;
   name: string;
   description: string | null;
-  status?: string;
+  settings: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
 }
@@ -197,6 +207,8 @@ export interface BlockDefinition {
   resources: Record<string, unknown> | null;
   inputs: string[] | null;
   outputs: string[] | null;
+  config_schema: Record<string, unknown> | null;
+  install_extras: string[] | null;
   created_at: string;
 }
 
@@ -291,4 +303,18 @@ export interface MemoryListResponse {
   active: boolean;
   persona_id: string | null;
   items: MemoryEntry[];
+}
+
+/** Gateway 侧 RuntimeProfile（yaml 概要）——运行时真实装配来源（gateway /api/profiles）。 */
+export interface GatewayProfile {
+  id: string;
+  name: string;
+  description: string | null;
+  blocks: Record<string, { id?: string; deployment?: string }>;
+  memory: Record<string, unknown> | null;
+}
+
+export interface GatewayProfilesResponse {
+  profiles: GatewayProfile[];
+  default: string;
 }

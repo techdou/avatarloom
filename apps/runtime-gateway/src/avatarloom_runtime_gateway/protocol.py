@@ -41,18 +41,35 @@ class ClientMessageType(StrEnum):
 
 
 class ServerEventType(StrEnum):
-    """Gateway 下行 JSON 事件类型（转发 Orchestrator 事件 + Gateway 自身状态）。"""
+    """Gateway 下行 JSON 事件类型。
+
+    权威事件名定义在 ``packages/protocol/src/avatarloom_protocol/envelope.py`` 的
+    ``EventType``——本枚举是「gateway 实际会发送的子集」的浏览器侧文档，
+    与 ws_handler / event_bridge / uplink 的实现一一对应：
+
+    - session.started：ws_handler._start_session 手动发（payload 含 state/degraded）；
+      orchestrator 内部同名事件不转发（避免双发）。
+    - run.started / persona.changed / vision.request / vision.result /
+      avatar.video.ready：event_bridge 从 orchestrator 事件透传。
+    - pong：uplink ping 的应答（无 payload）。
+
+    envelope.py 里定义但 gateway 从不下发的（session.closed / avatar.frame /
+    response.started / llm.text.delta 之外的 llm.* 等）不列在这里——
+    列了就是假文档。
+    """
 
     SESSION_STARTED = "session.started"
-    SESSION_CLOSED = "session.closed"
-    STATE_CHANGED = "session.state_changed"
+    SESSION_STATE_CHANGED = "session.state_changed"
     TRANSCRIPT = "transcript.completed"
+    RUN_STARTED = "run.started"
     LLM_DELTA = "llm.text.delta"
     LLM_DONE = "llm.text.done"
     TTS_DELTA_META = "tts.audio.delta"  # 元数据（pcm 在二进制消息里）
     TTS_DONE = "tts.audio.completed"
-    AVATAR_FRAME_META = "avatar.frame"  # 元数据（jpeg 在二进制消息里）
-    RESPONSE_STARTED = "response.started"
+    AVATAR_VIDEO_READY = "avatar.video.ready"
+    VISION_REQUEST = "vision.request"
+    VISION_RESULT = "vision.result"
+    PERSONA_CHANGED = "persona.changed"
     RESPONSE_DONE = "response.done"
     ERROR = "error"
     PONG = "pong"

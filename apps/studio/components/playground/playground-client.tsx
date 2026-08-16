@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import {
   useRealtimeSession,
 } from "@/hooks/use-realtime-session";
-import type { Persona, RuntimeProfile } from "@/lib/api";
+import { gatewayFetch, type GatewayProfilesResponse, type Persona } from "@/lib/api";
 import { ContextBar } from "@/components/playground/context-bar";
 import { AvatarStage } from "@/components/playground/avatar-stage";
 import { TranscriptPane } from "@/components/playground/transcript-pane";
@@ -28,8 +28,9 @@ export function PlaygroundClient() {
   const [showDebug, setShowDebug] = useState(false);
   const [runsOpen, setRunsOpen] = useState(false);
 
-  // 下拉选项（orchestration 层统一拉取，ContextBar 纯渲染）
-  const [profiles, setProfiles] = useState<RuntimeProfile[]>([]);
+  // 下拉选项（orchestration 层统一拉取，ContextBar 纯渲染）：
+  // profiles 来自 gateway（yaml——运行时真实装配来源）；personas 来自 control-api DB
+  const [profiles, setProfiles] = useState<GatewayProfilesResponse>({ profiles: [], default: "mock" });
   const [personas, setPersonas] = useState<Persona[]>([]);
 
   useEffect(() => {
@@ -45,10 +46,9 @@ export function PlaygroundClient() {
 
   useEffect(() => {
     let alive = true;
-    fetch("/api/control/profiles")
-      .then((r) => (r.ok ? r.json() : []))
-      .then((list: RuntimeProfile[]) => {
-        if (alive && Array.isArray(list)) setProfiles(list);
+    gatewayFetch<GatewayProfilesResponse>("/profiles")
+      .then((data) => {
+        if (alive && Array.isArray(data?.profiles)) setProfiles(data);
       })
       .catch(() => {});
     fetch("/api/control/personas")
@@ -143,7 +143,7 @@ export function PlaygroundClient() {
         conn={session.conn}
         profileId={profileId}
         personaId={personaId}
-        profiles={profiles}
+        profiles={profiles.profiles}
         personas={personas}
         onProfileChange={handleProfileChange}
         onPersonaChange={handlePersonaChange}

@@ -29,7 +29,11 @@ export default async function SessionsPage() {
       ) : (
         <div className="space-y-1">
           {sessions.map((s) => (
-            <div key={s.id} className="card flex items-center justify-between py-3 text-sm">
+            <div
+              key={s.id}
+              id={s.id}
+              className="card flex items-center justify-between py-3 text-sm scroll-mt-20"
+            >
               <div className="font-mono text-xs">{s.id}</div>
               <div className="flex items-center gap-3 text-xs text-fg-muted">
                 <span className="badge">{s.status}</span>
