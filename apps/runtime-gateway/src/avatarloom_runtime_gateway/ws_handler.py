@@ -319,8 +319,13 @@ class WebSocketSession:
             # fallback 降级后的 deployment 也算（如 flashhead→musetalk 仍 cuda-local），
             # 但 orchestrator.blocks 存的是实例不含 deployment；这里看 config 的原始声明，
             # 若任一 block 的 deployment 标记为 GPU，保守视为 GPU 会话。
+            # 现有 profile 惯用 deployment: local + config.device: cuda 表达 GPU 本地
+            # 部署——只认 deployment 集合会漏判，rc=42 从不触发，断线重连后
+            # CUDA 污染进程 fork worker 必 SIGSEGV（avatar 永久降级 static 的根因）。
             self._had_gpu_block = any(
-                ref.deployment in _GPU_DEPLOYMENTS for ref in config.blocks.values()
+                ref.deployment in _GPU_DEPLOYMENTS
+                or str(ref.config.get("device", "")).startswith("cuda")
+                for ref in config.blocks.values()
             )
         finally:
             async with _session_lock:
