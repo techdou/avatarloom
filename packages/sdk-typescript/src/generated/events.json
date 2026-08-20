@@ -1014,7 +1014,6 @@
         "title": "Latency Ms"
       },
       "details": {
-        "additionalProperties": true,
         "title": "Details",
         "type": "object"
       }
@@ -1054,7 +1053,6 @@
         "title": "Persona Id"
       },
       "runtime_config": {
-        "additionalProperties": true,
         "title": "Runtime Config",
         "type": "object"
       }
@@ -1304,7 +1302,6 @@
         "title": "Size Bytes"
       },
       "metadata": {
-        "additionalProperties": true,
         "title": "Metadata",
         "type": "object"
       }

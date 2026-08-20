@@ -1,0 +1,98 @@
+apiVersion: avatarloom.io/v1alpha1
+kind: RuntimeProfile
+metadata:
+  id: autodl-avtr1
+  name: AutoDL AVTR-1 (DeepSeek + VoxCPM2 + AVTR-1 流式)
+  description: >
+    AutoDL RTX 5090 AVTR-1 流式数字人档（A/B 迁移目标）。
+    与 autodl-best 唯一差异：avatar 引擎 MuseTalk 整段渲染 → AVTR-1 流式
+    （TTS 音频边到边驱动，0.2s 块即时产帧）。依赖服务器已编译 sm120 TRT 引擎
+    （/root/autodl-tmp/avtr1_storage，见 docs/13 P1）。
+blocks:
+  avatar:
+    id: avatar.avtr1
+    deployment: local
+    config:
+      device: cuda
+      portrait: personas/demo-assistant/avatar/portrait.jpg
+      workerPython: /root/autodl-tmp/avtr-1/.pixi/envs/renderer/bin/python
+      workerScript: scripts/avtr1_worker.py
+      storage: /root/autodl-tmp/avtr1_storage
+      bg: plain_white
+      cfgSelfAudio: 2.0
+    fallback: avatar.static
+  vad:
+    id: vad.silero
+    deployment: local
+    config:
+      device: cpu
+      threshold: 0.5
+      minSilenceMs: 500
+  stt:
+    id: stt.sensevoice
+    deployment: local
+    config:
+      model: /root/autodl-tmp/modelscope/models/iic--SenseVoiceSmall/snapshots/master
+      device: cuda
+      language: zh
+  llm:
+    id: llm.openai-compatible
+    deployment: remote
+    config:
+      baseUrl: ${LLM_BASE_URL}
+      apiKeyEnv: LLM_API_KEY
+      model: ${LLM_MODEL}
+      maxTokens: 512
+      temperature: 0.6
+      disableThinking: true
+      systemPrompt: "你是小灵，一个温柔亲切的数字人语音助理。回答简短自然，最多2-3句话，不要使用Markdown符号或列表，适合语音合成朗读。"
+  tts:
+    id: tts.voxcpm2
+    deployment: local
+    config:
+      device: cuda
+      model: /root/autodl-tmp/modelscope-voxcpm
+      rate: 0.886
+      streaming: true
+      blocksize: 512
+      cfgValue: 2.0
+      # 扩散步数对齐 VoxEMW/官方推荐 10（调低更快更糙；5090 实测余量够，部署时复测 RTF/TTFA）
+      inferenceTimesteps: 10
+      normalize: true
+      denoise: false
+      stylePrefix: "温柔女声，自然亲切"
+      promptText: "你好，很高兴认识你。今天过得怎么样？"
+      voiceRef: personas/demo-assistant/voice/ref.wav
+    fallback: tts.mock
+  vision:
+    id: vision.openai-compatible
+    deployment: remote
+    optional: true
+    config:
+      baseUrl: ${VISION_BASE_URL}
+      apiKeyEnv: VISION_API_KEY
+      model: ${VISION_MODEL}
+  memory:
+    id: memory.mem0-local
+    deployment: local
+    optional: true
+    config:
+      enabled: true
+      apiKeyEnv: LLM_API_KEY
+      model: ${LLM_MODEL}
+      baseUrl: ${LLM_BASE_URL}
+      embedderModel: /root/autodl-tmp/models/bge-m3
+      storeDir: /root/autodl-tmp/avatarloom/data/memory
+
+sync:
+  # AVTR-1 档（VoxEMW 实测值）：引擎稳态供帧天然落后音频 ~0.28s，音频压后 0.35s 等渲染；
+  # 模型固有口型滞后 +3 帧（120ms），视频提前 3 帧补偿。前端 ?adelay=/?vlag= 可临时覆盖
+  audio_delay_ms: 350
+  video_lag_frames: -3
+  max_video_behind_ms: 1000
+  drop_policy: drop_oldest_video
+session:
+  mode: single
+  allowInterruption: true
+  event_log: true
+  fillerEnabled: false

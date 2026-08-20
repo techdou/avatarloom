@@ -26,6 +26,7 @@ BLOCK_REGISTRY: dict[str, str] = {
     "tts.voxcpm2": "blocks.tts.voxcpm2:VoxCpm2TtsBlock",
     "avatar.static": "blocks.avatar.static:StaticAvatarBlock",
     "avatar.musetalk": "blocks.avatar.musetalk:MuseTalkAvatarBlock",
+    "avatar.avtr1": "blocks.avatar.avtr1:Avtr1AvatarBlock",
     "avatar.flashhead": "blocks.avatar.flashhead:FlashHeadAvatarBlock",
     "vision.openai-compatible": "blocks.vision.openai_compatible:OpenAIVisionBlock",
     "memory.mem0-local": "blocks.memory.mem0_local:Mem0MemoryBlock",
