@@ -216,7 +216,22 @@ case "$ACTION" in
             pids=$(ps -eo pid,cmd | grep -E "$pat" | grep -v grep | awk '{print $1}')
             if [ -n "$pids" ]; then
                 kill $pids 2>/dev/null || true
-                echo "  ✓ 清理残留 $pat ($pids)"
+                # next-server 等进程可能忽略/拖延 SIGTERM（keep-alive 优雅关闭），
+                # 等 3s 仍存活则升级 SIGKILL，避免残留进程占住端口坑下一次启动
+                for _ in $(seq 1 3); do
+                    alive=""
+                    for p in $pids; do
+                        kill -0 "$p" 2>/dev/null && alive="$alive $p"
+                    done
+                    [ -z "$alive" ] && break
+                    sleep 1
+                done
+                if [ -n "$alive" ]; then
+                    kill -9 $alive 2>/dev/null || true
+                    echo "  ✓ 清理残留 $pat ($pids，SIGTERM 无效已强杀:$alive)"
+                else
+                    echo "  ✓ 清理残留 $pat ($pids)"
+                fi
             fi
         done
         echo "所有服务已停止"
