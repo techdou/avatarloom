@@ -57,8 +57,8 @@ def band_share(pcm: np.ndarray, sr: int, lo: int, hi: int) -> float:
 
 
 def synthesize_once(model, text: str, cfg: dict, voice_ref: str) -> np.ndarray:
-    """非流式合成一句 → 48k float32。retry_badcase 交给模型内部。"""
-    wav = model.generate(
+    """非流式合成一句 → 48k float32。优先 retry_badcase=True（旧版 API 无此参自动降级）。"""
+    kwargs = dict(
         text=text,
         prompt_wav_path=voice_ref,
         prompt_text=str(cfg.get("promptText") or cfg.get("stylePrefix") or ""),
@@ -66,8 +66,11 @@ def synthesize_once(model, text: str, cfg: dict, voice_ref: str) -> np.ndarray:
         inference_timesteps=int(cfg.get("inferenceTimesteps", 5)),
         normalize=bool(cfg.get("normalize", True)),
         denoise=bool(cfg.get("denoise", False)),
-        retry_badcase=True,
     )
+    try:
+        wav = model.generate(**kwargs, retry_badcase=True)
+    except TypeError:
+        wav = model.generate(**kwargs)
     arr = np.asarray(wav.squeeze(0).cpu().numpy() if hasattr(wav, "cpu") else wav,
                      dtype=np.float32).reshape(-1)
     return arr
