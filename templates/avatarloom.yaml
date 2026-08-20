@@ -5,7 +5,7 @@ metadata:
   name: Demo Assistant
 workspace:
   root: .
-profile: profiles/lite-12gb.yaml
+profile: profiles/local-5070.yaml
 persona:
   package: templates/persona-package
 runtime:

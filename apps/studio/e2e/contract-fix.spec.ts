@@ -16,12 +16,12 @@ test("T1 Playground：profile 下拉列出 gateway yaml 全部档位", async ({ 
   const select = page.getByLabel("配置");
   await expect
     .poll(async () => await select.locator("option").count(), { timeout: 10_000 })
-    .toBeGreaterThanOrEqual(9);
+    .toBeGreaterThanOrEqual(3);
   const values = await select.locator("option").evaluateAll((els) =>
     els.map((e) => (e as HTMLOptionElement).value)
   );
-  // 关键档位必须可选——修复前这里只有 fallback 一项
-  for (const expectId of ["mock", "autodl-best", "local-5070", "full-24gb"]) {
+  // 关键档位必须可选——修复前这里只有 fallback 一项（2026-08-21 精简后常驻 3 档）
+  for (const expectId of ["mock", "autodl-best", "local-5070"]) {
     expect(values, `profile 下拉应含 ${expectId}，实际: ${values}`).toContain(expectId);
   }
   await page.screenshot({ path: join(SHOT_DIR, "t1_playground.png"), fullPage: true });

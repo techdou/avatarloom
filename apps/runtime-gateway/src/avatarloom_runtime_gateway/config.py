@@ -63,9 +63,10 @@ class Settings(BaseSettings):
     artifacts_root: str = "./data/artifacts"
     runs_root: str = "./data/runs"
 
-    # 默认 Profile（未指定时）——lite-12gb 是真实后端（VAD/STT/TTS/Avatar 均用真 adapter），
-    # mock 仅作无 GPU 时的降级，需显式设 AVATARLOOM_DEFAULT_PROFILE=mock 才走假链路。
-    default_profile: str = "lite-12gb"
+    # 默认 Profile（未指定时）——local-5070 是本机真实后端（VAD/LLM/TTS 真 adapter，
+    # STT 受 funasr/Py3.12 限制走 mock）；mock 仅作无 GPU 时的降级，需显式设
+    # AVATARLOOM_DEFAULT_PROFILE=mock 才走假链路。AutoDL 生产经 env 指定 autodl-best。
+    default_profile: str = "local-5070"
 
     # 日志
     log_level: str = "INFO"

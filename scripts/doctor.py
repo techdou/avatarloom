@@ -82,7 +82,7 @@ def check_gpu_deps() -> list[tuple[str, bool, str]]:
 def check_profiles() -> list[tuple[str, bool, str]]:
     results = []
     profiles_dir = PROJECT_ROOT / "profiles"
-    expected = ["mock.yaml", "lite-12gb.yaml", "distributed.yaml", "full-24gb.yaml"]
+    expected = ["mock.yaml", "local-5070.yaml", "autodl-best.yaml"]
     for name in expected:
         p = profiles_dir / name
         results.append(_check(f"Profile {name}", p.exists(), "缺失" if not p.exists() else ""))

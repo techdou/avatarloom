@@ -21,26 +21,31 @@ class TestProfileLoader:
         assert cfg.blocks["vad"].id == "vad.mock"
         assert cfg.blocks["llm"].id == "llm.mock"
 
-    def test_load_lite_profile(self, monkeypatch) -> None:
-        # lite profile 的 llm 是远程 OpenAI 兼容端点，缺 env 加载会 ProfileError——
+    def test_load_local_profile(self, monkeypatch) -> None:
+        # local-5070 的 llm 是远程 OpenAI 兼容端点，缺 env 加载会 ProfileError——
         # 补上测试环境变量，语义与生产一致（缺变量早报错，不带空串到运行期）
         monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:9999/v1")
         monkeypatch.setenv("LLM_MODEL", "test-model")
-        cfg = load_profile("profiles/lite-12gb.yaml")
-        assert cfg.profile_id == "lite-12gb"
+        cfg = load_profile("profiles/local-5070.yaml")
+        assert cfg.profile_id == "local-5070"
         assert cfg.blocks["vad"].id == "vad.silero"
         assert cfg.blocks["llm"].deployment == "remote"
 
-    def test_load_lite_profile_missing_env_raises(self, monkeypatch) -> None:
+    def test_load_local_profile_missing_env_raises(self, monkeypatch) -> None:
         # 远程 LLM 无 fallback、缺必需 env——加载阶段直接报错，不带到运行期
         monkeypatch.delenv("LLM_BASE_URL", raising=False)
         monkeypatch.delenv("LLM_MODEL", raising=False)
         with pytest.raises(ProfileError, match="LLM_BASE_URL"):
-            load_profile("profiles/lite-12gb.yaml")
+            load_profile("profiles/local-5070.yaml")
 
-    def test_load_full_profile(self) -> None:
-        cfg = load_profile("profiles/full-24gb.yaml")
-        assert cfg.profile_id == "full-24gb"
+    def test_load_autodl_best_profile(self, monkeypatch) -> None:
+        # 生产档：tts 是 VoxCPM2 流式克隆（2026-08-21 精简后替代 full-24gb 的覆盖位）
+        monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:9999/v1")
+        monkeypatch.setenv("LLM_MODEL", "test-model")
+        monkeypatch.setenv("VISION_BASE_URL", "http://127.0.0.1:9999/v1")
+        monkeypatch.setenv("VISION_MODEL", "test-vision")
+        cfg = load_profile("profiles/autodl-best.yaml")
+        assert cfg.profile_id == "autodl-best"
         assert cfg.blocks["tts"].id == "tts.voxcpm2"
 
     def test_env_interpolation(self, tmp_path: Path, monkeypatch) -> None:
@@ -87,8 +92,11 @@ class TestListProfiles:
         profiles = list_profiles("profiles")
         ids = [p["id"] for p in profiles]
         assert "mock" in ids
-        assert "lite-12gb" in ids
-        assert "full-24gb" in ids
+        assert "local-5070" in ids
+        assert "autodl-best" in ids
+        # attic 归档档不出现在可选列表（glob 不递归）
+        assert "lite-12gb" not in ids
+        assert "full-24gb" not in ids
 
     def test_missing_dir_returns_empty(self) -> None:
         assert list_profiles("/nonexistent") == []
