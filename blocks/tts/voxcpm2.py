@@ -214,6 +214,34 @@ class VoxCpm2TtsBlock(Block):
         except Exception as e:
             raise BlockSetupError("tts.voxcpm2", f"加载失败: {e}") from e
 
+        # prompt cache 预编码（对齐 VoxEMW）：参考音在启动时编码一次，每句合成复用，
+        # 省掉逐句重编码（首音延迟↓ + 少走一条代码路径）。仅 GitHub main 版有此 API
+        # （PyPI 2.0.3 无）——hasattr 门控，缺 API 自动落回逐句编码路径，零回归。
+        if (
+            self._default_voice_ref
+            and hasattr(getattr(self._model, "tts_model", None), "build_prompt_cache")
+            and hasattr(self._model.tts_model, "_generate_with_prompt_cache")
+        ):
+            try:
+                if self._prompt_text:
+                    # Ultimate Cloning：prompt（音频+台词续写）+ reference（克隆）双路
+                    self._voice_caches["default"] = await asyncio.to_thread(
+                        self._model.tts_model.build_prompt_cache,
+                        prompt_text=self._prompt_text,
+                        prompt_wav_path=self._default_voice_ref,
+                        reference_wav_path=self._default_voice_ref,
+                    )
+                else:
+                    # 无台词文本：reference-only 基础克隆
+                    self._voice_caches["default"] = await asyncio.to_thread(
+                        self._model.tts_model.build_prompt_cache,
+                        reference_wav_path=self._default_voice_ref,
+                    )
+                await ctx.logger.ainfo("tts.voxcpm2 prompt cache 预编码完成")
+            except Exception as e:
+                # 预编码失败不阻断——落回逐句 prompt_wav_path 路径
+                await ctx.logger.awarning("tts.voxcpm2 prompt cache 预编码失败，落回逐句编码", error=str(e))
+
         self._mark_ready()
         # 按 run 隔离的可变状态（AL-P2-003）+ 打断协作标记（AL-P1-006）。
         self._run_id = None
@@ -458,9 +486,32 @@ class VoxCpm2TtsBlock(Block):
     def _infer_stream(self, text: str, voice_ref: str | None):
         """流式合成，yield 48kHz float32 numpy chunk。
 
-        VoxCPM2 API: generate_streaming(text, prompt_wav_path=...)
-        返回 generator，每个 chunk 是 1D float32 波形。
+        两路（对齐 VoxEMW）：
+        - prompt cache 路径（默认音色且有预编码 cache）：_generate_with_prompt_cache
+          复用启动时编码，免逐句重编码参考音。该生成器产出 (wav, _, _) 三元组。
+        - 逐句编码路径（运行时指定了非默认音色 / 无 cache API）：generate_streaming
+          每句重编码，产出裸 wav。
         """
+        cache = self._voice_caches.get("default")
+        use_cache = (
+            cache is not None
+            and (voice_ref is None or voice_ref == self._default_voice_ref)
+        )
+        if use_cache:
+            gen = self._model.tts_model._generate_with_prompt_cache(
+                target_text=text,
+                prompt_cache=cache,
+                min_len=2,
+                max_len=2000,
+                inference_timesteps=self._inference_timesteps,
+                cfg_value=self._cfg_value,
+                retry_badcase=False,  # streaming 模式不支持（模型内部强制关）
+                streaming=True,
+            )
+            for item in gen:
+                yield item[0] if isinstance(item, tuple) else item
+            return
+
         kwargs: dict[str, Any] = {
             "cfg_value": self._cfg_value,
             "inference_timesteps": self._inference_timesteps,
