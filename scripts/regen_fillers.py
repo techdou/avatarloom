@@ -57,20 +57,30 @@ def band_share(pcm: np.ndarray, sr: int, lo: int, hi: int) -> float:
 
 
 def synthesize_once(model, text: str, cfg: dict, voice_ref: str) -> np.ndarray:
-    """非流式合成一句 → 48k float32。优先 retry_badcase=True（旧版 API 无此参自动降级）。"""
+    """非流式合成一句 → 48k float32。优先 retry_badcase=True。
+
+    按 generate 的实时签名过滤 kwargs——voxcpm 各版本参数集不同
+    （retry_badcase/denoise 等有无不一）， introspect 后只传受支持的。
+    """
+    import inspect
+
     kwargs = dict(
-        text=text,
         prompt_wav_path=voice_ref,
         prompt_text=str(cfg.get("promptText") or cfg.get("stylePrefix") or ""),
         cfg_value=float(cfg.get("cfgValue", 2.0)),
         inference_timesteps=int(cfg.get("inferenceTimesteps", 5)),
         normalize=bool(cfg.get("normalize", True)),
         denoise=bool(cfg.get("denoise", False)),
+        retry_badcase=True,
     )
     try:
-        wav = model.generate(**kwargs, retry_badcase=True)
-    except TypeError:
-        wav = model.generate(**kwargs)
+        sig = inspect.signature(model.generate)
+        if not any(p.kind == inspect.Parameter.VAR_KEYWORD
+                   for p in sig.parameters.values()):
+            kwargs = {k: v for k, v in kwargs.items() if k in sig.parameters}
+    except (TypeError, ValueError):
+        pass  # 签名不可 introspect（C 扩展包装等）——原样传，TypeError 由上层重试兜
+    wav = model.generate(text, **kwargs)
     arr = np.asarray(wav.squeeze(0).cpu().numpy() if hasattr(wav, "cpu") else wav,
                      dtype=np.float32).reshape(-1)
     return arr
