@@ -19,7 +19,7 @@ export default async function SessionsPage() {
           <p className="page-desc">每次连接 Playground 产生一个会话</p>
         </div>
       </div>
-      {error && <div className="mb-4"><ErrorBanner error={error} hint="请确认 control-api 已启动（默认端口 8100）" /></div>}
+      {error && <div className="mb-4"><ErrorBanner error={error} hint="请确认 control-api 已启动（默认端口 27810）" /></div>}
       {sessions.length === 0 && !error ? (
         <EmptyState
           title="暂无会话记录"

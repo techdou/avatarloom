@@ -28,7 +28,7 @@ export default async function BlocksPage() {
         </div>
       </div>
 
-      {error && <div className="mb-4"><ErrorBanner error={error} hint="请确认 control-api 已启动（默认端口 8100）" /></div>}
+      {error && <div className="mb-4"><ErrorBanner error={error} hint="请确认 control-api 已启动（默认端口 27810）" /></div>}
 
       {categories.length === 0 && !error ? (
         <EmptyState

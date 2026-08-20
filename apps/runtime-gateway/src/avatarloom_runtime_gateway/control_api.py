@@ -37,7 +37,7 @@ class ControlApiReporter:
 
     def __init__(self, settings: Settings) -> None:
         base = settings.control_api_url.rstrip("/")
-        # control_api_url 不带 /api 后缀（如 http://127.0.0.1:8100）
+        # control_api_url 不带 /api 后缀（如 http://127.0.0.1:27810）
         self._base_url = base if base.endswith("/api") else f"{base}/api"
         self._headers = control_api_auth_headers(settings)
         self._client: httpx.AsyncClient | None = None

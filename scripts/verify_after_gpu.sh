@@ -25,7 +25,7 @@ echo "等待服务启动..."
 sleep 15
 
 echo "========== [3] 端口检查 =========="
-for port in 8100 8101 3000; do
+for port in 27810 27811 27300; do
   printf "port %s: " $port
   curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:$port/ 2>/dev/null || echo "fail"
   echo

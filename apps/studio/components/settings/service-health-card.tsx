@@ -19,7 +19,7 @@ export function ServiceHealthCard() {
   const [lastCheck, setLastCheck] = useState<Date | null>(null);
 
   const probe = useCallback(async () => {
-    // control-api：/api/control/* → 8100/api/*
+    // control-api：/api/control/* → 27810/api/*
     fetch("/api/control/health")
       .then(async (r) => {
         if (!r.ok) throw new Error(String(r.status));
@@ -38,7 +38,7 @@ export function ServiceHealthCard() {
             : `响应异常（${e.message}）`,
         })
       );
-    // gateway：/api/realtime/* → 8101/api/*
+    // gateway：/api/realtime/* → 27811/api/*
     fetch("/api/realtime/health")
       .then(async (r) => {
         if (!r.ok) throw new Error(String(r.status));
@@ -77,13 +77,13 @@ export function ServiceHealthCard() {
         </button>
       </div>
       <div className="space-y-1 text-sm">
-        <ProbeRow label="Control API" port=":8100" status={controlApi} />
-        <ProbeRow label="Runtime Gateway" port=":8101" status={gateway} />
+        <ProbeRow label="Control API" port=":27810" status={controlApi} />
+        <ProbeRow label="Runtime Gateway" port=":27811" status={gateway} />
         <div className="flex items-center justify-between py-2 border-b border-border last:border-0">
           <div className="flex items-center gap-2">
             <span className="w-2.5 h-2.5 rounded-full bg-ok" />
             <span>Studio（本页）</span>
-            <span className="text-xs text-fg-subtle font-mono">:3000</span>
+            <span className="text-xs text-fg-subtle font-mono">:27300</span>
           </div>
           <span className="text-xs text-fg-muted">在线</span>
         </div>

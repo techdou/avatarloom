@@ -20,7 +20,7 @@ export default async function RunsPage() {
           <p className="page-desc">每轮对话的录制与指标</p>
         </div>
       </div>
-      {error && <div className="mb-4"><ErrorBanner error={error} hint="请确认 control-api 已启动（默认端口 8100）" /></div>}
+      {error && <div className="mb-4"><ErrorBanner error={error} hint="请确认 control-api 已启动（默认端口 27810）" /></div>}
       {runs.length === 0 && !error ? (
         <EmptyState
           title="暂无运行记录"

@@ -16,7 +16,7 @@ import {
 export type ConnState = "disconnected" | "connecting" | "connected" | "error";
 
 /** 隧道端口显式映射（README「端口约定」唯一权威）：页面端口 → gateway WS 端口。 */
-const TUNNEL_WS_PORT: Record<string, string> = { "13000": "18101" };
+const TUNNEL_WS_PORT: Record<string, string> = { "27300": "27811" };
 
 /**
  * 浏览器 WS 鉴权 token。只通过首条 auth 消息传递，不放进 URL。
@@ -27,7 +27,7 @@ const WS_AUTH_TOKEN = process.env.NEXT_PUBLIC_WS_TOKEN ?? "";
 
 /** 推导 WS 地址（纯函数，挂载即算）：
  * 1. URL 参数 ?wsPort=xxxxx；2. NEXT_PUBLIC_WS_PORT env；
- * 3. 隧道映射（TUNNEL_WS_PORT 表，兜底 页面端口+5101）；4. 默认 8101。
+ * 3. 隧道映射（TUNNEL_WS_PORT 表，兜底 页面端口+5101）；4. 默认 27811。
  * https 页面自动 wss。仅在浏览器环境调用。 */
 export function computeWsUrl(): string {
   const pagePort = window.location.port;
@@ -35,7 +35,7 @@ export function computeWsUrl(): string {
   const tunnelWsPort =
     TUNNEL_WS_PORT[pagePort] ??
     (parseInt(pagePort) > 10000 ? String(parseInt(pagePort) + 5101) : null);
-  const wsPort = urlWsPort || process.env.NEXT_PUBLIC_WS_PORT || tunnelWsPort || "8101";
+  const wsPort = urlWsPort || process.env.NEXT_PUBLIC_WS_PORT || tunnelWsPort || "27811";
   const wsProto = window.location.protocol === "https:" ? "wss" : "ws";
   return `${wsProto}://${window.location.hostname}:${wsPort}/ws/realtime`;
 }
@@ -481,7 +481,7 @@ export function useRealtimeSession({
     ws.onerror = () => {
       if (wsRef.current !== ws) return; // stale socket 防护
       setConn("error");
-      setError("WebSocket 连接失败——确认 Runtime Gateway 已启动（端口 8101）");
+      setError("WebSocket 连接失败——确认 Runtime Gateway 已启动（端口 27811）");
     };
     ws.onclose = (ev: CloseEvent) => {
       if (wsRef.current !== ws) return; // stale socket——旧连接的 close 不污染新会话

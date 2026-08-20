@@ -35,7 +35,7 @@ export default async function ProfilesPage() {
 
       {error && (
         <div className="mb-4">
-          <ErrorBanner error={error} hint="请确认 Runtime Gateway 服务已启动（默认端口 8101）" />
+          <ErrorBanner error={error} hint="请确认 Runtime Gateway 服务已启动（默认端口 27811）" />
         </div>
       )}
 

@@ -31,9 +31,9 @@ class Settings(BaseSettings):
     # 服务
     host: str = "127.0.0.1"
     # 端口走独立别名：避免与 gateway 共用 AVATARLOOM_PORT 撞车。
-    # .env 里写 AVATARLOOM_CONTROL_API_PORT=8100（或兼容旧名 AVATARLOOM_PORT）。
+    # .env 里写 AVATARLOOM_CONTROL_API_PORT=27810（或兼容旧名 AVATARLOOM_PORT）。
     port: int = Field(
-        default=8100,
+        default=27810,
         validation_alias=AliasChoices("AVATARLOOM_CONTROL_API_PORT", "AVATARLOOM_PORT"),
     )
 
@@ -63,10 +63,8 @@ class Settings(BaseSettings):
     # CORS 白名单（与 allow_credentials=True 配合使用，禁用通配符）
     cors_origins: list[str] = Field(
         default_factory=lambda: [
-            "http://localhost:3000",
-            "http://127.0.0.1:3000",
-            "http://localhost:13000",
-            "http://127.0.0.1:13000",
+            "http://localhost:27300",
+            "http://127.0.0.1:27300",
         ],
         description="Allowed CORS origins (Studio and tunnel defaults included).",
     )

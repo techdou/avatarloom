@@ -6,9 +6,9 @@
     uv run python scripts/dev.py --check # 只检查端口占用
 
 端口约定（与 .env.example / 服务自身的 Settings 别名一致）：
-    AVATARLOOM_CONTROL_API_PORT      默认 8100
-    AVATARLOOM_RUNTIME_GATEWAY_PORT  默认 8101
-    STUDIO_PORT                      默认 3000（经 PORT 传给 next dev）
+    AVATARLOOM_CONTROL_API_PORT      默认 27810
+    AVATARLOOM_RUNTIME_GATEWAY_PORT  默认 27811
+    STUDIO_PORT                      默认 27300（经 PORT 传给 next dev）
 
 退出码：
     0   正常停止（Ctrl+C）
@@ -32,9 +32,9 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 os.chdir(PROJECT_ROOT)
 
-CONTROL_API_PORT = int(os.environ.get("AVATARLOOM_CONTROL_API_PORT", "8100"))
-RUNTIME_GATEWAY_PORT = int(os.environ.get("AVATARLOOM_RUNTIME_GATEWAY_PORT", "8101"))
-STUDIO_PORT = int(os.environ.get("STUDIO_PORT", "3000"))
+CONTROL_API_PORT = int(os.environ.get("AVATARLOOM_CONTROL_API_PORT", "27810"))
+RUNTIME_GATEWAY_PORT = int(os.environ.get("AVATARLOOM_RUNTIME_GATEWAY_PORT", "27811"))
+STUDIO_PORT = int(os.environ.get("STUDIO_PORT", "27300"))
 
 # 启动宽限：进程拉起后过了这么多秒还活着，视为启动成功。
 _STARTUP_GRACE_S = 3.0
@@ -83,7 +83,7 @@ def _services(pnpm: str) -> list[dict]:
             "name": "studio",
             "cmd": [pnpm, "--filter", "@avatarloom/studio", "dev"],
             "port": STUDIO_PORT,
-            # next dev 读 PORT 环境变量（package.json 不再硬编码 -p 3000）。
+            # next dev 读 PORT 环境变量（package.json 不再硬编码 -p 27300）。
             "env": {**os.environ, "PORT": str(STUDIO_PORT)},
             "cwd": PROJECT_ROOT,
         },
@@ -119,7 +119,7 @@ def _terminate_tree(p: subprocess.Popen) -> None:
     """停掉一个服务进程（Windows 杀整棵进程树）。
 
     Windows 上 pnpm.cmd → node 是孙进程，terminate()（TerminateProcess）
-    只杀直接子进程，会留下孤儿 node 占着 3000 端口；taskkill /T 杀整棵树。
+    只杀直接子进程，会留下孤儿 node 占着 27300 端口；taskkill /T 杀整棵树。
     """
     if p.poll() is not None:
         return

@@ -3,7 +3,7 @@
 用法：
     uv run python -m avatarloom_control_api
     或
-    uv run uvicorn avatarloom_control_api.app:create_app --factory --port 8100
+    uv run uvicorn avatarloom_control_api.app:create_app --factory --port 27810
 """
 
 from __future__ import annotations

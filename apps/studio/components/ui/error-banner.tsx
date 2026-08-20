@@ -1,6 +1,6 @@
 interface ErrorBannerProps {
   error: string;
-  /** 排查提示，如"请确认 control-api 已启动（默认端口 8100）"。 */
+  /** 排查提示，如"请确认 control-api 已启动（默认端口 27810）"。 */
   hint?: string;
   onRetry?: () => void;
 }

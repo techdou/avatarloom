@@ -99,11 +99,11 @@ def check_profiles() -> list[tuple[str, bool, str]]:
 
 def check_ports() -> list[tuple[str, bool, str]]:
     results = []
-    # 端口与 .env.example / dev.py 同一来源：独立别名优先，默认 8100/8101/3000
+    # 端口与 .env.example / dev.py 同一来源：独立别名优先，默认 27810/27811/27300
     ports = [
-        ("Control API", int(os.environ.get("AVATARLOOM_CONTROL_API_PORT", "8100"))),
-        ("Runtime Gateway", int(os.environ.get("AVATARLOOM_RUNTIME_GATEWAY_PORT", "8101"))),
-        ("Studio", int(os.environ.get("STUDIO_PORT", "3000"))),
+        ("Control API", int(os.environ.get("AVATARLOOM_CONTROL_API_PORT", "27810"))),
+        ("Runtime Gateway", int(os.environ.get("AVATARLOOM_RUNTIME_GATEWAY_PORT", "27811"))),
+        ("Studio", int(os.environ.get("STUDIO_PORT", "27300"))),
     ]
     for name, port in ports:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:

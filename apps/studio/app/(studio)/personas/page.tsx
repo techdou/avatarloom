@@ -25,7 +25,7 @@ export default async function PersonasPage() {
 
       {error && (
         <div className="mb-4">
-          <ErrorBanner error={error} hint="请确认 control-api 服务已启动（默认端口 8100）" />
+          <ErrorBanner error={error} hint="请确认 control-api 服务已启动（默认端口 27810）" />
         </div>
       )}
 

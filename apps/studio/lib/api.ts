@@ -2,7 +2,7 @@
  * Control API 客户端。
  *
  * Token 来源矩阵：
- * - 浏览器路径（window defined）：走 Next rewrite（/api/control -> 127.0.0.1:8100）。
+ * - 浏览器路径（window defined）：走 Next rewrite（/api/control -> 127.0.0.1:27810）。
  *   后端配置 AVATARLOOM_API_TOKEN 时，由 middleware.ts 在服务端注入 Authorization
  *   （token 只存在于 Next server env，不进浏览器 bundle）。
  * - SSR 路径（window undefined）：直连 Control API 绝对地址，读服务端专用密钥
@@ -32,13 +32,13 @@ function trimDetail(raw: string): string {
   return t.length > MAX_DETAIL_LEN ? t.slice(0, MAX_DETAIL_LEN) + "…" : t;
 }
 
-/** 浏览器走 Next rewrite（/api/control -> 8100/api）；SSR 直连 Control API 绝对地址。 */
+/** 浏览器走 Next rewrite（/api/control -> 27810/api）；SSR 直连 Control API 绝对地址。 */
 const API_BASE = "/api/control";
 const SERVER_API_BASE =
-  process.env.CONTROL_API_BASE ?? "http://127.0.0.1:8100/api";
+  process.env.CONTROL_API_BASE ?? "http://127.0.0.1:27810/api";
 const GATEWAY_API_BASE = "/api/realtime";
 const SERVER_GATEWAY_BASE =
-  process.env.RUNTIME_GATEWAY_BASE ?? "http://127.0.0.1:8101/api";
+  process.env.RUNTIME_GATEWAY_BASE ?? "http://127.0.0.1:27811/api";
 
 function fetchBase(): string {
   return typeof window === "undefined" ? SERVER_API_BASE : API_BASE;
@@ -74,7 +74,7 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
   return r.json() as Promise<T>;
 }
 
-/** Runtime Gateway 客户端（浏览器 /api/realtime/* → 8101/api/*；SSR 直连 + GATEWAY_API_TOKEN）。 */
+/** Runtime Gateway 客户端（浏览器 /api/realtime/* → 27811/api/*；SSR 直连 + GATEWAY_API_TOKEN）。 */
 export async function gatewayFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(`${gatewayFetchBase()}${path}`, {
     cache: "no-store",

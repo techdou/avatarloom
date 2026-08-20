@@ -7,15 +7,15 @@
 #   bash scripts/autodl_start.sh status    # 查看状态（有服务没起来时退出码 1）
 #
 # 服务端口（可用 .env 的独立别名覆盖）：
-#   Control API:     ${AVATARLOOM_CONTROL_API_PORT:-8100}
-#   Runtime Gateway: ${AVATARLOOM_RUNTIME_GATEWAY_PORT:-8101}
-#   Studio:          ${STUDIO_PORT:-3000}
+#   Control API:     ${AVATARLOOM_CONTROL_API_PORT:-27810}
+#   Runtime Gateway: ${AVATARLOOM_RUNTIME_GATEWAY_PORT:-27811}
+#   Studio:          ${STUDIO_PORT:-27300}
 #
 # 本地固定访问标准：
-#   Studio 3000 → 13000；Control API 8100 → 18100；Gateway 8101 → 18101。
+#   Studio 27300 → 27300；Control API 27810 → 27810；Gateway 27811 → 27811。
 #   SSH 隧道示例：
-#   ssh -L 13000:127.0.0.1:3000 -L 18100:127.0.0.1:8100 \
-#       -L 18101:127.0.0.1:8101 root@<ip> -p <port>
+#   ssh -L 27300:127.0.0.1:27300 -L 27810:127.0.0.1:27810 \
+#       -L 27811:127.0.0.1:27811 root@<ip> -p <port>
 
 set -euo pipefail
 
@@ -42,9 +42,9 @@ if [ -f .env ]; then
 fi
 
 # 端口解析（与 .env.example / 服务 Settings 别名一致）
-CONTROL_API_PORT=${AVATARLOOM_CONTROL_API_PORT:-8100}
-RUNTIME_GATEWAY_PORT=${AVATARLOOM_RUNTIME_GATEWAY_PORT:-8101}
-STUDIO_PORT=${STUDIO_PORT:-3000}
+CONTROL_API_PORT=${AVATARLOOM_CONTROL_API_PORT:-27810}
+RUNTIME_GATEWAY_PORT=${AVATARLOOM_RUNTIME_GATEWAY_PORT:-27811}
+STUDIO_PORT=${STUDIO_PORT:-27300}
 
 PID_DIR="./data"
 mkdir -p "$PID_DIR"
@@ -195,12 +195,12 @@ case "$ACTION" in
         echo "  Studio:          http://127.0.0.1:$STUDIO_PORT"
         echo ""
         echo "本地固定访问（SSH 隧道）："
-        echo "  ssh -L 13000:127.0.0.1:$STUDIO_PORT \"
-        echo "      -L 18100:127.0.0.1:$CONTROL_API_PORT \"
-        echo "      -L 18101:127.0.0.1:$RUNTIME_GATEWAY_PORT root@<ip> -p <port>"
-        echo "  Studio:      http://localhost:13000"
-        echo "  Control API: http://localhost:18100/api"
-        echo "  Gateway WS:  ws://localhost:18101/ws/realtime"
+        echo "  ssh -L 27300:127.0.0.1:$STUDIO_PORT \"
+        echo "      -L 27810:127.0.0.1:$CONTROL_API_PORT \"
+        echo "      -L 27811:127.0.0.1:$RUNTIME_GATEWAY_PORT root@<ip> -p <port>"
+        echo "  Studio:      http://localhost:27300"
+        echo "  Control API: http://localhost:27810/api"
+        echo "  Gateway WS:  ws://localhost:27811/ws/realtime"
         echo ""
         echo "停止：bash scripts/autodl_start.sh stop"
         echo "状态：bash scripts/autodl_start.sh status"

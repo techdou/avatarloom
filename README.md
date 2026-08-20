@@ -23,8 +23,8 @@ AvatarLoom 将 VAD、STT、LLM、TTS、Avatar、Vision、Memory、Persona 等能
 avatarloom/
 ├── apps/
 │   ├── studio/            # Next.js 前端（Playground / Show / 管理台）
-│   ├── control-api/       # FastAPI REST 控制面（8100）
-│   └── runtime-gateway/   # FastAPI WebSocket 实时入口（8101）
+│   ├── control-api/       # FastAPI REST 控制面（27810）
+│   └── runtime-gateway/   # FastAPI WebSocket 实时入口（27811）
 ├── packages/
 │   ├── protocol/          # 事件 schema 单一来源（Pydantic + JSON Schema + TS 类型生成）
 │   ├── sdk-python/        # Block SDK（抽象基类 + 生命周期契约）
@@ -72,7 +72,7 @@ uv run python scripts/smoke_mock.py
 make dev
 
 # 浏览器打开
-#   本地：http://127.0.0.1:3000/playground
+#   本地：http://127.0.0.1:27300/playground
 ```
 
 默认档位 `lite-12gb` 需要 12GB GPU + `LLM_API_KEY`。无 GPU 环境降级到 mock：
@@ -104,7 +104,7 @@ cp .env.example .env   # 填入 LLM/STT/TTS/Vision 任一路 API Key
 - 环境变量模板见 `.env.example`（含全部可选 Key 与说明）；**真实密钥只放本地 `.env`，绝不入库**
 - 鉴权默认 **fail-closed**：未配置 `AVATARLOOM_API_TOKEN` 时所有端点返回 401 / WS 握手拒绝；本地开发可用 `AVATARLOOM_AUTH_DISABLED=1` 显式关闭（`make dev` 已自动设置）
 - GPU 会话结束后 Gateway 默认自重启（`AVATARLOOM_SELF_RESTART=1`）以清理 CUDA fork 状态；无 supervisor 的部署可设 `0` 关闭
-- 端口约定：Studio `3000`、Control API `8100`、Runtime Gateway `8101`（均可用环境变量覆盖）
+- 端口约定：Studio `27300`、Control API `27810`、Runtime Gateway `27811`（均可用环境变量覆盖）
 
 ## 测试与质量门禁
 

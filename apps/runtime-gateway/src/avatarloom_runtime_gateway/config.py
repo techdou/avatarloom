@@ -18,14 +18,14 @@ class Settings(BaseSettings):
 
     host: str = "127.0.0.1"
     # 端口走独立别名：避免与 control-api 共用 AVATARLOOM_PORT 撞车。
-    # .env 里写 AVATARLOOM_RUNTIME_GATEWAY_PORT=8101（或兼容旧名 AVATARLOOM_PORT）。
+    # .env 里写 AVATARLOOM_RUNTIME_GATEWAY_PORT=27811（或兼容旧名 AVATARLOOM_PORT）。
     port: int = Field(
-        default=8101,
+        default=27811,
         validation_alias=AliasChoices("AVATARLOOM_RUNTIME_GATEWAY_PORT", "AVATARLOOM_PORT"),
     )
 
     # Control API 地址（用于查询 profile/persona）
-    control_api_url: str = "http://127.0.0.1:8100"
+    control_api_url: str = "http://127.0.0.1:27810"
 
     # Control API 鉴权：与 control-api 的 AVATARLOOM_API_TOKEN 一致。
     # control-api 关闭鉴权时留空即可（不会发送 Authorization header）。
@@ -52,10 +52,8 @@ class Settings(BaseSettings):
     # CORS 白名单（allow_credentials=True 时不能用通配符）
     cors_origins: list[str] = Field(
         default_factory=lambda: [
-            "http://localhost:3000",
-            "http://127.0.0.1:3000",
-            "http://localhost:13000",
-            "http://127.0.0.1:13000",
+            "http://localhost:27300",
+            "http://127.0.0.1:27300",
         ],
         description="Allowed CORS origins (Studio and tunnel defaults included).",
     )
