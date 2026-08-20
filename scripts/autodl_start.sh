@@ -142,9 +142,24 @@ case "$ACTION" in
         echo "AvatarLoom 服务启动"
         echo "========================================"
 
-        # Studio 首次启动先构建（构建失败 pipefail 直接退出）
+        # 浏览器 WS 鉴权 token 是 NEXT_PUBLIC_（编译期内联进客户端 bundle），
+        # 必须在 build 环境导出才生效；漏配会让 gateway fail-closed 拒绝所有 WS，
+        # 页面报"鉴权失败"。AVATARLOOM_API_TOKEN 已配而它未配时自动同步。
+        if [ -n "${AVATARLOOM_API_TOKEN:-}" ] && [ -z "${NEXT_PUBLIC_WS_TOKEN:-}" ]; then
+            export NEXT_PUBLIC_WS_TOKEN="$AVATARLOOM_API_TOKEN"
+        fi
+
+        # 需要构建：无 .next（首次），或 token 已轮换（产物里 grep 不到当前值）
+        need_build=0
         if [ ! -d apps/studio/.next ]; then
             echo "首次启动，构建 Studio..."
+            need_build=1
+        elif [ -n "${NEXT_PUBLIC_WS_TOKEN:-}" ] \
+            && ! grep -rq -- "$NEXT_PUBLIC_WS_TOKEN" apps/studio/.next/static apps/studio/.next/server 2>/dev/null; then
+            echo "检测到 WS token 与构建产物不一致（.env 轮换过 token？），重建 Studio..."
+            need_build=1
+        fi
+        if [ "$need_build" = 1 ]; then
             (cd apps/studio && pnpm build 2>&1 | tail -3)
         fi
 
