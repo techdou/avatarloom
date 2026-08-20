@@ -122,7 +122,9 @@ class WebSocketSession:
         self.session: Session | None = None
 
         # 下行事件桥接（三队列 + recorder）——is_closed 回调避免循环引用
-        self.bridge = OrchestratorEventBridge(ws, is_closed=lambda: self._closed)
+        self.bridge = OrchestratorEventBridge(
+            ws, is_closed=lambda: self._closed, runs_root=settings.runs_root
+        )
         # Session/Run 生命周期上报 control-api（Runs/Sessions 页数据源；失败仅日志）
         self.reporter = ControlApiReporter(settings)
         self.bridge.reporter = self.reporter

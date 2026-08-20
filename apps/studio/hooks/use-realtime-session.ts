@@ -19,6 +19,13 @@ export type ConnState = "disconnected" | "connecting" | "connected" | "error";
 const TUNNEL_WS_PORT: Record<string, string> = { "27300": "27811" };
 
 /**
+ * 半双工防回授（默认开）：数字人播放期间暂停麦克风上行。外放时扬声器
+ * 声音进麦克风会触发 VAD 误判（打断/垃圾转写）；戴耳机不受影响。
+ * NEXT_PUBLIC_HALF_DUPLEX=0 恢复全双工（保留语音实时打断）。
+ */
+const HALF_DUPLEX = process.env.NEXT_PUBLIC_HALF_DUPLEX !== "0";
+
+/**
  * 浏览器 WS 鉴权 token。只通过首条 auth 消息传递，不放进 URL。
  * 注意：NEXT_PUBLIC_* 会在构建期打入客户端 bundle——这是共享密钥模型，
  * 仅适用于受控单用户隧道；多用户部署应改为运行时注入（SSR / 独立 auth 接口）。
@@ -86,6 +93,8 @@ export interface RealtimeSession {
   micActive: boolean;
   playing: boolean;
   error: string | null;
+  /** 最近一段渲染完成 mp4 的回放入口（video.ready 后可重播；新一轮清空） */
+  replay: { url: string; version: number } | null;
   debugInfo: DebugInfo;
   timing: SessionTiming;
   /** 实际连接的 WS 地址（推导完成后可知）——WelcomePane 显示用，避免静态文案误导。 */
@@ -131,6 +140,9 @@ export function useRealtimeSession({
   const [micActive, setMicActive] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** 最近一段渲染完成 mp4 的回放 URL（avatar.video.ready 下发；新一轮开始清空） */
+  const [replay, setReplay] = useState<{ url: string; version: number } | null>(null);
+  const replayVersionRef = useRef(0);
   const [wsUrlState, setWsUrlState] = useState<string | null>(null);
   const [debugInfo, setDebugInfo] = useState<DebugInfo>({
     framesShown: 0,
@@ -329,7 +341,6 @@ export function useRealtimeSession({
           break;
         case "run.started":
         case "tts.audio.completed":
-        case "avatar.video.ready":
         case "persona.changed":
         case "response.done":
         case "vision.request": {
@@ -342,6 +353,25 @@ export function useRealtimeSession({
             setPlaying(false);
           }
           if (msg.type === "vision.request") void captureAndSendFrame();
+          if (msg.type === "run.started") {
+            // 新一轮回复开始——上一段的回放入口让位给实时画面
+            setReplay(null);
+          }
+          break;
+        }
+        case "avatar.video.ready": {
+          // mp4 渲染完成（本轮 PCM 已播完，属事后产物）——登记回放入口
+          dispatch({
+            kind: "event",
+            type: msg.type,
+            summary: summarizeEvent(msg.type, msg.payload) ?? "",
+            ts,
+          });
+          const url = msg.payload?.url as string | undefined;
+          if (url) {
+            replayVersionRef.current += 1;
+            setReplay({ url, version: replayVersionRef.current });
+          }
           break;
         }
         case "vision.result": {
@@ -519,10 +549,12 @@ export function useRealtimeSession({
         reconnectRef.current.intentional = true;
         return;
       }
-      // 非主动断开（网络抖动/服务端掉线）→ 指数退避自动重连，最多 3 次
+      // 非主动断开（网络抖动/服务端掉线）→ 指数退避自动重连，最多 5 次。
+      // 封顶 5s：rc=42 会话后自重启的拉起窗口通常 2-5s，3 次短退避可能全撞
+      // 在空窗里导致彻底断开，需手动刷新。
       const r = reconnectRef.current;
-      if (!r.intentional && r.attempts < 3) {
-        const delay = [500, 1000, 2000][r.attempts];
+      if (!r.intentional && r.attempts < 5) {
+        const delay = [500, 1000, 2000, 4000, 5000][r.attempts];
         r.attempts += 1;
         r.timer = window.setTimeout(() => {
           void connectRef.current?.();
@@ -571,11 +603,14 @@ export function useRealtimeSession({
       recorderRef.current = new MicrophoneRecorder({
         onChunk: (pcm) => {
           const ws = wsRef.current;
-          if (ws?.readyState === WebSocket.OPEN) {
-            // 上行二进制协议：0x00 + PCM16（显式 tag，与摄像头 0x02 区分）
-            const frame = buildPcmUplinkFrame(pcm);
-            if (frame) ws.send(frame);
-          }
+          if (ws?.readyState !== WebSocket.OPEN) return;
+          // 半双工防回授（默认开）：数字人播放期间暂停麦克风上行——外放时
+          // 扬声器声音进麦克风会触发 VAD 误判（打断/垃圾转写）。戴耳机场景
+          // 可设 NEXT_PUBLIC_HALF_DUPLEX=0 恢复全双工实时打断。
+          if (HALF_DUPLEX && playerRef.current?.isPlaying) return;
+          // 上行二进制协议：0x00 + PCM16（显式 tag，与摄像头 0x02 区分）
+          const frame = buildPcmUplinkFrame(pcm);
+          if (frame) ws.send(frame);
         },
         onError: (e) => setError(`麦克风错误：${e.message}`),
       });
@@ -655,6 +690,7 @@ export function useRealtimeSession({
     micActive,
     playing,
     error,
+    replay,
     debugInfo,
     timing: runtime.timing,
     wsUrl: wsUrlState,

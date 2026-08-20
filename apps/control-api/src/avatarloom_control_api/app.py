@@ -22,6 +22,7 @@ from avatarloom_control_api.routers import (
     profiles,
     projects,
     runs,
+    runs_media,
     secrets,
     sessions,
 )
@@ -93,5 +94,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(runs.router, prefix="/api/runs", tags=["runs"])
     app.include_router(artifacts.router, prefix="/api/artifacts", tags=["artifacts"])
     app.include_router(assets.router, prefix="/api/assets", tags=["assets"])
+    app.include_router(runs_media.router, prefix="/api/runs-media", tags=["runs-media"])
 
     return app

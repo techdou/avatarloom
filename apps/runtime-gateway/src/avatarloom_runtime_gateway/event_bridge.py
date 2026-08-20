@@ -20,6 +20,7 @@ import json
 import logging
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from avatarloom_protocol import (
@@ -80,9 +81,12 @@ class OrchestratorEventBridge:
         self,
         ws: WebSocket,
         is_closed: Callable[[], bool],
+        runs_root: str = "",
     ) -> None:
         self.ws = ws
         self._is_closed = is_closed
+        # runs 根目录——video.ready 的 mp4 绝对路径转相对（回放 URL 用）
+        self._runs_root = runs_root
 
         # 下行三队列（AL-P2-006）
         # 控制事件量小（状态/错误/边界），512 深度几乎不会满；
@@ -262,9 +266,18 @@ class OrchestratorEventBridge:
             await self.enqueue_json({"type": "tts.audio.completed", "payload": event.payload})
 
         elif event.type == AVATAR_VIDEO_READY:
-            await self.enqueue_json(
-                {"type": "avatar.video.ready", "payload": event.payload}
-            )
+            payload = dict(event.payload)
+            # out 是服务器本地绝对路径（runs/avatar/.../reply.mp4），浏览器不可达；
+            # 转成经 Studio 代理的回放 URL（/api/control/* rewrite 到 control-api，
+            # middleware 自动注入鉴权）。runs_root 未配置或路径不匹配时保留原值。
+            out = payload.get("out")
+            if isinstance(out, str) and self._runs_root:
+                try:
+                    rel = Path(out).resolve().relative_to(Path(self._runs_root).resolve())
+                    payload["url"] = f"/api/control/runs-media/{rel.as_posix()}"
+                except ValueError:
+                    pass
+            await self.enqueue_json({"type": "avatar.video.ready", "payload": payload})
 
         # Avatar 帧：二进制下行
         elif event.type in (AVATAR_SPEECH_FRAME, AVATAR_IDLE_FRAME):

@@ -1,7 +1,7 @@
 "use client";
 
-import { memo } from "react";
-import { UserCircle2 } from "lucide-react";
+import { memo, useState } from "react";
+import { RotateCcw, UserCircle2, X } from "lucide-react";
 import type { ConnState } from "@/hooks/use-realtime-session";
 
 interface AvatarStageProps {
@@ -15,10 +15,12 @@ interface AvatarStageProps {
   personaLabel: string;
   /** 实际 WS 目标地址（未连接提示用，替代写死的端口文案）。 */
   wsUrl: string | null;
+  /** 最近一段渲染完成 mp4 的回放入口（无则不显示重播控件）。 */
+  replay: { url: string; version: number } | null;
 }
 
 /**
- * 数字人画面区——帧显示 / 未连接引导 / 等帧占位 三态。
+ * 数字人画面区——帧显示 / 未连接引导 / 等帧占位 三态 + mp4 回放层。
  * 纯展示组件，不参与数据流；画面 blob URL 由 useRealtimeSession 维护。
  *
  * React.memo：frameUrl 变化才需重渲染；debugInfo 的高频刷新
@@ -34,11 +36,33 @@ export const AvatarStage = memo(function AvatarStage({
   framesShown,
   personaLabel,
   wsUrl,
+  replay,
 }: AvatarStageProps) {
+  const [replayActive, setReplayActive] = useState(false);
+
   return (
     <div className="card flex flex-col overflow-hidden p-0 min-h-0">
       <div className="relative flex-1 min-h-0 bg-bg-subtle flex items-center justify-center overflow-hidden dark:bg-bg-subtle-dark">
-        {frameUrl ? (
+        {replayActive && replay ? (
+          <>
+            <video
+              key={replay.version}
+              src={replay.url}
+              className="w-full h-full object-cover"
+              autoPlay
+              controls={false}
+              onEnded={() => setReplayActive(false)}
+            />
+            <button
+              type="button"
+              onClick={() => setReplayActive(false)}
+              className="absolute top-2 right-2 rounded-md bg-black/60 text-white p-1.5 hover:bg-black/80"
+              title="退出回放"
+            >
+              <X className="size-4" />
+            </button>
+          </>
+        ) : frameUrl ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img src={frameUrl} alt="avatar" className="w-full h-full object-cover" />
         ) : conn === "disconnected" || conn === "error" ? (
@@ -50,6 +74,17 @@ export const AvatarStage = memo(function AvatarStage({
           <div className="absolute top-2 left-2 text-micro font-mono bg-black/60 text-white px-2 py-1 rounded-md">
             {sessionState} · 帧 {framesShown}
           </div>
+        )}
+        {!replayActive && replay && (
+          <button
+            type="button"
+            onClick={() => setReplayActive(true)}
+            className="absolute bottom-2 right-2 flex items-center gap-1.5 rounded-md bg-black/60 text-white text-xs px-2.5 py-1.5 hover:bg-black/80"
+            title="重播上一段完整视频（服务端渲染的 mp4）"
+          >
+            <RotateCcw className="size-3.5" />
+            重播本段
+          </button>
         )}
       </div>
     </div>

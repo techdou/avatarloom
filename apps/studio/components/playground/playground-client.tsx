@@ -166,6 +166,7 @@ export function PlaygroundClient() {
           framesShown={session.debugInfo.framesShown}
           personaLabel={personaLabel}
           wsUrl={session.wsUrl}
+          replay={session.replay}
         />
 
         {/* 对话面板 + 底部控制条 */}
