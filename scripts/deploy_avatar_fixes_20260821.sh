@@ -42,20 +42,29 @@ if [ "$USED" -gt 3000 ]; then
   exit 0
 fi
 
-echo "=== [4/4] 垫音重铸（频谱门控，badcase 自动重试）==="
-"$ROOT/.venv/bin/python" "$ROOT/scripts/regen_fillers.py" --profile autodl-best --persona demo-assistant
-RC=$?
-echo "REGEN_RC=$RC"
-if [ "$RC" -eq 0 ]; then
-  # 重铸验证通过——坏例废片（含脚本备份的 neutral.bak-*）直接清理，不留垃圾
-  python3 -c "
-import glob, shutil
-for p in glob.glob('$ROOT/personas/demo-assistant/fillers/neutral.bak-*'):
+echo "=== [4/4] 垫音处置（对齐 VoxEMW：生产弃用，废片清理）==="
+# 坏例废片无条件清理（profile 已 fillerEnabled:false，不会再播；重铸仅 A/B 备用）
+python3 -c "
+import glob, os, shutil
+root = '$ROOT/personas/demo-assistant/fillers'
+for p in glob.glob(root + '/neutral/*.wav'):
+    os.remove(p)
+for p in glob.glob(root + '/neutral.bak-*'):
     shutil.rmtree(p, ignore_errors=True)
-print('坏例垫音废片已清理')
+print('服务器坏例垫音废片已清理')
 "
-else
-  echo "重铸未全过——旧垫音备份保留在 fillers/neutral.bak-* 待查"
+if [ "${RUN_REGEN:-0}" = "1" ]; then
+  USED=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | head -1)
+  echo "GPU memory.used=${USED}MiB"
+  if [ "$USED" -gt 3000 ]; then
+    echo "GPU_BUSY_SKIP_REGEN（有活动会话；稍后手动跑 scripts/regen_fillers.py）"
+    exit 0
+  fi
+  echo "RUN_REGEN=1：重铸垫音（频谱门控，badcase 自动重试）"
+  "$ROOT/.venv/bin/python" "$ROOT/scripts/regen_fillers.py" --profile autodl-best --persona demo-assistant
+  RC=$?
+  echo "REGEN_RC=$RC"
+  ls -la "$ROOT/personas/demo-assistant/fillers/neutral/"
+  exit $RC
 fi
-ls -la "$ROOT/personas/demo-assistant/fillers/neutral/"
-exit $RC
+echo "垫音已对齐弃用（如需 A/B：RUN_REGEN=1 重跑本脚本）"

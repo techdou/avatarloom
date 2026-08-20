@@ -59,7 +59,8 @@ blocks:
       streaming: true
       blocksize: 512
       cfgValue: 2.0
-      inferenceTimesteps: 5
+      # 扩散步数对齐 VoxEMW/官方推荐 10（调低更快更糙；5090 实测余量够，部署时复测 RTF/TTFA）
+      inferenceTimesteps: 10
       normalize: true
       denoise: false
       stylePrefix: "温柔女声，自然亲切"
@@ -97,3 +98,6 @@ session:
   mode: single
   allowInterruption: true
   event_log: true
+  # 垫音对齐 VoxEMW 生产配置：弃用（人家 2026-08-02 实测"衔接自然度不达标"关闭，
+  # 素材已清空）。LLM 首句空白由 idle 画面消化；想 A/B 改 true 并跑 scripts/regen_fillers.py
+  fillerEnabled: false

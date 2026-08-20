@@ -562,7 +562,7 @@ class MuseTalkAvatarBlock(Block):
                 # 半径小强度低不过曝（VoxEMW 同款参数）
                 blur = cv2.GaussianBlur(arr, (0, 0), 1.0)
                 arr = cv2.addWeighted(arr, 1.35, blur, -0.35, 0)
-                ok, buf = cv2.imencode(".jpg", arr, [cv2.IMWRITE_JPEG_QUALITY, 88])
+                ok, buf = cv2.imencode(".jpg", arr, [cv2.IMWRITE_JPEG_QUALITY, 95])
                 if ok:
                     return buf.tobytes()
         except Exception:
@@ -577,7 +577,7 @@ class MuseTalkAvatarBlock(Block):
             if pil_img.mode != "RGB":
                 pil_img = pil_img.convert("RGB")
             pil_buf = io.BytesIO()
-            pil_img.save(pil_buf, format="JPEG", quality=88)
+            pil_img.save(pil_buf, format="JPEG", quality=95)
             return pil_buf.getvalue()
         except Exception:
             return data
