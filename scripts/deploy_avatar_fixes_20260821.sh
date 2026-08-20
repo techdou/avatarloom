@@ -46,5 +46,16 @@ echo "=== [4/4] 垫音重铸（频谱门控，badcase 自动重试）==="
 "$ROOT/.venv/bin/python" "$ROOT/scripts/regen_fillers.py" --profile autodl-best --persona demo-assistant
 RC=$?
 echo "REGEN_RC=$RC"
+if [ "$RC" -eq 0 ]; then
+  # 重铸验证通过——坏例废片（含脚本备份的 neutral.bak-*）直接清理，不留垃圾
+  python3 -c "
+import glob, shutil
+for p in glob.glob('$ROOT/personas/demo-assistant/fillers/neutral.bak-*'):
+    shutil.rmtree(p, ignore_errors=True)
+print('坏例垫音废片已清理')
+"
+else
+  echo "重铸未全过——旧垫音备份保留在 fillers/neutral.bak-* 待查"
+fi
 ls -la "$ROOT/personas/demo-assistant/fillers/neutral/"
 exit $RC
