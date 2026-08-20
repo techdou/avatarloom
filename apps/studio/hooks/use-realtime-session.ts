@@ -195,13 +195,34 @@ export function useRealtimeSession({
       track = stream.getVideoTracks()[0];
       const video = document.createElement("video");
       video.srcObject = stream;
-      // 等首帧就绪（超时兜底 1.5s）
+      // 等元数据（超时兜底 1.5s）
       await new Promise<void>((resolve) => {
         video.onloadedmetadata = () => resolve();
         setTimeout(resolve, 1500);
       });
       await video.play();
-      await new Promise((r) => setTimeout(r, 100));
+      // 等真实首帧渲染完成再截——play 后固定 sleep 100ms 在 Windows 上常不够，
+      // 摄像头首帧未就绪时 drawImage 画出空帧，Vision 模型对空图产生幻觉描述
+      // （"齿轮加载图标"类输出）。requestVideoFrameCallback 保证一帧已可抓。
+      await new Promise<void>((resolve) => {
+        const timeout = setTimeout(resolve, 2500);
+        if (typeof video.requestVideoFrameCallback === "function") {
+          video.requestVideoFrameCallback(() => {
+            clearTimeout(timeout);
+            resolve();
+          });
+        } else {
+          const check = () => {
+            if (video.readyState >= 2) {
+              clearTimeout(timeout);
+              resolve();
+            } else {
+              setTimeout(check, 50);
+            }
+          };
+          check();
+        }
+      });
       const canvas = document.createElement("canvas");
       canvas.width = video.videoWidth || 640;
       canvas.height = video.videoHeight || 480;

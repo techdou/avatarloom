@@ -21,7 +21,7 @@ blocks:
       version: v1
       batchSize: 8
       crf: 18
-      activityFps: 2.5
+      activityFps: 10
       maxSide: 1280
     fallback: avatar.static
   vad:
