@@ -70,7 +70,10 @@ export class PcmPlayer {
 
   private ensureCtx() {
     if (!this.ctx) {
-      this.ctx = new AudioContext({ sampleRate: this.sampleRate });
+      // 不强制 16k：非默认采样率的 AudioContext 在 Windows WASAPI 等输出路径
+      // 走低质量重采样，部分驱动组合输出持续电流声/爆音（Chromium 已知行为）。
+      // 用系统默认采样率（44.1k/48k），16k 的 AudioBuffer 由浏览器按标准路径重采样。
+      this.ctx = new AudioContext();
       this.nextStartTime = this.ctx.currentTime + this.audioDelayMs / 1000;
       // 初始基准 = 首个排程点（连播判定对首轮也成立：
       // base 不为 0，首块 PCM 走连播分支时基准依然正确）

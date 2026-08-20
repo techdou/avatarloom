@@ -548,7 +548,6 @@ export function useRealtimeSession({
     } else {
       if (!wsRef.current || conn !== "connected") return;
       recorderRef.current = new MicrophoneRecorder({
-        targetSampleRate: 16000,
         onChunk: (pcm) => {
           const ws = wsRef.current;
           if (ws?.readyState === WebSocket.OPEN) {

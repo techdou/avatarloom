@@ -1,16 +1,13 @@
 /**
  * 麦克风音频采集器。
  *
- * 用 AudioWorklet 采集 → 48kHz float32 → 转 16kHz int16 PCM → 通过回调发送。
- *
- * 重采样策略：浏览器 AudioContext 通常是 44100/48000，我们需要 16000。
- * 用简单的线性降采样（每 N 个样本取 1 个）。生产可换 OfflineAudioContext 高质量重采样。
+ * AudioWorklet 采集（context 用麦克风原生采样率，避免双重重采样）→
+ * worklet 内抗混叠低通 + 降采样到 16k PCM16（见 public/worklets/recorder-worklet.js）
+ * → 回调发送。
  */
 
 export interface RecorderOptions {
-  /** 目标采样率，默认 16000 */
-  targetSampleRate?: number;
-  /** PCM chunk 回调（Int16Array） */
+  /** PCM chunk 回调（16k Int16Array） */
   onChunk: (pcm: Int16Array) => void;
   /** 错误回调 */
   onError?: (e: Error) => void;
@@ -23,7 +20,6 @@ export class MicrophoneRecorder {
   private source: MediaStreamAudioSourceNode | null = null;
   private analyser: AnalyserNode | null = null;
   private levelBuf: Uint8Array | null = null;
-  private targetRate: number;
   private onChunk: (pcm: Int16Array) => void;
   private onError?: (e: Error) => void;
   private _active = false;
@@ -33,7 +29,6 @@ export class MicrophoneRecorder {
   private _cancelled = false;
 
   constructor(opts: RecorderOptions) {
-    this.targetRate = opts.targetSampleRate ?? 16000;
     this.onChunk = opts.onChunk;
     this.onError = opts.onError;
   }
@@ -83,34 +78,12 @@ export class MicrophoneRecorder {
       this.analyser.fftSize = 256;
       this.source.connect(this.analyser);
 
-      // worklet 输出原始采样率的 PCM16，主线程重采样到 targetRate
-      const ratio = sourceRate / this.targetRate;
-      let resampleBuffer: number[] = [];
-
+      // worklet 已在音频线程完成抗混叠低通 + 降采样到 16k PCM16
+      // （此前主线程简单平均抽取无低通，高频混叠折回语音带，STT 识别劣化）
       this.node.port.onmessage = (e: MessageEvent) => {
         const pcm: Int16Array = e.data;
-        // 线性降采样
-        for (let i = 0; i < pcm.length; i++) {
-          resampleBuffer.push(pcm[i]);
-        }
-        // 每凑够 ratio 个样本输出 1 个
-        const out = new Int16Array(Math.floor(resampleBuffer.length / ratio));
-        let outIdx = 0;
-        let bufIdx = 0;
-        while (bufIdx + ratio <= resampleBuffer.length) {
-          // 简单平均
-          let sum = 0;
-          const baseIdx = Math.floor(bufIdx);
-          for (let j = 0; j < Math.ceil(ratio); j++) {
-            sum += resampleBuffer[baseIdx + j] ?? 0;
-          }
-          out[outIdx++] = Math.round(sum / Math.ceil(ratio));
-          bufIdx += ratio;
-        }
-        // 保留余数
-        resampleBuffer = resampleBuffer.slice(Math.floor(bufIdx));
-        if (out.length > 0) {
-          this.onChunk(out);
+        if (pcm.length > 0) {
+          this.onChunk(pcm);
         }
       };
 
