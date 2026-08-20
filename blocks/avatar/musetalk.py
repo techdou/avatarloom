@@ -558,6 +558,10 @@ class MuseTalkAvatarBlock(Block):
 
             arr = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
             if arr is not None:
+                # 轻量锐化（unsharp mask）：找回 JPEG 压缩丢掉的边缘，
+                # 半径小强度低不过曝（VoxEMW 同款参数）
+                blur = cv2.GaussianBlur(arr, (0, 0), 1.0)
+                arr = cv2.addWeighted(arr, 1.35, blur, -0.35, 0)
                 ok, buf = cv2.imencode(".jpg", arr, [cv2.IMWRITE_JPEG_QUALITY, 88])
                 if ok:
                     return buf.tobytes()

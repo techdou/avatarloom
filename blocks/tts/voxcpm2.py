@@ -10,6 +10,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import queue
+import re
+import subprocess
+import threading
+import time
 from typing import Any
 
 import numpy as np
@@ -30,7 +35,85 @@ from avatarloom_sdk import (
 )
 
 from blocks import release_gpu_objects
-from blocks._audio import resample_48k_to_16k as _resample_48k_to_16k
+from blocks._audio import FirDecimator48to16
+
+
+class AtempoStretcher:
+    """ffmpeg atempo 流式变速（保调）：16kHz mono int16 进出，每句一个实例。
+
+    VoxCPM2 克隆语速实测比参考音快 ~12%（模型固有），rate=0.886 补偿。
+    此前用线性插值拉长——变调+相位失真（音色发"电"），atempo 保 pitch 不变。
+    atempo 内部有几十 ms 分析窗，首段输出比输入晚一个窗，属正常流式延迟。
+    """
+
+    def __init__(self, sample_rate: int, rate: float):
+        self._q: queue.Queue = queue.Queue()
+        self._p = subprocess.Popen(
+            [
+                "ffmpeg", "-v", "error",
+                "-f", "s16le", "-ar", str(sample_rate), "-ac", "1", "-i", "pipe:0",
+                "-af", f"atempo={rate}",
+                "-f", "s16le", "-ar", str(sample_rate), "-ac", "1", "pipe:1",
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            bufsize=0,
+        )
+        threading.Thread(target=self._reader, daemon=True).start()
+
+    def _reader(self) -> None:
+        while True:
+            data = self._p.stdout.read(65536)
+            if not data:
+                self._q.put(None)
+                return
+            self._q.put(data)
+
+    def feed(self, pcm16: np.ndarray) -> np.ndarray:
+        """喂一块 int16，返回当前可得的拉伸输出（可能为空，窗口延迟）。"""
+        self._p.stdin.write(pcm16.tobytes())
+        self._p.stdin.flush()
+        buf = b""
+        while True:
+            try:
+                item = self._q.get_nowait()
+            except queue.Empty:
+                break
+            if item is not None:
+                buf += item
+        if not buf:
+            return np.empty(0, dtype=np.int16)
+        return np.frombuffer(buf, dtype=np.int16).copy()
+
+    def flush(self) -> np.ndarray:
+        """句尾收干（关 stdin 读到 EOF）。超时/异常丢弃尾部不阻塞。"""
+        try:
+            self._p.stdin.close()
+        except (BrokenPipeError, OSError):
+            pass
+        buf = b""
+        while True:
+            try:
+                item = self._q.get(timeout=10)
+            except queue.Empty:
+                break
+            if item is None:
+                break
+            buf += item
+        try:
+            self._p.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            self._p.kill()
+        if not buf:
+            return np.empty(0, dtype=np.int16)
+        return np.frombuffer(buf, dtype=np.int16).copy()
+
+    def close(self) -> None:
+        """打断废弃：直接杀进程，不等收尾。"""
+        try:
+            self._p.kill()
+        except OSError:
+            pass
 
 # 流式切块粒度：512 采样 = 32ms @16kHz（对齐 VoxEMW blocksize）
 BLOCK_SIZE = 512
@@ -200,17 +283,31 @@ class VoxCpm2TtsBlock(Block):
     async def _synthesize(self, ctx: BlockContext, text: str, voice_ref: str | None) -> None:
         # persona voice_ref 优先，fallback 到 profile config 的 voiceRef
         effective_ref = voice_ref or self._default_voice_ref
+        # 括号动作过滤：LLM 人设偶尔输出（微笑）（拍大腿）等动作描述，人设禁止
+        # 朗读但拦不住生成——限 20 字内短括号段过滤，避免误伤正常括注。
+        # 只影响 TTS，转写/字幕显示保留原文（对齐 VoxEMW 同款策略）。
+        text = re.sub(r"[（(][^（）()]{1,20}[)）]", " ", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        if not text:
+            return
         try:
             gen = self._infer_stream(text, effective_ref)
         except Exception as e:
             await ctx.logger.aerror("voxcpm2 synth error", error=str(e))
             return
 
-        # 流式：边收 48k chunk 边重采样 16k，攒够 BLOCK_SIZE 就 emit。
+        # 流式：边收 48k chunk 边降采样 16k，攒够 BLOCK_SIZE 就 emit。
         # 首 chunk 一到即发出，不必等整句合成完（对齐 VoxEMW blocksize=512）。
         buf16 = np.empty(0, dtype=np.int16)
         block = self._block_size  # 512 采样 = 32ms @16k（profile 可配）
-        phase = 0  # 跨 chunk 降采样相位（防边界爆音）
+        # FIR 抗混叠降采样（替代暴力每 3 取 1——8k+ 混叠折回损伤音质）
+        decimator = FirDecimator48to16()
+        # 语速补偿：ffmpeg atempo 保调变速（线性插值会变调失真——"电音感"根因之一）
+        stretcher = AtempoStretcher(16000, self._rate) if self._rate != 1.0 else None
+        t0 = time.perf_counter()
+        first_chunk_s: float | None = None
+        total_out = 0
+        cancelled = False
         try:
             while True:
                 # 每次推进同步 generator 都放到线程，GPU 推理不会卡住事件循环。
@@ -221,14 +318,23 @@ class VoxCpm2TtsBlock(Block):
                     break
                 # 打断检查：当前 chunk 完成后立即丢弃后续输出。
                 if ctx.run_id is not None and ctx.run_id in self._cancelled_run_ids:
+                    cancelled = True
+                    if stretcher is not None:
+                        stretcher.close()  # 打断废弃：杀 ffmpeg 不等收尾
                     return
-                # 48k float32 -> 16k int16（线性插值，带 rate 语速补偿 + 相位连续）
-                pcm16, phase = _resample_48k_to_16k(wav48, rate=self._rate, phase=phase)
+                pcm16 = decimator.process(wav48)
+                if stretcher is not None:
+                    pcm16 = stretcher.feed(pcm16)
+                    if len(pcm16) == 0:
+                        continue  # atempo 分析窗延迟，本块暂无输出
+                if first_chunk_s is None and len(pcm16) > 0:
+                    first_chunk_s = time.perf_counter() - t0
                 buf16 = np.concatenate([buf16, pcm16])
                 while len(buf16) >= block:
                     chunk = buf16[:block]
                     buf16 = buf16[block:]
                     self._total_samples += len(chunk)
+                    total_out += len(chunk)
                     await ctx.emit(
                         Event(
                             type=TTS_AUDIO_DELTA,
@@ -245,9 +351,15 @@ class VoxCpm2TtsBlock(Block):
                             },
                         )
                     )
+            # 句尾：atempo 收干窗口尾巴（可达数千采样），整块吐完再补零收尾
+            if stretcher is not None and not cancelled:
+                tail = stretcher.flush()
+                if len(tail) > 0:
+                    buf16 = np.concatenate([buf16, tail])
             # 尾巴不足一块也发出（句尾）
             if len(buf16) > 0:
                 self._total_samples += len(buf16)
+                total_out += len(buf16)
                 await ctx.emit(
                     Event(
                         type=TTS_AUDIO_DELTA,
@@ -264,6 +376,14 @@ class VoxCpm2TtsBlock(Block):
                         },
                     )
                 )
+            gen_s = time.perf_counter() - t0
+            audio_s = total_out / 16000
+            await ctx.logger.ainfo(
+                "tts.voxcpm2 合成统计",
+                ttfa_s=round(first_chunk_s, 2) if first_chunk_s else None,
+                audio_s=round(audio_s, 2),
+                rtf=round(gen_s / audio_s, 2) if audio_s > 0 else None,
+            )
         except Exception as e:
             await ctx.logger.aerror("voxcpm2 stream error", error=str(e))
         finally:

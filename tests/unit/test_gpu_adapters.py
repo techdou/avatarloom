@@ -21,8 +21,10 @@ from blocks.avatar.flashhead import FlashHeadAvatarBlock
 from blocks.avatar.musetalk import MuseTalkAvatarBlock
 from blocks.stt.sensevoice import SenseVoiceSttBlock, parse_sensevoice_output, pcm16_to_wav
 from blocks.tts.qwen3 import Qwen3TtsBlock
+from blocks._audio import FirDecimator48to16
+from blocks._audio import resample_48k_to_16k as _resample_48k_to_16k
 from blocks.tts.qwen3 import resample_pcm as qwen_resample
-from blocks.tts.voxcpm2 import VoxCpm2TtsBlock, _resample_48k_to_16k
+from blocks.tts.voxcpm2 import VoxCpm2TtsBlock
 from blocks.vad.silero import SileroVadBlock
 
 # ---------------------------------------------------------------------------
@@ -191,6 +193,28 @@ class TestResampling:
         out, phase = _resample_48k_to_16k(np.empty(0, dtype=np.float32))
         assert len(out) == 0
         assert phase == 0
+
+    def test_fir_decimator_stream_equals_full(self) -> None:
+        """FIR 抗混叠降采样：分块流式与整段处理逐样本等价（FIR 状态连续）。"""
+        rng = np.random.default_rng(42)
+        arr = rng.standard_normal(5000, dtype=np.float32) * 0.3
+        d = FirDecimator48to16()
+        full = d.process(arr)
+        d2 = FirDecimator48to16()
+        parts = np.concatenate([d2.process(arr[:512]), d2.process(arr[512:1777]), d2.process(arr[1777:])])
+        assert len(full) == len(parts)
+        assert np.array_equal(full, parts)
+        # 3 倍降采样：输出长度 ≈ 输入/3（FIR 群延迟内）
+        assert len(full) == 5000 // 3 or len(full) == 5000 // 3 + 1
+
+    def test_fir_decimator_suppresses_alias(self) -> None:
+        """抗混叠：12kHz 正弦（>8k 奈奎斯特）经降采样应被显著压制。"""
+        t = np.arange(48000, dtype=np.float32) / 48000.0
+        high = (np.sin(2 * np.pi * 12000 * t) * 0.8).astype(np.float32)
+        d = FirDecimator48to16()
+        out = d.process(high).astype(np.float32) / 32768.0
+        # 混叠会折回 4kHz；无滤波暴力抽取会保留大幅混叠能量
+        assert float(np.sqrt(np.mean(out**2))) < 0.1 * 0.8
 
     def test_resample_clips_overflow(self) -> None:
         # float32 超过 1.0 应被裁剪——用足够多样本让降采样后保留

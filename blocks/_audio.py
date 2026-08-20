@@ -78,15 +78,17 @@ def resample_48k_to_16k(
     rate: float = 1.0,
     phase: int = 0,
 ) -> tuple[np.ndarray, int]:
-    """48kHz float32 -> 16kHz int16，带语速补偿与跨 chunk 相位连续。
+    """48kHz float32 -> 16kHz int16，带跨 chunk 相位连续（每 3 取 1 抽取）。
 
-    VoxCPM2 专用（48k 输出 + 克隆固有提速 ~12% 需 rate<1 补偿）。流式切块时
-    phase 必须跨 chunk 传递，否则每 chunk 独立从 0 取样，3 的倍数边界处相位
-    跳变产生爆音（chunk 长度几乎必然不是 3 的倍数）。
+    .. deprecated:: 抗混叠版见 :class:`FirDecimator48to16`——本函数无低通，
+       8kHz 以上能量混叠折回语音带损伤音质，仅保留兼容旧调用/测试。
+       语速补偿请用 ffmpeg atempo（保调），线性插值会变调失真。
+
+    VoxCPM2 专用（48k 输出）。流式切块时 phase 必须跨 chunk 传递。
 
     Args:
         wav48: 单个 48k chunk（float32 1D）。
-        rate: 语速补偿系数（<1 拉长，>1 压缩）。
+        rate: 语速补偿系数（<1 拉长，>1 压缩）——线性插值变调，勿用于产品链路。
         phase: 降采样相位（已消费 48k 样本数 mod 3）。
 
     Returns:
@@ -112,3 +114,40 @@ def resample_48k_to_16k(
         return (arr16 * 32767).astype(np.int16), new_phase
     except Exception:
         return np.empty(0, dtype=np.int16), phase
+
+
+_FIR_TAPS = 63
+
+
+def _design_anti_alias_fir() -> np.ndarray:
+    """Hamming 窗 sinc 低通 @7.2kHz（48k 采样，3 倍抽取前抗混叠）。"""
+    n = np.arange(_FIR_TAPS) - (_FIR_TAPS - 1) / 2
+    h = np.sinc(2 * 7200.0 / 48000.0 * n) * np.hamming(_FIR_TAPS)
+    return (h / h.sum()).astype(np.float32)
+
+
+_FIR_H = _design_anti_alias_fir()
+
+
+class FirDecimator48to16:
+    """流式 48k→16k 降采样：FIR 抗混叠低通 + 相位连续抽取。
+
+    对标 VoxEMW（scipy resample_poly）的流式版：FIR 历史 + 全局抽取游标
+    跨 chunk 保留。8kHz 以上能量先被压掉再抽取，无混叠损伤。
+    """
+
+    def __init__(self) -> None:
+        self._hist = np.zeros(_FIR_TAPS - 1, dtype=np.float32)
+        self._total = 0  # 已产出的滤波样本全局计数（抽取相位锚点）
+
+    def process(self, wav48: np.ndarray) -> np.ndarray:
+        """喂一个 48k chunk，返回 16k int16（可能为空）。"""
+        if wav48 is None or len(wav48) == 0:
+            return np.empty(0, dtype=np.int16)
+        x = np.concatenate([self._hist, np.asarray(wav48, dtype=np.float32).reshape(-1)])
+        y = np.convolve(x, _FIR_H, mode="valid")
+        self._hist = x[-(_FIR_TAPS - 1):]
+        start = (-self._total) % 3
+        self._total += len(y)
+        out16 = np.clip(y[start::3], -1.0, 1.0)
+        return (out16 * 32767).astype(np.int16)
