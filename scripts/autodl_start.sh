@@ -213,7 +213,10 @@ case "$ACTION" in
         # 守护循环兜底：bash 收 TERM 退出后 uv run/python 子进程可能残留，
         # 按服务名精确清理（与 restart 脚本同款姿势）
         for pat in 'avatarloom_runtime_gateway' 'avatarloom_control_api' 'next-server'; do
-            pids=$(ps -eo pid,cmd | grep -E "$pat" | grep -v grep | awk '{print $1}')
+            # grep 无匹配退出 1，pipefail + set -e 会在此杀掉整个脚本，
+            # 导致后面的模式（next-server）永远执行不到——历代 next-server
+            # 残留占端口的根因。命令替换兜 || true 使赋值恒成功。
+            pids=$(ps -eo pid,cmd | grep -E "$pat" | grep -v grep | awk '{print $1}' || true)
             if [ -n "$pids" ]; then
                 kill $pids 2>/dev/null || true
                 # next-server 等进程可能忽略/拖延 SIGTERM（keep-alive 优雅关闭），
