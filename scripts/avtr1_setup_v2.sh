@@ -5,7 +5,14 @@ set -uo pipefail
 exec > >(tee -a /root/autodl-tmp/avtr1_setup.log) 2>&1
 echo "=== [v5] $(date +%T) start ==="
 export AVTR1_LOCAL_STORAGE=/root/autodl-tmp/avtr1_storage
-export HF_ENDPOINT=https://hf-mirror.com
+# avaturn-live/avtr-1 是 gated 仓：有 HF_TOKEN（或 hf auth login 后的 token 文件）
+# 时必须直连 huggingface.co + turbo——hf-mirror 对受限仓 403 不代理授权
+if [ -n "${HF_TOKEN:-}" ] || [ -f "$HOME/.cache/huggingface/token" ]; then
+  unset HF_ENDPOINT
+  source /etc/network_turbo 2>/dev/null || true
+else
+  export HF_ENDPOINT=https://hf-mirror.com
+fi
 export CONDA_OVERRIDE_CUDA=12.8
 export PATH="$HOME/.pixi/bin:$PATH"
 cd /root/autodl-tmp/avtr-1
@@ -15,11 +22,9 @@ pixi install || { echo "FAIL_PIXI_PROJECT_INSTALL"; exit 1; }
 
 ok=0
 for round in 1 2 3 4; do
-  echo "=== [dl] round $round 无 turbo（hf-mirror 拉 HF 制品）==="
+  echo "=== [dl] round $round ==="
   if pixi run python scripts/download_artifacts.py; then ok=1; break; fi
-  echo "=== [dl] round $round 失败，换 turbo 补 GitHub 制品 ==="
-  if (source /etc/network_turbo 2>/dev/null; pixi run python scripts/download_artifacts.py); then ok=1; break; fi
-  echo "round $round 双通道均失败，15s 后下一轮（断点续传）"
+  echo "round $round 失败，15s 后断点续传"
   sleep 15
 done
 [ "$ok" = "1" ] || { echo "FAIL_DOWNLOAD"; exit 1; }
