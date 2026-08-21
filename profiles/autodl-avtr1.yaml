@@ -15,7 +15,9 @@ blocks:
     config:
       device: cuda
       portrait: personas/demo-assistant/avatar/portrait.jpg
-      workerPython: /root/autodl-tmp/avtr-1/.pixi/envs/renderer/bin/python
+      # pixi 0.77 把顶层 pypi 依赖（torch/tensorrt/avtr1_renderer）物化进 envs/default，
+      # envs/renderer 只含 dev/build 附加包（无 torch）——worker 必须用 default
+      workerPython: /root/autodl-tmp/avtr-1/.pixi/envs/default/bin/python
       workerScript: scripts/avtr1_worker.py
       storage: /root/autodl-tmp/avtr1_storage
       bg: plain_white
