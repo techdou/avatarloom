@@ -16,11 +16,16 @@ cd /root/autodl-tmp/avtr-1
 echo "=== [2] env solve+install（renderer，清华+阿里镜像）==="
 pixi install || { echo "FAIL_PIXI_PROJECT_INSTALL"; exit 1; }
 
-echo "=== [3] download artifacts（HF 走 hf-mirror；warp_plugin 等 GitHub 制品需 turbo）==="
-# turbo 只加速 github/HF，HF 部分走 hf-mirror 不吃 turbo；但 warp_plugin 这类
-# GitHub releases 制品必须 turbo，否则 Connection reset。仅为本步开启。
+echo "=== [3] download artifacts（断点续传 + 失败自动重试 6 轮）==="
+# warp_plugin 等制品走 GitHub releases（需 turbo）；HF 制品走 hf-mirror。
+# 单制品网络抖动会整批抛错——外层重试，ensure_all_artifacts 断点续传逐轮推进。
 source /etc/network_turbo 2>/dev/null || true
-pixi run python scripts/download_artifacts.py || { echo "FAIL_DOWNLOAD"; exit 1; }
+_ok=0
+for _i in 1 2 3 4 5 6; do
+  if pixi run python scripts/download_artifacts.py; then _ok=1; break; fi
+  echo "download 第 ${_i} 轮失败，20s 后断点续传重试"; sleep 20
+done
+[ "$_ok" = "1" ] || { echo "FAIL_DOWNLOAD"; exit 1; }
 
 if ! nvidia-smi -L 2>/dev/null | grep -q GPU; then
   echo "=== READY_FOR_GPU_BUILD（无卡模式，编译留到有卡窗口）==="
