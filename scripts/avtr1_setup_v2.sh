@@ -5,14 +5,9 @@ set -uo pipefail
 exec > >(tee -a /root/autodl-tmp/avtr1_setup.log) 2>&1
 echo "=== [v5] $(date +%T) start ==="
 export AVTR1_LOCAL_STORAGE=/root/autodl-tmp/avtr1_storage
-# avaturn-live/avtr-1 是 gated 仓：有 HF_TOKEN（或 hf auth login 后的 token 文件）
-# 时必须直连 huggingface.co + turbo——hf-mirror 对受限仓 403 不代理授权
-if [ -n "${HF_TOKEN:-}" ] || [ -f "$HOME/.cache/huggingface/token" ]; then
-  unset HF_ENDPOINT
-  source /etc/network_turbo 2>/dev/null || true
-else
-  export HF_ENDPOINT=https://hf-mirror.com
-fi
+# 最终定版：全程 hf-mirror（实测 2026-08-21：hf-mirror 带 token 可代理 gated 仓授权；
+# 官方直连+turbo 会停滞）。token 由 ~/.cache/huggingface/token 自动携带。
+export HF_ENDPOINT=https://hf-mirror.com
 export CONDA_OVERRIDE_CUDA=12.8
 export PATH="$HOME/.pixi/bin:$PATH"
 cd /root/autodl-tmp/avtr-1
