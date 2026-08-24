@@ -17,12 +17,12 @@ import numpy as np
 import pytest
 from avatarloom_sdk import BlockContext
 
+from blocks._audio import FirDecimator48to16
+from blocks._audio import resample_48k_to_16k as _resample_48k_to_16k
 from blocks.avatar.flashhead import FlashHeadAvatarBlock
 from blocks.avatar.musetalk import MuseTalkAvatarBlock
 from blocks.stt.sensevoice import SenseVoiceSttBlock, parse_sensevoice_output, pcm16_to_wav
 from blocks.tts.qwen3 import Qwen3TtsBlock
-from blocks._audio import FirDecimator48to16
-from blocks._audio import resample_48k_to_16k as _resample_48k_to_16k
 from blocks.tts.qwen3 import resample_pcm as qwen_resample
 from blocks.tts.voxcpm2 import VoxCpm2TtsBlock
 from blocks.vad.silero import SileroVadBlock

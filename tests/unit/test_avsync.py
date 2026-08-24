@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import asyncio
 
-import pytest
-
 from avatarloom_runtime_gateway.avsync import (
     AUDIO_TICK_SAMPLES,
     SAMPLES_PER_FRAME,
@@ -48,7 +46,7 @@ class TestTailFrameDrop:
         assert asyncio.run(s.next_frame_tick()) == b"jpeg"
         assert s.tail_dropped == 0
         # 队列剩 2 个尾帧——下帧到达前会逐帧丢
-        s2_frames = asyncio.run(self._drain_two(s))
+        asyncio.run(self._drain_two(s))
         assert s.tail_dropped == 2
 
     async def _drain_two(self, s: AVSyncScheduler) -> list[bytes]:
@@ -79,6 +77,30 @@ class TestFlushSuppress:
         s.flush()
         s.feed_frame(b"idle", False)  # idle 帧不受封杀
         assert asyncio.run(s.next_frame_tick()) == b"idle"
+
+    def test_suppression_holds_until_new_audio_arrives(self) -> None:
+        # flush 后新音频未到（ready_at=inf）：陈旧 speech 帧持续封杀
+        s = AVSyncScheduler(audio_lead=0.0)
+        s.flush()
+        s.feed_frame(b"stale1", True)
+        s.feed_frame(b"stale2", True)
+        assert s.stale_dropped == 2
+        assert s.queued_frames == 0
+
+    def test_suppression_holds_during_lead_window(self) -> None:
+        # 新音频已到但仍在 lead 压后期：此时到达的 speech 帧仍是旧队列陈旧帧
+        # （avatar 渲染滞后 ~0.35s > lead 0.25s，新真帧不可能这么早）——
+        # "新音频一到就解封"的旧语义会在此窗口放进陈旧帧，推进 _speech_out
+        # 后新回复真帧反被丢尾规则误杀
+        s = AVSyncScheduler(audio_lead=10.0)  # 大 lead 拉长窗口便于观测
+        s.flush()
+        s.feed_audio(_pcm(SAMPLES_PER_FRAME * 4))
+        s.feed_frame(b"stale", True)
+        assert s.stale_dropped == 1
+        assert s.queued_frames == 0
+        # idle 帧不受影响
+        s.feed_frame(b"idle", False)
+        assert s.queued_frames == 1
 
 
 class TestFrameRepeat:
