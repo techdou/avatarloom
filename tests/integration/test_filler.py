@@ -59,9 +59,28 @@ def _mock_config() -> OrchestratorConfig:
     )
 
 
+def _write_filler_wav(root, persona_id: str = "demo-assistant") -> None:
+    """在 tmp workspace 造一条 16k mono s16 垫音 wav（仓库垫音文件随产品决策清空，
+    测试不应依赖仓库资源状态——filler 逻辑本身仍要保住覆盖）。"""
+    import wave
+
+    fillers_dir = root / "personas" / persona_id / "fillers" / "neutral"
+    fillers_dir.mkdir(parents=True, exist_ok=True)
+    t = np.arange(16000, dtype=np.float32)  # 1s
+    tone = (np.sin(2 * np.pi * 440 * t) * 12000).astype(np.int16)
+    with wave.open(str(fillers_dir / "testfiller.wav"), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(16000)
+        wf.writeframes(tone.tobytes())
+
+
 @pytest.mark.integration
 class TestFillerMurmur:
-    async def test_filler_emitted_then_preempted_by_real_tts(self) -> None:
+    async def test_filler_emitted_then_preempted_by_real_tts(
+        self, tmp_path
+    ) -> None:
+        _write_filler_wav(tmp_path)
         emitted: list[Event] = []
 
         async def sink(e: Event) -> None:
@@ -70,7 +89,7 @@ class TestFillerMurmur:
         orch = Orchestrator(_mock_config(), event_sink=sink)
         await orch.setup()
         session = await orch.start_session(
-            persona_id="demo-assistant", workspace_root="."
+            persona_id="demo-assistant", workspace_root=str(tmp_path)
         )
 
         # 触发一轮 transcript

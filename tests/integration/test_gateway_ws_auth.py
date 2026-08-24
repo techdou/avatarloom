@@ -160,7 +160,7 @@ class TestWsOriginCheck:
     async def test_origin_in_whitelist_accepted(self, tmp_path: Path) -> None:
         with _gateway(tmp_path) as (host, port):
             async with websockets.connect(
-                _url(host, port), origin="http://localhost:3000"
+                _url(host, port), origin="http://localhost:27300"
             ) as ws:
                 await ws.send(json.dumps({"type": "ping"}))
                 assert await _recv_until(ws, "pong") is not None
