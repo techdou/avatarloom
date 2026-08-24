@@ -273,7 +273,8 @@ class OrchestratorEventBridge:
             out = payload.get("out")
             if isinstance(out, str) and self._runs_root:
                 try:
-                    rel = Path(out).resolve().relative_to(Path(self._runs_root).resolve())
+                    root = Path(self._runs_root).resolve()  # noqa: ASYNC240 -- 只读路径解析
+                    rel = Path(out).resolve().relative_to(root)  # noqa: ASYNC240 -- 同上
                     payload["url"] = f"/api/control/runs-media/{rel.as_posix()}"
                 except ValueError:
                     pass

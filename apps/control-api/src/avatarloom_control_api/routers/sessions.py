@@ -5,7 +5,7 @@ Session 由 Runtime Gateway 创建/收尾（POST/PATCH 上报），这里同时�
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
@@ -50,7 +50,7 @@ async def report_session_start(
     if session is None:
         session = Session(
             **payload.model_dump(),
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
         )
         db.add(session)
     else:
@@ -75,7 +75,7 @@ async def update_session(
     for k, v in update_dict.items():
         setattr(session, k, v)
     if "status" in update_dict and session.ended_at is None:
-        session.ended_at = datetime.now(timezone.utc)
+        session.ended_at = datetime.now(UTC)
     await db.commit()
     await db.refresh(session)
     return session

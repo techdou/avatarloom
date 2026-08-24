@@ -6,7 +6,7 @@ DB 记录是 Studio 列表/详情页的数据源，由 Gateway 在 run 开始/�
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
@@ -52,7 +52,7 @@ async def report_run_start(
     """Runtime Gateway 上报 Run 开始（upsert——重试幂等）。"""
     run = await db.get(Run, payload.id)
     if run is None:
-        run = Run(**payload.model_dump(), started_at=datetime.now(timezone.utc))
+        run = Run(**payload.model_dump(), started_at=datetime.now(UTC))
         db.add(run)
     else:
         for k, v in payload.model_dump().items():
@@ -76,7 +76,7 @@ async def update_run(
     for k, v in update_dict.items():
         setattr(run, k, v)
     if "status" in update_dict and run.ended_at is None:
-        run.ended_at = datetime.now(timezone.utc)
+        run.ended_at = datetime.now(UTC)
     await db.commit()
     await db.refresh(run)
     return run

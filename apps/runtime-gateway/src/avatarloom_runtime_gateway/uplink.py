@@ -64,8 +64,9 @@ class UplinkDispatcher:
 
     def __init__(self, ctx: UplinkContext) -> None:
         self._ctx = ctx
-        # 未知 tag 警告去重——error JSON 每连接只发一次，避免旧前端裸 PCM 刷屏
+        # 未知 tag/type 警告去重——error 每连接只发一次，避免旧客户端刷屏
         self._warned_unknown_tag = False
+        self._warned_unknown_type = False
 
     # ------------------------------------------------------------------
     # JSON 上行
@@ -86,6 +87,12 @@ class UplinkDispatcher:
 
         handler_name = _JSON_HANDLERS.get(msg.type)
         if handler_name is None:
+            # 未知 type 一次性告警（对齐二进制未知 tag 行为）——前端拼错
+            # type 名（如 "session.stoped"）不应完全无反馈，联调可排查
+            if not self._warned_unknown_type:
+                self._warned_unknown_type = True
+                logger.warning("unknown uplink json type: %r (once per connection)", msg.type)
+                await self._ctx.bridge.send_error(f"unknown message type: {msg.type}")
             return
         handler = getattr(self, handler_name, None)
         if handler is None:

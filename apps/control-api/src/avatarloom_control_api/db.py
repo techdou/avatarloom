@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator
 
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import (
@@ -62,11 +61,3 @@ async def drop_db(engine: AsyncEngine) -> None:
     """删除所有表（测试用）。"""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
-
-
-async def get_session(
-    session_factory: async_sessionmaker[AsyncSession],
-) -> AsyncIterator[AsyncSession]:
-    """FastAPI 依赖：提供 db session。"""
-    async with session_factory() as session:
-        yield session

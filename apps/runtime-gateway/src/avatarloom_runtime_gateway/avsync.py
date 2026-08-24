@@ -57,16 +57,22 @@ class AVSyncScheduler:
         if not self._audio:
             # 队列从空到非空 = 新回复开始：压后 lead 秒等 avatar 渲染追赶
             self._audio_ready_at = time.monotonic() + self._audio_lead
-        self._suppress_speech = False  # 新音频到 → 其后续 speech 帧合法，解除封杀
         self._audio.extend(pcm)
         self._audio_samples_fed += len(pcm) // 2
 
     def feed_frame(self, jpeg: bytes, is_speech: bool) -> None:
         if is_speech and self._suppress_speech:
-            # 打断后 avatar 服务队列里还在路上的陈旧 speech 帧（reset 前渲染的），
-            # 一律丢弃——否则会触发丢尾规则误清空队列（误杀新回复的真帧）
-            self.stale_dropped += 1
-            return
+            # 打断后 avatar 服务队列里还在路上的陈旧 speech 帧（reset 前渲染），
+            # 一律丢弃——否则会触发丢尾规则误清空队列（误杀新回复的真帧）。
+            # 解封条件绑定 _audio_ready_at：新音频 lead 压后期结束（开始播放）
+            # 才放行 speech 帧。此时陈旧帧已排空，而新回复的真帧因 avatar
+            # ~0.35s 渲染滞后最早也要 lead(0.25s) 之后才产出——不会误杀。
+            # （此前"新音频一到就解封"存在窗口：解封瞬间旧队列最后几帧
+            #  陈旧帧才到达，被放行推进 _speech_out，新真帧反被丢尾规则误杀。）
+            if time.monotonic() < self._audio_ready_at:
+                self.stale_dropped += 1
+                return
+            self._suppress_speech = False
         self._frames.append((jpeg, is_speech))
         self._frame_event.set()
 
@@ -76,7 +82,8 @@ class AVSyncScheduler:
         self._audio_samples_fed = 0
         self._frames.clear()
         self._speech_out = 0
-        self._suppress_speech = True  # 封杀在途陈旧 speech 帧，直到新音频到达
+        self._suppress_speech = True   # 封杀在途陈旧 speech 帧
+        self._audio_ready_at = float("inf")  # 新音频到达（并过 lead 期）前不解封
 
     def close(self) -> None:
         """会话结束：唤醒阻塞中的取帧协程退出。"""
@@ -115,7 +122,7 @@ class AVSyncScheduler:
                 # 等一小拍看有没有新帧，没有就重复上一帧
                 try:
                     await asyncio.wait_for(self._frame_event.wait(), FRAME_TICK_SECONDS)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     return self._last_jpeg
             else:
                 await self._frame_event.wait()

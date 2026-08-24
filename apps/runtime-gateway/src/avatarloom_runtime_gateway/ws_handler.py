@@ -259,7 +259,6 @@ class WebSocketSession:
             return
 
         try:
-            # v0.1：默认用 Mock profile（profile 加载逻辑在阶段 9 完善）
             config = None
             profiles_dir = Path(self.settings.workspace_root) / "profiles"
             profile_path = profiles_dir / f"{profile_id}.yaml"
@@ -274,8 +273,30 @@ class WebSocketSession:
                     await self.bridge.send_error(f"profile 加载失败（{profile_id}），详见服务端日志")
                     return
             if config is None:
-                config = _mock_profile_config()
-                config.profile_id = profile_id
+                if profile_id == "mock":
+                    # 显式 mock 档：内置链路，无需 yaml
+                    config = _mock_profile_config()
+                    config.profile_id = profile_id
+                else:
+                    # yaml 缺失不再静默降级 mock——配置错误被掩盖时，用户请求
+                    # GPU 链实际跑 440Hz 正弦波（"怪声"事故同模式）
+                    await self.bridge.send_error(
+                        f"profile 不存在: {profile_id}（profiles/{profile_id}.yaml 缺失，仅 mock 为内置档）"
+                    )
+                    return
+
+            # GPU 会话判定：只依赖 config 声明，必须在 setup 之前算——
+            # setup 中途失败（如 avatar 装好后 STT 失败）走 except return 时
+            # CUDA context 已初始化，若标记仍为 False，cleanup 的 rc=42 自重启
+            # 不触发，污染进程继续服务，下个会话 fork worker 必 SIGSEGV。
+            # fallback 降级后的 deployment 也算（如 flashhead→musetalk 仍
+            # cuda-local），故看 config 原始声明；现有 profile 惯用
+            # deployment: local + config.device: cuda 表达 GPU 本地部署。
+            self._had_gpu_block = any(
+                ref.deployment in _GPU_DEPLOYMENTS
+                or str(ref.config.get("device", "")).startswith("cuda")
+                for ref in config.blocks.values()
+            )
 
             # Recorder 接收所有事件——注入 bridge（事件出口用它记录）
             recorder = RunRecorder(root=self.settings.runs_root)
@@ -317,18 +338,6 @@ class WebSocketSession:
             self.bridge.session_ref = session
             self.orchestrator = orchestrator
             self.session = session
-            # 标记是否装配了 GPU block——用于会话结束后判定是否自重启。
-            # fallback 降级后的 deployment 也算（如 flashhead→musetalk 仍 cuda-local），
-            # 但 orchestrator.blocks 存的是实例不含 deployment；这里看 config 的原始声明，
-            # 若任一 block 的 deployment 标记为 GPU，保守视为 GPU 会话。
-            # 现有 profile 惯用 deployment: local + config.device: cuda 表达 GPU 本地
-            # 部署——只认 deployment 集合会漏判，rc=42 从不触发，断线重连后
-            # CUDA 污染进程 fork worker 必 SIGSEGV（avatar 永久降级 static 的根因）。
-            self._had_gpu_block = any(
-                ref.deployment in _GPU_DEPLOYMENTS
-                or str(ref.config.get("device", "")).startswith("cuda")
-                for ref in config.blocks.values()
-            )
         finally:
             async with _session_lock:
                 _orchestrator_starting = False

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,10 +14,13 @@ router = APIRouter()
 
 @router.get("/health", response_model=HealthOut)
 async def health_check(db: AsyncSession = Depends(get_db)) -> HealthOut:
-    """健康检查。"""
+    """健康检查。DB 失败按 degraded 返回 503——只看 status/状态码的探针
+    （k8s liveness / uptime 监控）不能误判健康。"""
     db_ok = True
     try:
         await db.execute(text("SELECT 1"))
     except Exception:
         db_ok = False
-    return HealthOut(status="ok", version="0.1.0", db_ok=db_ok)
+    if not db_ok:
+        raise HTTPException(503, "database unavailable")
+    return HealthOut(status="ok", version="0.1.0", db_ok=True)

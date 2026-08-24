@@ -9,10 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
-
-from avatarloom_control_api.config import load_settings
 
 router = APIRouter()
 
@@ -22,9 +20,11 @@ _ALLOWED_EXTS = frozenset({".mp4", ".webm", ".jpg", ".jpeg", ".png", ".wav"})
 
 
 @router.get("/{rel_path:path}")
-async def get_runs_media(rel_path: str) -> FileResponse:
-    settings = load_settings()
-    runs_root = Path(settings.runs_root).resolve()
+async def get_runs_media(rel_path: str, request: Request) -> FileResponse:
+    # 复用 app.state.settings（app 启动时构造一次）——每次请求 load_settings()
+    # 会重读 .env（磁盘 IO），高频媒体回放下是无谓开销，且测试注入不生效
+    settings = request.app.state.settings
+    runs_root = Path(settings.runs_root).resolve()  # noqa: ASYNC240 -- 只读路径解析
     target = (runs_root / rel_path).resolve()
     # 防穿越：resolve 后必须仍在 runs_root 内（../ 或绝对路径注入都挡掉）
     if not target.is_relative_to(runs_root):
