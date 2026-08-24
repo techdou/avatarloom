@@ -4,6 +4,7 @@ import { memo, useEffect, useState } from "react";
 import { clsx } from "clsx";
 import { ChevronUp, ChevronDown } from "lucide-react";
 import type { DebugInfo, SessionTiming, ConnState } from "@/hooks/use-realtime-session";
+import { STATE_META_FALLBACK } from "@/hooks/use-realtime-session";
 import { currentRoundEvents, roundLatencies, type SessionEvent } from "@/lib/events";
 
 interface DebugDrawerProps {
@@ -58,7 +59,7 @@ export const DebugDrawer = memo(function DebugDrawer({
   const base = round[0]?.ts ?? null;
   const lat = roundLatencies(timing);
   const currentStage = STAGES.findIndex((s) => s.key === sessionState);
-  const stateMeta = STATE_LABELS[sessionState] ?? STATE_LABELS.idle;
+  const stateMeta = STATE_META_FALLBACK[sessionState] ?? STATE_META_FALLBACK.idle;
 
   return (
     <div className="border-t border-border bg-white dark:bg-bg-subtle-dark dark:border-border">
@@ -167,16 +168,6 @@ export const DebugDrawer = memo(function DebugDrawer({
     </div>
   );
 });
-
-const STATE_LABELS: Record<string, { label: string; badge: string }> = {
-  idle: { label: "待机", badge: "" },
-  listening: { label: "聆听中", badge: "badge-ok" },
-  transcribing: { label: "识别中", badge: "badge-warn" },
-  thinking: { label: "思考中", badge: "badge-accent" },
-  speaking: { label: "回复中", badge: "badge-ok" },
-  interrupting: { label: "打断", badge: "badge-err" },
-  error: { label: "异常", badge: "badge-err" },
-};
 
 function Kv({ k, v, mono = false }: { k: string; v: string; mono?: boolean }) {
   return (

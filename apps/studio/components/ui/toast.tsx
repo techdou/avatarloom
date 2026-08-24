@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
 import { clsx } from "clsx";
 import { CheckCircle2, AlertCircle, Info, X } from "lucide-react";
 
@@ -59,11 +59,16 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     [remove]
   );
 
-  const api: ToastApi = {
-    success: (m) => push("success", m),
-    error: (m) => push("error", m),
-    info: (m) => push("info", m),
-  };
+  // context value 必须 memo——裸字面量每次 Provider 重渲染都换新引用，
+  // 所有 useToast consumer（含已 memo 的组件，memo 挡不住 context）连带重渲染
+  const api: ToastApi = useMemo(
+    () => ({
+      success: (m) => push("success", m),
+      error: (m) => push("error", m),
+      info: (m) => push("info", m),
+    }),
+    [push]
+  );
 
   return (
     <ToastContext.Provider value={api}>

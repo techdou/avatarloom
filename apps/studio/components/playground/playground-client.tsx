@@ -66,12 +66,20 @@ export function PlaygroundClient() {
   // restartSession 的定时器句柄——卸载时清理，避免组件销毁后 connect() 还在 fire
   const restartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // 解构稳定方法（hook 内 useCallback，引用恒定）——restartSession 若依赖
+  // session 整对象（每渲染新字面量），会连带 ContextBar.memo 每秒失效 ~25 次
+  const { conn: sessionConn, toggleMic } = session;
+  const {
+    connect: sessionConnect,
+    disconnect: sessionDisconnect,
+  } = session;
+
   const restartSession = useCallback(() => {
     // 已连接时切换 profile/persona：重启会话让新配置生效
-    session.disconnect();
+    sessionDisconnect();
     if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
-    restartTimerRef.current = setTimeout(() => session.connect(), 100);
-  }, [session]);
+    restartTimerRef.current = setTimeout(() => sessionConnect(), 100);
+  }, [sessionConnect, sessionDisconnect]);
 
   // 卸载清理：清掉 pending 的 restart 定时器
   useEffect(() => {
@@ -88,9 +96,9 @@ export function PlaygroundClient() {
       } catch {
         /* ignore */
       }
-      if (session.conn === "connected") restartSession();
+      if (sessionConn === "connected") restartSession();
     },
-    [restartSession, session.conn]
+    [restartSession, sessionConn]
   );
 
   const handlePersonaChange = useCallback(
@@ -101,9 +109,9 @@ export function PlaygroundClient() {
       } catch {
         /* ignore */
       }
-      if (session.conn === "connected") restartSession();
+      if (sessionConn === "connected") restartSession();
     },
-    [restartSession, session.conn]
+    [restartSession, sessionConn]
   );
 
   // 打开运行记录侧滑——useCallback 稳定引用，避免 TranscriptPane.memo 失效
@@ -114,7 +122,6 @@ export function PlaygroundClient() {
   const personaLabel = currentPersona?.label || currentPersona?.name || personaId;
 
   // 空格键切换麦克风（输入控件 focus 时豁免；长按不重复触发）
-  const { conn: sessionConn, toggleMic } = session;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.code !== "Space" || e.repeat) return;

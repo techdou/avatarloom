@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiFetch } from "@/lib/api";
+import { useToast } from "@/components/ui/toast";
 
 export function VoiceTextEditor({
   avatarId,
@@ -12,6 +13,7 @@ export function VoiceTextEditor({
   initialText: string;
 }) {
   const router = useRouter();
+  const toast = useToast();
   const [text, setText] = useState(initialText);
   const [saving, setSaving] = useState(false);
 
@@ -22,7 +24,12 @@ export function VoiceTextEditor({
         method: "POST",
         body: JSON.stringify({ text }),
       });
+      toast.success("语音文案已保存");
       router.refresh();
+    } catch (e) {
+      // apiFetch 非 2xx 抛 ApiError——此前无 catch 成 unhandled rejection，
+      // 按钮复位但界面无提示，用户误以为保存成功
+      toast.error(e instanceof Error ? e.message : String(e));
     } finally {
       setSaving(false);
     }

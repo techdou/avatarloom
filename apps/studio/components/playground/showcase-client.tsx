@@ -12,7 +12,8 @@ import { useRealtimeSession } from "@/hooks/use-realtime-session";
  * - 悬浮大圆形麦克风按钮（底部中央）
  * 无 sidebar / 配置 / 调试。autoConnect=true：进入即连。
  *
- * 重连机制：完全依赖 useRealtimeSession 的内建指数退避（3 次 500/1000/2000ms）。
+ * 重连机制：完全依赖 useRealtimeSession 的内建指数退避（5 次 500/1000/2000/4000/5000ms，
+ * 封顶 5s——rc=42 会话后自重启的拉起窗口通常 2-5s，短退避会全撞在空窗里）。
  * hook 重试耗尽后 conn 回到 "disconnected" 且保留 error —— 此处判定为 exhausted，
  * 显示"点按重试"按钮让用户手动 connect()。
  */

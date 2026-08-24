@@ -69,6 +69,13 @@ export class AVMux {
       if (audioStillPlaying) {
         this._enqueueSpeech(frame);
       } else {
+        // 后台 tab 的 rAF 完全暂停、消费停摆——idle 帧只进不出会积压到
+        // GB 级内存（speech 队列有 maxQueueSize 挡住，idle 队列此前裸奔）。
+        // idle 旧帧无价值：后台直接丢弃；前台同款上限丢旧保新。
+        if (typeof document !== "undefined" && document.hidden) return;
+        if (this.idleQueue.length >= this.maxQueueSize) {
+          this.idleQueue.shift();
+        }
         this.idleQueue.push(frame);
         this._scheduleConsume();
       }

@@ -150,6 +150,31 @@ export function useRealtimeSession({
     queueLen: 0,
     framesSent: 0,
   });
+  // 热路径计数走 ref 累积 + 500ms 低频 flush——每帧/每音频 chunk 直接 setState
+  // 会让 ControlBar（memo 也挡不住：debugInfo 是变化 prop）每秒重渲染 ~25 次
+  const debugRef = useRef<DebugInfo>({
+    framesShown: 0,
+    audioChunks: 0,
+    queueLen: 0,
+    framesSent: 0,
+  });
+  const debugDirtyRef = useRef(false);
+  const bumpDebug = useCallback((key: "framesShown" | "audioChunks" | "framesSent") => {
+    debugRef.current = { ...debugRef.current, [key]: debugRef.current[key] + 1 };
+    debugDirtyRef.current = true;
+  }, []);
+  const setDebugQueueLen = useCallback((v: number) => {
+    debugRef.current = { ...debugRef.current, queueLen: v };
+    debugDirtyRef.current = true;
+  }, []);
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (!debugDirtyRef.current) return;
+      debugDirtyRef.current = false;
+      setDebugInfo({ ...debugRef.current });
+    }, 500);
+    return () => window.clearInterval(timer);
+  }, []);
   // 会话运行时：sessionState / sessionId / timing / events / lastRunAt（联动强，归 reducer）
   const [runtime, dispatch] = useReducer(sessionRuntimeReducer, INITIAL_RUNTIME);
 
@@ -185,10 +210,10 @@ export function useRealtimeSession({
       if (old) URL.revokeObjectURL(old);
       return url;
     });
-    setDebugInfo((d) => ({ ...d, framesShown: d.framesShown + 1 }));
+    bumpDebug("framesShown");
     // 首帧以"实际显示"时刻计（比到达时刻更接近用户感知）
     dispatch({ kind: "milestone", key: "firstFrameTs", ts: Date.now() });
-  }, []);
+  }, [bumpDebug]);
 
   /**
    * 摄像头截帧上行（0x02 + JPEG）。一次性取流：截完即停，不常驻摄像头。
@@ -244,8 +269,11 @@ export function useRealtimeSession({
       const jpeg = Uint8Array.from(atob(jpegB64), (c) => c.charCodeAt(0));
       const frame = buildCameraUplinkFrame(jpeg);
       if (!frame) return;
+      // 中间经授权弹窗 + 等真实首帧（可挂数秒），发送前复查连接——
+      // 断线后 send 抛 InvalidStateError 会被误报成"摄像头不可用"
+      if (ws !== wsRef.current || ws.readyState !== WebSocket.OPEN) return;
       ws.send(frame);
-      setDebugInfo((d) => ({ ...d, framesSent: d.framesSent + 1 }));
+      bumpDebug("framesSent");
     } catch (e) {
       setError(`摄像头不可用：${(e as Error).message}`);
       // 通知后端截帧失败——同轮 Vision 等待立即降级，不必等超时
@@ -264,7 +292,7 @@ export function useRealtimeSession({
     } finally {
       track?.stop();
     }
-  }, []);
+  }, [bumpDebug]);
 
   const handleMessage = useCallback(
     (msg: { type: string; payload?: Record<string, unknown> }) => {
@@ -443,7 +471,7 @@ export function useRealtimeSession({
       }
       player?.enqueue(pcm);
       setPlaying(true);
-      setDebugInfo((d) => ({ ...d, audioChunks: d.audioChunks + 1 }));
+      bumpDebug("audioChunks");
       dispatch({ kind: "milestone", key: "firstPcmTs", ts: Date.now() });
     } else if (tag === 0x01) {
       const subtag = view[1] ?? 0;
@@ -452,9 +480,9 @@ export function useRealtimeSession({
         blob: jpeg,
         tag: subtag === 0x01 ? "speech" : "idle",
       });
-      setDebugInfo((d) => ({ ...d, queueLen: avmuxRef.current?.queueLength ?? 0 }));
+      setDebugQueueLen(avmuxRef.current?.queueLength ?? 0);
     }
-  }, []);
+  }, [bumpDebug, setDebugQueueLen]);
 
   const connect = useCallback(async () => {
     setConn("connecting");
@@ -540,6 +568,7 @@ export function useRealtimeSession({
       setConn("disconnected");
       dispatch({ kind: "disconnected" });
       setMicActive(false);
+      setPlaying(false); // 说话中途断线不清 → 重连后无播放但"打断"按钮残留
       // 1008（Policy Violation）：gateway token 开启而鉴权未通过——
       // 与"服务未启动"分开提示，避免排障方向跑偏
       if (ev.code === 1008) {
@@ -576,6 +605,7 @@ export function useRealtimeSession({
     recorderRef.current?.stop();
     recorderRef.current = null;
     setMicActive(false);
+    setPlaying(false); // 同 onclose——主动断开也复位播放态
     const ws = wsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) {
       try {
@@ -665,18 +695,10 @@ export function useRealtimeSession({
   useEffect(() => {
     if (!autoConnect) return;
     if (!profileId) return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        await connect();
-      } catch {
-        /* connect 内部已处理 error 状态 */
-      }
-    })();
-    return () => {
-      cancelled = true;
-      void cancelled;
-    };
+    void connect().catch(() => {
+      /* connect 内部已处理 error 状态 */
+    });
+    // 无需卸载竞态保护——资源回收由上面的顶层卸载 cleanup effect 负责
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
