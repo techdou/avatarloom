@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import contextlib
 import faulthandler
 import json
 import os
@@ -100,8 +101,8 @@ class StreamEngine:
         if not os.environ.get("AVTR1_LOCAL_STORAGE"):
             raise RuntimeError("AVTR1_LOCAL_STORAGE 未设置（权重/TRT 引擎根目录）")
 
-        from avtr1_renderer.avtr1_artifact_manager import get_artifact_manager
         from avtr1_renderer.avatar_loader import AvatarLoader
+        from avtr1_renderer.avtr1_artifact_manager import get_artifact_manager
         from avtr1_renderer.pipeline import Pipeline
         from avtr1_renderer.types import RenderOptions
 
@@ -160,12 +161,18 @@ class StreamEngine:
             self._cond.notify()
 
     def reset(self) -> None:
-        """打断：丢弃未消费音频；运动上下文保留（静音 chunk 让姿态自然衰减）。"""
+        """打断：丢弃未消费音频；运动上下文保留（静音 chunk 让姿态自然衰减）。
+
+        _speech_active 必须一并复位——否则打断后 idle 判定
+        ``unconsumed == 0 and not _speech_active`` 永假，画面冻在最后一帧。
+        （block 侧 reset 只发 reset cmd 不发 speech_active off，且打断后
+        block 的 _speaking 已置 False，下一轮 COMPLETED 不会补发 off。）"""
         with self._cond:
             self._buf = np.empty(0, dtype=np.float32)
             self._pos = 0
             self._real_len = 0
             self._tail_faded = False
+            self._speech_active = False
             self._cond.notify()
 
     def set_image(self, image_path: str) -> None:
@@ -282,18 +289,21 @@ def main() -> int:
         tag = FRAME_TAG_IDLE if is_idle else FRAME_TAG_SPEECH
         for frame in frames:
             if raw_q.full():
-                try:
+                with contextlib.suppress(queue.Empty):
                     raw_q.get_nowait()
-                except queue.Empty:
-                    pass
             raw_q.put_nowait((frame, tag))
 
     def _encoder() -> None:
+        encode_errors = 0
         while True:
             frame, tag = raw_q.get()
             try:
                 jpeg = _encode_jpeg(frame)
             except Exception:
+                # 编码异常计数进探针日志（不能走 stdout——会污染二进制协议流）；
+                # 持续失败的表现是"画面全黑但进程活着"，有计数才能定位
+                encode_errors += 1
+                _probe(f"ENCODE_ERROR_{encode_errors}")
                 continue
             _write_packet(PKT_FRAME, bytes([tag]) + jpeg)
 
@@ -337,7 +347,7 @@ def main() -> int:
                 if rid is not None:
                     _reply({"id": rid, "ok": True})
                 return 0
-        except Exception as e:  # noqa: BLE001 -- 命令级异常不应杀死 worker
+        except Exception as e:
             if rid is not None:
                 _reply({"id": rid, "ok": False, "error": str(e)})
     return 0

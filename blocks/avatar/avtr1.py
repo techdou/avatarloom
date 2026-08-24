@@ -19,8 +19,6 @@ import base64
 import json
 import logging
 import struct
-import time
-from collections import deque
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -38,12 +36,16 @@ from avatarloom_sdk import (
     BlockManifest,
     BlockSetupError,
     Capability,
+    HealthStatus,
     ResourceRequirements,
 )
 
 PKT_CONTROL = 0x01
 PKT_FRAME = 0x02
 FRAME_TAG_SPEECH = 0x01
+# 帧发射队列上限（~2.5s @25fps）：慢客户端时丢旧帧保新帧，
+# 防止 reader 内联 emit 的背压级联拖死 worker 控制通道
+FRAME_QUEUE_MAX = 64
 
 
 class Avtr1AvatarBlock(Block):
@@ -53,12 +55,16 @@ class Avtr1AvatarBlock(Block):
         super().__init__()
         self._worker_proc: Any = None
         self._worker_stdin: Any = None
-        self._worker_lock = asyncio.Lock()  # 控制命令（ping/set_image）串行
         self._write_lock = asyncio.Lock()   # stdin 写入串行（多协程喂音频）
         self._pending: dict[int, dict] = {}  # id → 控制应答（reader 填入）
         self._pending_events: dict[int, asyncio.Event] = {}
         self._req_counter = 0
         self._tasks: list[asyncio.Task[None]] = []
+        # 帧发射解耦：reader 只入队，独立 emitter 消费——慢客户端背压
+        # 不会级联卡死 worker stdout 管道（队满丢最旧）
+        self._frame_queue: asyncio.Queue[tuple[bytes, bool]] = asyncio.Queue(
+            maxsize=FRAME_QUEUE_MAX
+        )
         # 每 session 运行态
         self._ctxs: dict[str, BlockContext] = {}
         self._speaking: dict[str, bool] = {}
@@ -135,7 +141,9 @@ class Avtr1AvatarBlock(Block):
             self._worker_stdin = self._worker_proc.stdin
             reader = asyncio.create_task(self._read_packets())
             self._tasks.append(reader)
-            # ready 要等模型+TRT 引擎加载+静音预热完成，首次可能数分钟
+            self._tasks.append(asyncio.create_task(self._frame_emitter()))
+            # ready 要等模型+TRT 引擎加载+静音预热完成，首次可能数分钟；
+            # worker 中途死亡时 reader 会 fail pending，这里立即失败而非等满超时
             await self._call_worker({"cmd": "ping"}, timeout=600.0)
         except Exception as e:
             await self._stop_worker()
@@ -164,7 +172,10 @@ class Avtr1AvatarBlock(Block):
                     except Exception:
                         continue
                     rid = obj.get("id")
-                    if rid is not None and rid in self._pending:
+                    # 配对键是 _pending_events（_call_worker 登记等待的字典）——
+                    # 此前误查 _pending（应答落地字典），挂起期间恒空 → 所有应答
+                    # 被丢弃、ping 必等满超时（avtr1 真实 setup 从未配对成功过）
+                    if rid is not None and rid in self._pending_events:
                         self._pending[rid] = obj
                         ev = self._pending_events.get(rid)
                         if ev is not None:
@@ -172,18 +183,43 @@ class Avtr1AvatarBlock(Block):
                 elif pkt_type == PKT_FRAME and length >= 1:
                     tag = payload[0]
                     jpeg = payload[1:]
-                    await self._emit_frame(jpeg, is_speech=(tag == FRAME_TAG_SPEECH))
+                    if self._frame_queue.full():
+                        # 丢最旧保最新（帧流语义：旧帧过期即无价值）
+                        with suppress(asyncio.QueueEmpty):
+                            self._frame_queue.get_nowait()
+                    self._frame_queue.put_nowait((jpeg, tag == FRAME_TAG_SPEECH))
         except (asyncio.IncompleteReadError, ConnectionError):
             pass
         except Exception:
             logging.getLogger(__name__).exception("avtr1 worker packet reader failed")
+        finally:
+            # worker 死亡（stdout EOF / 异常）：立即 fail 所有 pending 等待方，
+            # 否则 setup ping 只能干等满超时、运行期调用方永久挂起
+            self._on_worker_gone()
+
+    def _on_worker_gone(self) -> None:
+        self._ready = False
+        self._worker_stdin = None  # _send 的 None 守卫拦截后续命令
+        if self._pending_events:
+            logging.getLogger(__name__).error(
+                "avtr1 worker exited unexpectedly; failing %d pending call(s)",
+                len(self._pending_events),
+            )
+        for rid, ev in self._pending_events.items():
+            self._pending[rid] = {"ok": False, "error": "avtr1 worker exited"}
+            ev.set()
+
+    async def _frame_emitter(self) -> None:
+        while True:
+            jpeg, is_speech = await self._frame_queue.get()
+            await self._emit_frame(jpeg, is_speech=is_speech)
 
     async def _emit_frame(self, jpeg: bytes, *, is_speech: bool) -> None:
         # 帧发给所有活跃 session 的最近 ctx（单会话产品，正常只有一个）
         for sid, ctx in self._ctxs.items():
             idx = self._frame_indexes.get(sid, 0)
             self._frame_indexes[sid] = idx + 1
-            try:
+            with suppress(Exception):  # 帧丢失不致命——下一帧马上到
                 await ctx.emit(
                     Event(
                         type=AVATAR_SPEECH_FRAME if is_speech else AVATAR_IDLE_FRAME,
@@ -200,8 +236,6 @@ class Avtr1AvatarBlock(Block):
                         },
                     )
                 )
-            except Exception:
-                pass  # 帧丢失不致命——下一帧马上到
 
     # ------------------------------------------------------------------
     # worker 命令
@@ -272,6 +306,19 @@ class Avtr1AvatarBlock(Block):
         self._speaking[session_id] = False
         self._frame_indexes[session_id] = 0
         await self._send({"cmd": "reset"})
+
+    async def on_session_end(self, session_id: str) -> None:
+        # 会话结束：移除运行态——常驻 worker 的 idle 帧发射不再发往死会话
+        self._ctxs.pop(session_id, None)
+        self._speaking.pop(session_id, None)
+        self._frame_indexes.pop(session_id, None)
+
+    async def health(self) -> HealthStatus:
+        alive = self._worker_proc is not None and self._worker_proc.returncode is None
+        return HealthStatus(
+            block_id="avatar.avtr1",
+            status="healthy" if (self._ready and alive) else "degraded",
+        )
 
     async def shutdown(self) -> None:
         for t in self._tasks:

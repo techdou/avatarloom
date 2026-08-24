@@ -302,6 +302,15 @@ class Block(abc.ABC):
         默认空实现。
         """
 
+    async def on_session_end(self, session_id: str) -> None:
+        """会话结束通知（end_session / shutdown 时调用，可选实现）。
+
+        与 reset 的区别：reset 是会话内的打断/重置，会话还在；
+        on_session_end 表示该会话已彻底结束，block 应清理 per-session
+        状态（长驻 worker 型 block 借此停止向死会话 emit）。
+        默认空实现。
+        """
+
     async def health(self) -> HealthStatus:
         """健康检查。默认返回 healthy。"""
         return HealthStatus(

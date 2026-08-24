@@ -27,7 +27,6 @@ def transition_avatar_state(
     event_type: str,
     *,
     has_audio: bool = False,
-    is_interrupt: bool = False,
     allow_interruption: bool = True,
 ) -> AvatarState:
     """按事件类型推导新的 AvatarState。

@@ -167,6 +167,8 @@ class OpenAILlmBlock(Block):
         sentence_idx = 0
         interrupted = False
         self._active_run_id = ctx.run_id
+        # 打断标记只对当前 run 有意义——旧 run 残留清掉，防长会话频繁打断的无界增长
+        self._interrupted_run_ids.intersection_update({ctx.run_id})
 
         try:
             async with httpx.AsyncClient(

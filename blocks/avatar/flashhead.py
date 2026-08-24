@@ -281,6 +281,7 @@ class FlashHeadAvatarBlock(Block):
             await self._emit_idle(ctx)
 
     async def _frame_reader(self) -> None:
+        ctx = None  # 首帧前断连时 except/finally 也能安全引用
         try:
             async for message in self._ws:
                 ctx = self._current_ctx  # 取当前 process 期 ctx（run_id 正确归属当前轮）
@@ -363,6 +364,10 @@ class FlashHeadAvatarBlock(Block):
         if self._ws is not None:
             with suppress(Exception):
                 await self._ws.send(json.dumps({"type": "reset"}))
+
+    async def on_session_end(self, session_id: str) -> None:
+        # 会话结束：reader 不再向死会话 emit 帧
+        self._current_ctx = None
 
     async def shutdown(self) -> None:
         self._shutdown = True  # 先置位——reader 退出后不 emit（ctx 可能已 unwire）

@@ -142,6 +142,8 @@ class Qwen3TtsBlock(Block):
             self._total_samples = 0
             self._sentence_buffers = {}
             self._run_id = ctx.run_id
+            # 打断标记只对当前 run 有意义——旧 run 残留清掉，防无界增长
+            self._cancelled_run_ids.intersection_update({ctx.run_id})
         return ctx.run_id is not None and ctx.run_id in self._cancelled_run_ids
 
     async def process(self, ctx: BlockContext, event: Event) -> None:
@@ -246,7 +248,6 @@ class Qwen3TtsBlock(Block):
         返回 Qwen3TTSModel 实例（自带 tokenizer/processor）。
         """
         import torch
-
         from qwen_tts import Qwen3TTSModel
 
         model = Qwen3TTSModel.from_pretrained(

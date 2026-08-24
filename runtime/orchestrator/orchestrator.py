@@ -227,7 +227,7 @@ class Orchestrator:
             # 清理路径，filler task 会在 session 关闭后继续 emit tts.audio.delta
             for session_id in list(self.sessions._sessions.keys()):
                 try:
-                    self._cleanup_session_state(session_id)
+                    await self._cleanup_session_state(session_id)
                 except Exception:
                     logger.exception(
                         "session state cleanup error during shutdown: %s",
@@ -327,11 +327,11 @@ class Orchestrator:
 
     async def end_session(self, session: Session, reason: str = "normal") -> None:
         """结束会话——同时清理 Persona/Vision 上下文和 pending Vision 等待。"""
-        self._cleanup_session_state(session.session_id)
+        await self._cleanup_session_state(session.session_id)
         await session.close(reason)
         self.sessions.remove(session.session_id)
 
-    def _cleanup_session_state(self, session_id: str) -> None:
+    async def _cleanup_session_state(self, session_id: str) -> None:
         """清理 session 级状态字典 + 取消派生任务。
 
         end_session 和 shutdown 共用——否则 shutdown 只调 session.close()
@@ -340,6 +340,17 @@ class Orchestrator:
         self._vision_coord.cleanup_session(session_id)
         self._filler.cleanup_session(session_id)
         self._memory.cleanup_session(session_id)
+        # 通知 blocks 该会话已结束（长驻 worker 型 block 停止向死会话 emit；
+        # 基类默认 no-op，仅按需实现）
+        for block in self.blocks.values():
+            try:
+                await block.on_session_end(session_id)
+            except Exception:
+                logger.exception(
+                    "block on_session_end error (session %s, block %s)",
+                    session_id[:12],
+                    getattr(block.manifest(), "block_id", type(block).__name__),
+                )
         # persona_contexts 跨 coordinator 共享，Orchestrator 自己清
         self._persona_contexts.pop(session_id, None)
 

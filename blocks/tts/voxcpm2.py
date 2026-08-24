@@ -15,6 +15,7 @@ import re
 import subprocess
 import threading
 import time
+from contextlib import suppress
 from typing import Any
 
 import numpy as np
@@ -48,7 +49,7 @@ class AtempoStretcher:
 
     def __init__(self, sample_rate: int, rate: float):
         self._q: queue.Queue = queue.Queue()
-        self._p = subprocess.Popen(
+        p = subprocess.Popen(
             [
                 "ffmpeg", "-v", "error",
                 "-f", "s16le", "-ar", str(sample_rate), "-ac", "1", "-i", "pipe:0",
@@ -59,11 +60,15 @@ class AtempoStretcher:
             stdout=subprocess.PIPE,
             bufsize=0,
         )
+        assert p.stdin is not None and p.stdout is not None  # PIPE 下必非 None
+        self._p = p
+        self._stdin = p.stdin
+        self._stdout = p.stdout
         threading.Thread(target=self._reader, daemon=True).start()
 
     def _reader(self) -> None:
         while True:
-            data = self._p.stdout.read(65536)
+            data = self._stdout.read(65536)
             if not data:
                 self._q.put(None)
                 return
@@ -71,8 +76,8 @@ class AtempoStretcher:
 
     def feed(self, pcm16: np.ndarray) -> np.ndarray:
         """喂一块 int16，返回当前可得的拉伸输出（可能为空，窗口延迟）。"""
-        self._p.stdin.write(pcm16.tobytes())
-        self._p.stdin.flush()
+        self._stdin.write(pcm16.tobytes())
+        self._stdin.flush()
         buf = b""
         while True:
             try:
@@ -87,10 +92,8 @@ class AtempoStretcher:
 
     def flush(self) -> np.ndarray:
         """句尾收干（关 stdin 读到 EOF）。超时/异常丢弃尾部不阻塞。"""
-        try:
-            self._p.stdin.close()
-        except (BrokenPipeError, OSError):
-            pass
+        with suppress(BrokenPipeError, OSError):
+            self._stdin.close()
         buf = b""
         while True:
             try:
@@ -109,11 +112,10 @@ class AtempoStretcher:
         return np.frombuffer(buf, dtype=np.int16).copy()
 
     def close(self) -> None:
-        """打断废弃：直接杀进程，不等收尾。"""
-        try:
+        """打断废弃：直接杀进程，不等收尾。对已退出进程 kill 是 no-op/异常吞掉，
+        幂等——合成 finally 里无条件调用也安全。"""
+        with suppress(OSError):
             self._p.kill()
-        except OSError:
-            pass
 
 # 流式切块粒度：512 采样 = 32ms @16kHz（对齐 VoxEMW blocksize）
 BLOCK_SIZE = 512
@@ -266,6 +268,8 @@ class VoxCpm2TtsBlock(Block):
             self._total_samples = 0
             self._sentence_buffers = {}
             self._run_id = ctx.run_id
+            # 打断标记只对当前 run 有意义——旧 run 残留清掉，防长会话频繁打断的无界增长
+            self._cancelled_run_ids.intersection_update({ctx.run_id})
         return ctx.run_id is not None and ctx.run_id in self._cancelled_run_ids
 
     async def process(self, ctx: BlockContext, event: Event) -> None:
@@ -415,14 +419,17 @@ class VoxCpm2TtsBlock(Block):
         except Exception as e:
             await ctx.logger.aerror("voxcpm2 stream error", error=str(e))
         finally:
+            # 无条件收 stretcher——正常路径 flush 后 close 为 no-op；异常/外部
+            # 取消路径下杀 ffmpeg 子进程，否则每次泄漏一个进程 + reader 线程
+            if stretcher is not None:
+                with suppress(Exception):
+                    stretcher.close()
             # 显式关闭 generator——GPU 推理帧和内部资源仅靠 GC 回收时机不确定，
             # 打断/异常路径下可能延迟释放显存。
             # 打断竞态：to_thread 里的 next() 可能仍在执行，此时 close() 抛
             # ValueError("generator already executing")——让出，GC 兜底回收。
-            try:
+            with suppress(ValueError):
                 gen.close()
-            except ValueError:
-                pass
 
     async def reset(self, session_id: str) -> None:
         # 标记当前 run 已打断（AL-P1-006）——进行中的推理循环检查后丢弃输出

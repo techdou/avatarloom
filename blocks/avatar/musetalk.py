@@ -432,7 +432,12 @@ class MuseTalkAvatarBlock(Block):
                 finally:
                     monitor.cancel()
         except asyncio.CancelledError:
-            # 打断（reset 取消了本 task）——静默退出，不 emit 任何帧/视频事件
+            # 打断（reset 取消了本 task）——静默退出，不 emit 任何帧/视频事件；
+            # 但若是外部取消（loop teardown），必须透传——吞掉会让 asyncio.run
+            # 的收尾 gather 永远等本任务（对齐 flashhead/avtr1 的取消处理标准）
+            current = asyncio.current_task()
+            if current is not None and current.cancelling() > 0:
+                raise
             return
         except Exception as e:
             tail = " | ".join(list(self._worker_lines)[-5:])
@@ -573,7 +578,7 @@ class MuseTalkAvatarBlock(Block):
             from PIL import Image
 
             # 用独立变量名避免与 cv2 分支的 ndarray 复用（mypy 类型推断串扰）
-            pil_img = Image.open(io.BytesIO(data))
+            pil_img: Image.Image = Image.open(io.BytesIO(data))
             if pil_img.mode != "RGB":
                 pil_img = pil_img.convert("RGB")
             pil_buf = io.BytesIO()
