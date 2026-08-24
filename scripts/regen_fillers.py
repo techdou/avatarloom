@@ -64,15 +64,15 @@ def synthesize_once(model, text: str, cfg: dict, voice_ref: str) -> np.ndarray:
     """
     import inspect
 
-    kwargs = dict(
-        prompt_wav_path=voice_ref,
-        prompt_text=str(cfg.get("promptText") or cfg.get("stylePrefix") or ""),
-        cfg_value=float(cfg.get("cfgValue", 2.0)),
-        inference_timesteps=int(cfg.get("inferenceTimesteps", 5)),
-        normalize=bool(cfg.get("normalize", True)),
-        denoise=bool(cfg.get("denoise", False)),
-        retry_badcase=True,
-    )
+    kwargs = {
+        "prompt_wav_path": voice_ref,
+        "prompt_text": str(cfg.get("promptText") or cfg.get("stylePrefix") or ""),
+        "cfg_value": float(cfg.get("cfgValue", 2.0)),
+        "inference_timesteps": int(cfg.get("inferenceTimesteps", 5)),
+        "normalize": bool(cfg.get("normalize", True)),
+        "denoise": bool(cfg.get("denoise", False)),
+        "retry_badcase": True,
+    }
     try:
         sig = inspect.signature(model.generate)
         if not any(p.kind == inspect.Parameter.VAR_KEYWORD
@@ -140,7 +140,7 @@ def main() -> int:
         for attempt in range(1, MAX_TRIES + 1):
             try:
                 wav48 = synthesize_once(model, text, tts_cfg, voice_ref)
-            except Exception as e:  # noqa: BLE001 -- 重试逻辑要兜住一切模型异常
+            except Exception as e:
                 print(f"[regen] {name} 第{attempt}次合成异常: {e}")
                 continue
             pcm16 = post_chain(wav48, rate)
@@ -163,13 +163,18 @@ def main() -> int:
 
     import json
 
+    if failures:
+        # 部分失败时绝不覆盖 texts.json——只含成功条目的池会让线上垫音
+        # 静默缩水；保留旧池 + 旧 wav（已在 bak），人工排查后重跑
+        print(
+            f"[regen] {len(failures)} 条重试耗尽，texts.json 保持旧版不覆盖: {failures}"
+        )
+        return 1
+
     texts_path = out_dir.parent / "texts.json"
     texts_path.write_text(json.dumps(texts, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"[regen] texts.json 已更新: {texts_path}")
 
-    if failures:
-        print(f"[regen] 失败（{len(failures)} 条重试耗尽）: {failures}")
-        return 1
     print("[regen] 全部垫音重铸完成")
     return 0
 

@@ -71,7 +71,7 @@ try:
     )
     MARK.write_text(f"OK {' '.join(msg)} {time.strftime('%H:%M:%S')}\n", encoding="utf-8")
     print("DRIVER_OK", " ".join(msg))
-except Exception as e:  # noqa: BLE001
+except Exception as e:
     MARK.write_text(f"FAIL {e}\n", encoding="utf-8")
     print("DRIVER_FAIL", e)
-    raise SystemExit(1)
+    raise SystemExit(1) from e

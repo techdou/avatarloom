@@ -110,7 +110,7 @@ async def run_smoke() -> int:
     print("  ✓ 已关闭")
 
     print("\n" + "=" * 60)
-    if has_transcript and has_llm and has_tts:
+    if has_transcript and has_llm and has_tts and has_avatar:
         print("✓ Mock 全链路冒烟通过")
         return 0
     else:

@@ -119,8 +119,12 @@ log "pnpm: $(pnpm --version)"
 # ---------------------------------------------------------------------------
 log "=== 安装 Python 依赖（GPU 全套 extras）==="
 cd "$PROJECT_ROOT"
-uv sync --extra dev --extra gpu-full 2>&1 | tail -3 || {
+mkdir -p data/logs
+# 完整输出落日志——tail -3 会把依赖冲突详情（通常在中部）截丢，服务器排障不可见
+uv sync --extra dev --extra gpu-full > data/logs/uv_sync.log 2>&1 || {
     err "gpu-full 依赖安装失败——缺少 torch/funasr 等，后续模型下载必然全部失败，直接停止"
+    err "尾部输出如下（全文 data/logs/uv_sync.log）："
+    tail -30 data/logs/uv_sync.log >&2
     exit 1
 }
 log "Python 依赖装完"
@@ -129,7 +133,11 @@ log "Python 依赖装完"
 # Studio 前端依赖
 # ---------------------------------------------------------------------------
 log "=== 安装 Studio 前端依赖 ==="
-pnpm install 2>&1 | tail -3
+pnpm install > data/logs/pnpm_install.log 2>&1 || {
+    err "pnpm install 失败，尾部输出如下（全文 data/logs/pnpm_install.log）："
+    tail -30 data/logs/pnpm_install.log >&2
+    exit 1
+}
 log "前端依赖装完"
 
 # ---------------------------------------------------------------------------

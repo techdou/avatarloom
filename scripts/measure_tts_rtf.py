@@ -10,7 +10,7 @@ import numpy as np
 
 sys.path.insert(0, "/root/autodl-tmp/avatarloom")
 
-from voxcpm import VoxCPM  # noqa: E402
+from voxcpm import VoxCPM
 
 TEXT = "你好呀，我是小灵。今天想聊点什么？这个问题还挺有意思的，让我认真想一下再回答你。"
 

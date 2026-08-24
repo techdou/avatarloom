@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import os
 import sys
 import time
 from pathlib import Path
@@ -41,6 +40,7 @@ from avatarloom_protocol import (  # noqa: E402
     TTS_AUDIO_DELTA,
     Event,
 )
+
 from runtime.orchestrator.orchestrator import Orchestrator  # noqa: E402
 from runtime.orchestrator.profile_loader import load_profile  # noqa: E402
 
@@ -71,8 +71,8 @@ def _load_real_speech_wav(path: Path) -> list[bytes]:
 
     with wave.open(str(path), "rb") as w:
         sr = w.getframerate()
-        channels = w.getnchannels()
-        width = w.getsampwidth()
+        _channels = w.getnchannels()
+        _width = w.getsampwidth()
         frames = w.readframes(w.getnframes())
 
     raw = np.frombuffer(frames, dtype=np.int16)
@@ -179,7 +179,7 @@ async def main() -> int:
 
     # 静音段：5 帧静音触发 speech.ended
     print("  → 注入静音段触发 speech.ended...")
-    for i in range(8):
+    for _ in range(8):
         pcm = _silent_pcm()
         pcm_b64 = base64.b64encode(pcm).decode("ascii")
         await orch.ingest_audio(session, pcm_b64, _CHUNK_SAMPLES)

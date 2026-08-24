@@ -337,7 +337,10 @@ class MuseEngine:
             "-c:a", "aac", "-shortest",
             str(out_path),
         ]
-        r = subprocess.run(cmd, capture_output=True, text=True)
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        except subprocess.TimeoutExpired as e:
+            raise RuntimeError(f"ffmpeg timed out after 600s: {audio}") from e
         if r.returncode != 0:
             raise RuntimeError(f"ffmpeg failed: {r.stderr[-400:]}")
         if not keep_frames:

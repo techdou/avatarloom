@@ -10,7 +10,7 @@ export AVTR1_LOCAL_STORAGE=/root/autodl-tmp/avtr1_storage
 export HF_ENDPOINT=https://hf-mirror.com
 export CONDA_OVERRIDE_CUDA=12.8
 export PATH="$HOME/.pixi/bin:$PATH"
-cd /root/autodl-tmp/avtr-1
+cd /root/autodl-tmp/avtr-1 || { echo "FAIL_CD"; exit 1; }
 
 echo "=== [env] pixi install（幂等，已装秒过）==="
 pixi install || { echo "FAIL_PIXI_PROJECT_INSTALL"; exit 1; }
@@ -27,7 +27,7 @@ echo "=== [dl] 制品齐备 ==="
 
 if nvidia-smi -L 2>/dev/null | grep -q GPU; then
   echo "=== [build] 检测到 GPU，编译 TRT 引擎（sm120）==="
-  pixi run build-trt-engines && echo "ALL_DONE" || echo "FAIL_BUILD"
+  pixi run build-trt-engines && echo "ALL_DONE" || { echo "FAIL_BUILD"; exit 1; }
 else
   echo "READY_FOR_GPU_BUILD"
 fi

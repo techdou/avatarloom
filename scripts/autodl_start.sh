@@ -160,7 +160,13 @@ case "$ACTION" in
             need_build=1
         fi
         if [ "$need_build" = 1 ]; then
-            (cd apps/studio && pnpm build 2>&1 | tail -3)
+            mkdir -p data/logs
+            # 构建输出落日志——Next.js 类型错误通常在中部，tail -3 只留空白排障不可见
+            (cd apps/studio && pnpm build > ../data/logs/studio_build.log 2>&1) || {
+                echo "Studio 构建失败，尾部输出如下（全文 data/logs/studio_build.log）：" >&2
+                tail -30 data/logs/studio_build.log >&2
+                exit 1
+            }
         fi
 
         # 回滚：任一服务启动失败时，把本次拉起的服务停掉，不留半拉子栈
